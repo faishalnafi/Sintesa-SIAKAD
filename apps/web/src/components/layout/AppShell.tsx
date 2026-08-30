@@ -160,25 +160,15 @@ function SidebarBody({
         ))}
       </nav>
 
-      <div className="p-4 border-t app-divider space-y-3 mt-auto">
-        <div className="px-1">
-          <div className="text-[13px] font-semibold truncate">{userName}</div>
-          <div className="text-[11px] app-muted truncate mt-0.5 capitalize">
-            {userRoles.join(" · ")}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <ThemeToggle className="!static !w-10 !h-10 !shadow-none" />
-          <button
-            type="button"
-            onClick={onLogout}
-            className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium app-muted hover:text-error transition-colors min-h-[40px] border"
-            style={{ borderColor: "var(--input-border)" }}
-          >
-            <span className="material-symbols-outlined text-[18px]">logout</span>
-            Keluar
-          </button>
-        </div>
+      <div className="p-3 border-t app-divider mt-auto">
+        <button
+          type="button"
+          onClick={onLogout}
+          className="w-full flex items-center justify-center gap-2 rounded-xl py-3 px-4 text-[13px] font-bold bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors min-h-[44px]"
+        >
+          <span className="material-symbols-outlined text-[20px]">logout</span>
+          Keluar
+        </button>
       </div>
     </>
   );

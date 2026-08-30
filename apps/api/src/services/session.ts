@@ -49,6 +49,6 @@ export function cookieOptions() {
     secure: env.COOKIE_SECURE,
     sameSite: env.COOKIE_SAMESITE as "lax" | "strict" | "none",
     path: "/",
-    maxAge: 60 * 60 * 8,
+    maxAge: 60 * 60 * 12,
   };
 }
