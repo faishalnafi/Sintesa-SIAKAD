@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuthStore } from "@/store/auth";
 import { useSystemStore } from "@/store/system";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
@@ -90,27 +90,6 @@ function navGroupsForRoles(roles: string[]): NavGroup[] {
   return groups;
 }
 
-function getPageTitle(pathname: string, roles: string[]): string {
-  if (pathname === "/admin") return hasRole(roles, "superadmin") ? "Beranda Superadmin" : "Beranda Admin";
-  if (pathname === "/admin/students") return "Siswa & Pengguna";
-  if (pathname === "/admin/academic-years") return "Tahun Pelajaran";
-  if (pathname === "/admin/classes") return "Data Rombel";
-  if (pathname === "/admin/subjects") return "Mapel & Penugasan";
-  if (pathname === "/admin/monitoring-jurnal") return "Monitoring Jurnal";
-  if (pathname === "/admin/app-update") return "Pembaruan & Cadangan";
-  if (pathname === "/admin/integrations") return "Integrasi & API";
-  if (pathname === "/admin/trash") return "Tempat Sampah";
-  if (pathname === "/admin/alumni") return "Data Alumni";
-  if (pathname === "/admin/keluar") return "Siswa Keluar";
-  if (pathname === "/walikelas") return "Matrix Persetujuan";
-  if (pathname === "/guru") return "Input Nilai Siswa";
-  if (pathname === "/guru/jurnal") return "Jurnal Mengajar Guru";
-  if (pathname === "/siswa") return "Beranda Siswa";
-  if (pathname === "/siswa/raport") return "Raport Nilai";
-  if (pathname === "/profil") return "Profil Saya";
-  return "SIAKAD SMAN 3 MOJOKERTO";
-}
-
 function SidebarBody({
   groups,
   onLogout,
@@ -126,15 +105,15 @@ function SidebarBody({
 }) {
   return (
     <>
-      {/* Top Header inside Sidebar: SSO Brand Pill + Circle Chevron */}
+      {/* Top Header inside Sidebar: SIAKAD Brand Pill + Circle Chevron */}
       <div className="p-3.5 flex items-center gap-2">
         <div className="flex-1 flex items-center gap-2.5 bg-white/15 hover:bg-white/20 border border-white/20 rounded-2xl px-3 py-2 text-white shadow-xs backdrop-blur-md min-w-0 transition-colors">
           <div className="w-7 h-7 rounded-xl flex items-center justify-center bg-white/20 text-white shrink-0">
-            <span className="material-symbols-outlined text-[18px]">key</span>
+            <span className="material-symbols-outlined text-[18px]">school</span>
           </div>
           <div className="min-w-0 flex-1">
             <div className="font-display font-bold text-[12px] leading-tight tracking-wide truncate text-white uppercase">
-              SSO SMAN 3 MOJOKERTO
+              SIAKAD SMAN 3 MOJOKERTO
             </div>
           </div>
         </div>
@@ -229,11 +208,8 @@ export function AppShell() {
   const fetchVersionInfo = useSystemStore((s) => s.fetchVersionInfo);
   const groups = navGroupsForRoles(user?.roles ?? []);
   const location = useLocation();
-  const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsedPref);
-
-  const pageTitle = getPageTitle(location.pathname, user?.roles ?? []);
 
   useEffect(() => {
     fetchVersionInfo();
@@ -357,9 +333,9 @@ export function AppShell() {
           collapsed ? "lg:pl-[76px]" : "lg:pl-[260px]",
         )}
       >
-        {/* SSO Header (Top Bar) */}
+        {/* Top Bar (SSO Header Style) */}
         <header className="sticky top-0 z-20 h-16 px-4 lg:px-8 flex items-center justify-between gap-4 bg-white/85 dark:bg-slate-900/85 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800">
-          {/* Header Left: Mobile menu toggle + Back Chevron + Page Title */}
+          {/* Header Left: Mobile menu toggle + Greeting / Breadcrumb */}
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -371,27 +347,18 @@ export function AppShell() {
               <span className="material-symbols-outlined text-[20px]">menu</span>
             </button>
 
-            {/* Back Chevron Button */}
-            <button
-              type="button"
-              onClick={() => {
-                if (window.history.length > 1) {
-                  navigate(-1);
-                } else {
-                  navigate(hasRole(user?.roles ?? [], "superadmin", "admin") ? "/admin" : "/siswa");
-                }
-              }}
-              className="w-8 h-8 rounded-full border border-slate-200/90 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-colors shrink-0"
-              title="Kembali"
-              aria-label="Kembali"
-            >
-              <span className="material-symbols-outlined text-[18px]">chevron_left</span>
-            </button>
+            <div className="lg:hidden flex items-center gap-2 min-w-0">
+              <span className="material-symbols-outlined text-[#0f91fc] fill text-[22px]">
+                school
+              </span>
+              <span className="font-display font-bold text-[#0f91fc] text-sm truncate">
+                SIAKAD
+              </span>
+            </div>
 
-            {/* Page Title */}
-            <h1 className="font-display font-bold text-[17px] sm:text-[18px] text-slate-800 dark:text-white tracking-tight truncate">
-              {pageTitle}
-            </h1>
+            <div className="hidden lg:block text-[13.5px] font-medium text-slate-600 dark:text-slate-300 truncate">
+              {user?.name ? `Masuk sebagai ${user.name}` : "Sistem Informasi Akademik"}
+            </div>
           </div>
 
           {/* Header Right: 3-Button Theme Toggle Pill + User Profile Pill */}
