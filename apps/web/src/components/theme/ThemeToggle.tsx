@@ -1,39 +1,60 @@
-import { useThemeStore, type ThemePreference } from "@/store/theme";
+import { useThemeStore } from "@/store/theme";
 import { cn } from "@/lib/cn";
 
-const cycle: ThemePreference[] = ["light", "dark", "system"];
-
-const icon: Record<ThemePreference, string> = {
-  light: "light_mode",
-  dark: "dark_mode",
-  system: "contrast",
-};
-
-export function ThemeToggle({ className, floating }: { className?: string; floating?: boolean }) {
+export function ThemeToggle({ className }: { className?: string; floating?: boolean }) {
   const { preference, setPreference } = useThemeStore();
 
-  const next = () => {
-    const idx = cycle.indexOf(preference);
-    setPreference(cycle[(idx + 1) % cycle.length]);
-  };
-
   return (
-    <button
-      type="button"
-      onClick={next}
-      title={`Tema: ${preference}`}
+    <div
       className={cn(
-        "w-12 h-12 rounded-full border flex items-center justify-center transition-transform duration-300 hover:rotate-12 active:scale-90",
-        floating && "fixed top-8 right-8 z-50 shadow-[var(--shadow)]",
+        "bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 p-1 flex items-center gap-0.5 rounded-full shadow-2xs",
         className,
       )}
-      style={{
-        background: "var(--card)",
-        borderColor: "var(--input-border)",
-        color: "var(--accent)",
-      }}
     >
-      <span className="material-symbols-outlined">{icon[preference]}</span>
-    </button>
+      <button
+        type="button"
+        onClick={() => setPreference("light")}
+        title="Mode Terang (Light)"
+        aria-label="Mode Terang"
+        className={cn(
+          "w-7 h-7 rounded-full flex items-center justify-center transition-all duration-150",
+          preference === "light"
+            ? "bg-white dark:bg-slate-700 text-[#0f91fc] shadow-xs font-bold"
+            : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200",
+        )}
+      >
+        <span className="material-symbols-outlined text-[16px]">light_mode</span>
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setPreference("system")}
+        title="Mengikuti Sistem (System)"
+        aria-label="Mengikuti Sistem"
+        className={cn(
+          "w-7 h-7 rounded-full flex items-center justify-center transition-all duration-150",
+          preference === "system"
+            ? "bg-white dark:bg-slate-700 text-[#0f91fc] shadow-xs font-bold"
+            : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200",
+        )}
+      >
+        <span className="material-symbols-outlined text-[16px]">desktop_windows</span>
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setPreference("dark")}
+        title="Mode Gelap (Dark)"
+        aria-label="Mode Gelap"
+        className={cn(
+          "w-7 h-7 rounded-full flex items-center justify-center transition-all duration-150",
+          preference === "dark"
+            ? "bg-white dark:bg-slate-700 text-[#0f91fc] shadow-xs font-bold"
+            : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200",
+        )}
+      >
+        <span className="material-symbols-outlined text-[16px]">dark_mode</span>
+      </button>
+    </div>
   );
 }

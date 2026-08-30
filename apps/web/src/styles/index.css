@@ -149,6 +149,18 @@ html:not(.dark) .app-card {
   color: rgba(255, 255, 255, 0.55);
 }
 
+.app-topbar {
+  background: #0f91fc;
+  color: #f0f9ff;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  --fg: #f0f9ff;
+  --muted: rgba(255, 255, 255, 0.85);
+  --card: rgba(255, 255, 255, 0.15);
+  --input-border: rgba(255, 255, 255, 0.3);
+  --accent: #ffffff;
+  --hover: rgba(255, 255, 255, 0.15);
+}
+
 /* =========================================================
    Universal Minimalist Auto-Hiding Scrollbar (Sidebar Style)
    ========================================================= */
@@ -253,85 +265,39 @@ html.dark ::-webkit-scrollbar-thumb:active {
 }
 
 /* Sidebar collapse / minimize (toggled via html.sidebar-collapsed, see AppShell) */
-.app-sidebar.w-\[260px\] {
-  transition: width 0.25s ease;
-}
-.lg\:pl-\[260px\] {
-  transition: padding-left 0.25s ease;
-}
-html.sidebar-collapsed .app-sidebar.w-\[260px\] {
-  width: 76px;
-}
-@media (min-width: 1024px) {
-  html.sidebar-collapsed .lg\:pl-\[260px\] {
-    padding-left: 76px;
-  }
-}
-html.sidebar-collapsed .app-sidebar.w-\[260px\] nav a {
+html.sidebar-collapsed .app-sidebar nav a {
   font-size: 0;
   justify-content: center;
   gap: 0;
   padding-left: 0;
   padding-right: 0;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] nav a span {
-  font-size: 20px;
+html.sidebar-collapsed .app-sidebar nav a span.material-symbols-outlined {
+  font-size: 22px;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] nav > div > div:has(.text-\[10px\]) {
+html.sidebar-collapsed .app-sidebar nav > div > div:has(.text-\[10\.5px\]) {
   display: none;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:first-child > div.min-w-0 {
+html.sidebar-collapsed .app-sidebar > div:first-child > div:first-child > div.min-w-0 {
   display: none;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:first-child {
+html.sidebar-collapsed .app-sidebar > div:first-child > div:first-child {
+  padding-left: 0;
+  padding-right: 0;
   justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:first-child {
-  display: none;
-}
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button {
-  font-size: 0;
-  padding-left: 0;
-  padding-right: 0;
-}
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button .material-symbols-outlined {
-  font-size: 20px;
-}
-
-#sidebar-toggle-btn {
-  position: fixed;
-  top: 22px;
-  left: 244px;
-  z-index: 35;
-  width: 26px;
-  height: 26px;
-  border-radius: 9999px;
-  background: #fff;
-  color: #0f91fc;
-  border: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-  display: none;
+html.sidebar-collapsed .app-sidebar > div:first-child {
+  flex-direction: column;
   align-items: center;
+  gap: 0.5rem;
+}
+html.sidebar-collapsed .app-sidebar > div:last-child button span:not(.material-symbols-outlined) {
+  display: none;
+}
+html.sidebar-collapsed .app-sidebar > div:last-child button {
   justify-content: center;
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  transition: left 0.25s ease, transform 0.25s ease;
-  padding: 0;
-}
-#sidebar-toggle-btn:hover {
-  background: #f0f9ff;
-}
-@media (min-width: 1024px) {
-  #sidebar-toggle-btn {
-    display: flex;
-  }
-}
-html.sidebar-collapsed #sidebar-toggle-btn {
-  left: 60px;
-  transform: rotate(180deg);
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .app-input {
