@@ -41,6 +41,22 @@ export default function App() {
   useEffect(() => {
     initTheme();
     bootstrap();
+
+    // Auto-show scrollbar during scrolling
+    let scrollTimer: number;
+    const onScroll = () => {
+      document.documentElement.classList.add("is-scrolling");
+      window.clearTimeout(scrollTimer);
+      scrollTimer = window.setTimeout(() => {
+        document.documentElement.classList.remove("is-scrolling");
+      }, 1000);
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll, { capture: true });
+      window.clearTimeout(scrollTimer);
+    };
   }, [bootstrap, initTheme]);
 
   return (

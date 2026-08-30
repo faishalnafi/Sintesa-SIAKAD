@@ -108,6 +108,91 @@ html:not(.dark) .app-card {
   color: rgba(255, 255, 255, 0.55);
 }
 
+/* =========================================================
+   Universal Minimalist Auto-Hiding Scrollbar (Sidebar Style)
+   ========================================================= */
+
+/* Firefox & Standard */
+html,
+body,
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s ease;
+}
+
+html:hover,
+body:hover,
+html.is-scrolling,
+body.is-scrolling,
+*:hover {
+  scrollbar-color: rgba(15, 23, 42, 0.22) transparent;
+}
+
+html.dark:hover,
+html.dark.is-scrolling,
+html.dark body:hover,
+html.dark body.is-scrolling,
+html.dark *:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+/* WebKit (Chrome, Edge, Safari, Opera) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background-color: transparent;
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+::-webkit-scrollbar-corner {
+  background-color: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.3s ease;
+}
+
+/* Show thumb on hover or when scrolling */
+html:hover::-webkit-scrollbar-thumb,
+body:hover::-webkit-scrollbar-thumb,
+html.is-scrolling::-webkit-scrollbar-thumb,
+body.is-scrolling::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(15, 23, 42, 0.22);
+}
+
+html.dark:hover::-webkit-scrollbar-thumb,
+html.dark body:hover::-webkit-scrollbar-thumb,
+html.dark.is-scrolling::-webkit-scrollbar-thumb,
+html.dark body.is-scrolling::-webkit-scrollbar-thumb,
+html.dark *:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+/* Direct thumb hover / drag */
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: rgba(15, 23, 42, 0.45) !important;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover,
+html.dark ::-webkit-scrollbar-thumb:active {
+  background-color: rgba(255, 255, 255, 0.50) !important;
+}
+
+/* Sidebar specific white thumb */
 .app-sidebar nav {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -119,11 +204,11 @@ html:not(.dark) .app-card {
   width: 6px;
 }
 .app-sidebar nav::-webkit-scrollbar-thumb {
-  background: transparent;
+  background-color: transparent;
   border-radius: 9999px;
 }
 .app-sidebar nav:hover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.35);
+  background-color: rgba(255, 255, 255, 0.35);
 }
 
 /* Sidebar collapse / minimize (toggled via html.sidebar-collapsed, see AppShell) */
