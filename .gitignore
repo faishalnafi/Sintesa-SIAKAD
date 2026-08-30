@@ -1,0 +1,48 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build
+dist
+build
+*.tsbuildinfo
+
+# Env — never commit secrets
+.env
+.env.*
+!.env.example
+apps/*/.env
+apps/*/.env.*
+!apps/*/.env.example
+
+# Logs & cache
+logs
+*.log
+.DS_Store
+.vite
+.turbo
+.cache
+coverage
+
+# IDE
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# Drizzle
+apps/api/drizzle/meta
+
+# Misc
+*.local
+.vercel
+.output
+*.zip
+update-packages/
+*.stackdump
+scratch_inspect.ts
+
+# Local docs / design references (not for remote)
+ui-ux/
+briefcase.md
+api.md
+plan.md

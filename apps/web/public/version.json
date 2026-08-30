@@ -1,0 +1,19 @@
+{
+  "version": "1.1.0",
+  "version_code": 110,
+  "db_version": "1.0.0",
+  "title": "SIAKAD v1.1.0 — Penyempurnaan UX & Keamanan Login",
+  "release_date": "2026-08-04",
+  "force_update": false,
+  "changelog": [
+    "Halaman login utama kini hanya tampilkan 2 tombol: SSO Kredensia & Google (disabled)",
+    "Login manual email/password dipindahkan ke halaman khusus /office",
+    "Perbaikan SSO: setelah login via Kredensia, redirect kembali ke SINTESA (bukan ke portal SSO)",
+    "Sinkronisasi role otomatis dari Kredensia SSO saat setiap login — perubahan role di Kredensia langsung terupdate",
+    "Popup sapaan selamat pagi/siang/sore/malam dengan pesan pengingat kesehatan saat pertama login",
+    "Label jam mengajar kini hanya tampilkan 'Jam ke-X' tanpa rentang pukul di seluruh form & tabel",
+    "Perbaikan ikon Material Symbols: tidak lagi tampil teks mentah saat koneksi internet lambat"
+  ],
+  "min_supported_version": "1.0.0",
+  "schema_changes": []
+}

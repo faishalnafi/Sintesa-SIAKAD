@@ -1,0 +1,18 @@
+{
+  "version": "1.5.0",
+  "version_code": 150,
+  "db_version": "1.0.0",
+  "title": "SIAKAD v1.5.0 — Redesain Halaman Login Split-Screen & Responsif",
+  "release_date": "2026-08-28",
+  "force_update": false,
+  "changelog": [
+    "Redesain Halaman Login (Split-Screen): Tampilan masuk kini menyerupai Cloudflare dengan panel form di kiri dan panel hero branding biru akademis premium di kanan",
+    "Responsivitas Penuh: Tampilan adaptif di semua ukuran layar (Mobile, Tablet, Desktop) dengan auto-collapsing panel hero di perangkat mobile/tablet",
+    "UI Glassmorphism: Ditambahkan ornamen visual grid futuristik, ambient glow, serta panel mockup real-time status Poin GDS dan Presensi BK"
+  ],
+  "min_supported_version": "1.0.0",
+  "schema_changes": [
+    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
+    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
+  ]
+}

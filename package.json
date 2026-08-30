@@ -1,0 +1,25 @@
+{
+  "name": "sintesa",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @sintesa/api --filter @sintesa/web dev",
+    "dev:api": "pnpm --filter @sintesa/api dev",
+    "dev:web": "pnpm --filter @sintesa/web dev",
+    "build": "pnpm -r --filter @sintesa/api --filter @sintesa/web build",
+    "db:generate": "pnpm --filter @sintesa/api db:generate",
+    "db:migrate": "pnpm --filter @sintesa/api db:migrate",
+    "db:seed": "pnpm --filter @sintesa/api db:seed",
+    "db:studio": "pnpm --filter @sintesa/api db:studio",
+    "lint": "pnpm -r lint",
+    "docker:env": "bash scripts/generate-stack-env.sh",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "1.5.2",
+  "version_code": 152,
+  "db_version": "1.0.0",
+  "title": "SIAKAD v1.5.2 — Unduh Raport PDF & Perbaikan Auto-Reload",
+  "release_date": "2026-08-29",
+  "force_update": false,
+  "changelog": [
+    "Fitur Baru: Tombol \"Unduh Raport (PDF)\" di halaman Raport Nilai siswa — PDF A4, font Times New Roman, berisi nama lengkap, NISN, kelas, tahun ajaran, dan tabel nilai per mata pelajaran",
+    "Nama file PDF menggunakan format {uuid-siswa}-{tahun-ajaran}.pdf",
+    "Perbaikan: Sidebar/tampilan tidak lagi \"nyangkut\" di versi lama pada tab yang sudah lama terbuka — sekarang mengecek versi server secara berkala dan auto-reload begitu ada deploy baru",
+    "PENTING: Rilis ini menambahkan dependency baru (pdfkit) di apps/api — wajib jalankan `pnpm install` di server setelah extract paket ini, restart via update panel TIDAK otomatis install dependency baru"
+  ],
+  "min_supported_version": "1.0.0",
+  "schema_changes": [
+    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
+    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
+  ]
+}

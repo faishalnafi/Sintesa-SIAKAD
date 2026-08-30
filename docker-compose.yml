@@ -1,0 +1,103 @@
+# SINTESA — production stack (Portainer / Dokploy / docker compose)
+#
+# Panduan lengkap + template env: deploy-to-docker.md
+#
+# Quick start:
+#   ./scripts/generate-stack-env.sh https://domain-anda
+#   docker compose pull && docker compose up -d
+
+name: sintesa
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sintesa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sintesa}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sintesa} -d ${POSTGRES_DB:-sintesa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - sintesa
+
+  api:
+    image: ${SINTESA_API_IMAGE:-ghcr.io/ardianryan/sintesa-api:${SINTESA_IMAGE_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sintesa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sintesa}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      COOKIE_NAME: ${COOKIE_NAME:-sintesa_session}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      FRONTEND_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS in stack env (sama dengan PUBLIC_URL)}
+      SSO_BASE_URL: ${SSO_BASE_URL:-}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-}
+      SSO_JWT_SECRET: ${SSO_JWT_SECRET:-}
+      SSO_API_KEY: ${SSO_API_KEY:-}
+      SSO_API_BASE_URL: ${SSO_API_BASE_URL:-}
+      GDS_BASE_URL: ${GDS_BASE_URL:-}
+      GDS_API_KEY: ${GDS_API_KEY:-}
+      KEHADIRAN_BASE_URL: ${KEHADIRAN_BASE_URL:-}
+      KEHADIRAN_API_KEY: ${KEHADIRAN_API_KEY:-}
+      RUN_DB_SEED: ${RUN_DB_SEED:-false}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-sintesa}
+      PGDATABASE: ${POSTGRES_DB:-sintesa}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - sintesa
+
+  web:
+    image: ${SINTESA_WEB_IMAGE:-ghcr.io/ardianryan/sintesa-web:${SINTESA_IMAGE_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_APP_NAME: ${VITE_APP_NAME:-SINTESA}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - sintesa
+
+volumes:
+  postgres_data:
+
+networks:
+  sintesa:
+    driver: bridge

@@ -1,0 +1,38 @@
+# Dependencies & build output
+node_modules
+**/node_modules
+dist
+build
+**/.vite
+*.tsbuildinfo
+
+# Git & CI
+.git
+.github
+
+# Secrets — never bake into image
+.env
+.env.*
+!.env.example
+!**/.env.example
+apps/*/.env
+apps/*/.env.*
+
+# Local-only assets
+ui-ux
+briefcase.md
+api.md
+plan.md
+*.md
+!README.md
+
+# IDE & OS
+.idea
+.vscode
+.DS_Store
+coverage
+logs
+*.log
+
+# Docker (avoid recursive context)
+docker-compose*.yml

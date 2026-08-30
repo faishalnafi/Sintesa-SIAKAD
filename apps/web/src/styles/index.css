@@ -1,0 +1,312 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SINTESA tokens — stitch_sintesa_enterprise_academic_dashboard DESIGN.md */
+
+:root {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --fg: #131b2e;
+  --muted: #3e4850;
+  --card: #ffffff;
+  --card-border: transparent;
+  --sidebar: #ffffff;
+  --input: #f8fafc;
+  --input-border: #e2e8f0;
+  --hover: #f1f5f9;
+  --divider: #f1f5f9;
+  --primary: #006591;
+  --accent: #0ea5e9;
+  --accent-soft: rgba(14, 165, 233, 0.12);
+  --ring: rgba(14, 165, 233, 0.14);
+  --shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.08);
+  --radius-card: 1rem;
+  --radius-control: 0.5rem;
+  --radius-pill: 9999px;
+}
+
+html.dark {
+  color-scheme: dark;
+  --bg: #020617;
+  --fg: #eef0ff;
+  --muted: #94a3b8;
+  --card: #0f172a;
+  --card-border: rgba(148, 163, 184, 0.12);
+  --sidebar: rgba(15, 23, 42, 0.88);
+  --input: #1e293b;
+  --input-border: rgba(148, 163, 184, 0.22);
+  --hover: rgba(148, 163, 184, 0.08);
+  --divider: rgba(148, 163, 184, 0.12);
+  --primary: #89ceff;
+  --accent: #0ea5e9;
+  --accent-soft: rgba(14, 165, 233, 0.16);
+  --ring: rgba(14, 165, 233, 0.22);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+@layer base {
+  body {
+    font-family: Inter, system-ui, sans-serif;
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--fg);
+    @apply antialiased transition-colors duration-300;
+  }
+
+  html.dark input,
+  html.dark select,
+  html.dark textarea {
+    color-scheme: dark;
+  }
+}
+
+.font-display {
+  font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  user-select: none;
+}
+
+.material-symbols-outlined.fill {
+  font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* Soft Enterprise surfaces (Stitch) */
+.app-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--shadow);
+  border-radius: var(--radius-card);
+}
+
+html:not(.dark) .app-card {
+  /* DESIGN.md: cards should not have borders in light mode */
+  border-color: transparent;
+}
+
+.app-sidebar {
+  background: #0f91fc;
+  color: #f0f9ff;
+  border-color: rgba(255, 255, 255, 0.18);
+  --fg: #f0f9ff;
+  --muted: rgba(255, 255, 255, 0.85);
+  --divider: rgba(255, 255, 255, 0.18);
+  --card-border: rgba(255, 255, 255, 0.18);
+  --hover: rgba(255, 255, 255, 0.12);
+  --accent: #f0f9ff;
+  --accent-soft: rgba(255, 255, 255, 0.18);
+}
+
+.app-sidebar .text-slate-400,
+.app-sidebar .dark\:text-slate-500 {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.app-sidebar nav {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.app-sidebar nav:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+}
+.app-sidebar nav::-webkit-scrollbar {
+  width: 6px;
+}
+.app-sidebar nav::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.app-sidebar nav:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* Sidebar collapse / minimize (toggled via html.sidebar-collapsed, see AppShell) */
+.app-sidebar.w-\[260px\] {
+  transition: width 0.25s ease;
+}
+.lg\:pl-\[260px\] {
+  transition: padding-left 0.25s ease;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] {
+  width: 76px;
+}
+@media (min-width: 1024px) {
+  html.sidebar-collapsed .lg\:pl-\[260px\] {
+    padding-left: 76px;
+  }
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] nav a {
+  font-size: 0;
+  justify-content: center;
+  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] nav a span {
+  font-size: 20px;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] nav > div > div:has(.text-\[10px\]) {
+  display: none;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:first-child > div.min-w-0 {
+  display: none;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:first-child {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:first-child {
+  display: none;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button {
+  font-size: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button .material-symbols-outlined {
+  font-size: 20px;
+}
+
+#sidebar-toggle-btn {
+  position: fixed;
+  top: 22px;
+  left: 244px;
+  z-index: 35;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: #fff;
+  color: #0f91fc;
+  border: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: left 0.25s ease, transform 0.25s ease;
+  padding: 0;
+}
+#sidebar-toggle-btn:hover {
+  background: #f0f9ff;
+}
+@media (min-width: 1024px) {
+  #sidebar-toggle-btn {
+    display: flex;
+  }
+}
+html.sidebar-collapsed #sidebar-toggle-btn {
+  left: 60px;
+  transform: rotate(180deg);
+}
+
+.app-input {
+  background: var(--input);
+  border: 1px solid var(--input-border);
+  color: var(--fg);
+  border-radius: 1rem;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.app-input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.app-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--ring);
+  outline: none;
+}
+
+.app-muted {
+  color: var(--muted);
+}
+
+.app-divider {
+  border-color: var(--divider);
+}
+
+.app-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.app-stat-value {
+  font-family: "Plus Jakarta Sans", Inter, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+}
+
+html.dark .app-stat-value {
+  color: var(--primary);
+}
+
+.glass-effect {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+html.dark .glass-effect {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: var(--card-border);
+}
+
+.ambient-glow {
+  position: absolute;
+  width: 560px;
+  height: 560px;
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.07) 0%, transparent 70%);
+  border-radius: 50%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+html.dark .ambient-glow {
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.06) 0%, transparent 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.table-sticky-name th:first-child,
+.table-sticky-name td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+html:not(.dark) .table-sticky-name th:first-child,
+html:not(.dark) .table-sticky-name td:first-child {
+  background: #ffffff;
+}
+
+html.dark .table-sticky-name th:first-child,
+html.dark .table-sticky-name td:first-child {
+  background: #0f172a;
+}
+
+/* Row hover for tables / lists */
+.row-hover:hover {
+  background: var(--hover);
+}
