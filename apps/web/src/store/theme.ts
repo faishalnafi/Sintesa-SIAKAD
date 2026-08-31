@@ -23,7 +23,7 @@ function apply(resolved: "light" | "dark") {
 }
 
 export const useThemeStore = create<ThemeState>((set, get) => ({
-  preference: "system",
+  preference: "light",
   resolved: "light",
   setPreference: (preference) => {
     localStorage.setItem("sintesa-theme", preference);
@@ -32,7 +32,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     set({ preference, resolved });
   },
   init: () => {
-    const saved = (localStorage.getItem("sintesa-theme") as ThemePreference | null) ?? "system";
+    const saved = (localStorage.getItem("sintesa-theme") as ThemePreference | null) ?? "light";
     const resolved = resolve(saved);
     apply(resolved);
     set({ preference: saved, resolved });
