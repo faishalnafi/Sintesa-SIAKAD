@@ -538,7 +538,7 @@ function CreateSsoModal({
   ];
 
   const openSourceTemplates = [
-    { id: "kredensia", name: "Kredensia SSO (Sekolah)", icon: "lock_person", protocol: "OAuth 2.0 + API" },
+    { id: "kredensia", name: "Kredensia", icon: "lock_person", protocol: "OAuth 2.0 + API" },
     { id: "keycloak", name: "Keycloak IAM (Red Hat)", icon: "vpn_key", protocol: "OIDC / SAML 2.0" },
     { id: "authentik", name: "Authentik Self-Hosted", icon: "shield", protocol: "OIDC / OAuth 2.0" },
     { id: "authelia", name: "Authelia 2FA / SSO", icon: "verified_user", protocol: "OIDC" },
@@ -646,7 +646,7 @@ function CreateSsoModal({
             onClick={() => {
               setCategory("opensource");
               setSelectedTemplate("kredensia");
-              setCustomName("Kredensia SSO");
+              setCustomName("Kredensia");
             }}
             className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
               category === "opensource"
@@ -1683,7 +1683,7 @@ export function IntegrationsPage() {
             {/* TABLE 2: OPEN SOURCE & SELF-HOSTED SSO */}
             <SsoProviderTable
               title="Table 2: Open Source & Self-Hosted Providers"
-              subtitle="Kredensia SSO, Keycloak, Authentik, Authelia, Casdoor, OpenLDAP & Generic OIDC"
+              subtitle="Kredensia, Keycloak, Authentik, Authelia, Casdoor, OpenLDAP & Generic OIDC"
               badgeText="Open Source & Self-Hosted"
               providers={openSourceProviders}
               onConfigure={(p) => {
