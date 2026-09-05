@@ -32,6 +32,156 @@ export type SsoProviderItem = {
   lastSyncAt?: string | null;
 };
 
+export const INITIAL_ENTERPRISE_PROVIDERS: SsoProviderItem[] = [
+  {
+    id: "google",
+    category: "enterprise",
+    name: "Google Workspace (OAuth 2.0)",
+    shortName: "Google",
+    description: "OAuth 2.0 / OIDC authentication for students, teachers, and staff",
+    protocol: "OAuth 2.0 / OIDC",
+    icon: "google",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/google/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "microsoft",
+    category: "enterprise",
+    name: "Microsoft 365 & Azure AD (Entra ID)",
+    shortName: "Microsoft",
+    description: "Single Sign-On for Microsoft Education / Office 365 accounts",
+    protocol: "OIDC / OAuth 2.0",
+    icon: "microsoft",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/microsoft/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "apple",
+    category: "enterprise",
+    name: "Apple Sign-In (Apple ID)",
+    shortName: "Apple",
+    description: "Secure Apple ID authentication for iOS / macOS / Web devices",
+    protocol: "OAuth 2.0 / OIDC",
+    icon: "apple",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/apple/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "saml_okta",
+    category: "enterprise",
+    name: "Okta / Auth0 / SAML 2.0 Enterprise",
+    shortName: "SAML 2.0 / Okta",
+    description: "Standard SAML 2.0 enterprise IdP federation (Okta, Auth0, PingIdentity)",
+    protocol: "SAML 2.0 / OIDC",
+    icon: "security",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/saml_okta/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "github",
+    category: "enterprise",
+    name: "GitHub / GitLab Enterprise",
+    shortName: "GitHub",
+    description: "Authentication via GitHub or GitLab accounts for developers and IT staff",
+    protocol: "OAuth 2.0",
+    icon: "code",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/github/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+];
+
+export const INITIAL_OPENSOURCE_PROVIDERS: SsoProviderItem[] = [
+  {
+    id: "kredensia",
+    category: "opensource",
+    name: "Kredensia",
+    shortName: "Kredensia",
+    description: "Centralized Authentication & Identity Portal with Class & Academic Year sync",
+    protocol: "OAuth 2.0 + REST API",
+    icon: "lock_person",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "keycloak",
+    category: "opensource",
+    name: "Keycloak IAM (Red Hat)",
+    shortName: "Keycloak",
+    description: "Open Source IAM Server for realm and access management",
+    protocol: "OpenID Connect (OIDC) / SAML 2.0",
+    icon: "vpn_key",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/keycloak/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "authentik",
+    category: "opensource",
+    name: "Authentik Self-Hosted IdP",
+    shortName: "Authentik",
+    description: "Modern, flexible open-source identity provider for internal applications",
+    protocol: "OIDC / OAuth 2.0",
+    icon: "shield",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/authentik/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "authelia",
+    category: "opensource",
+    name: "Authelia Single Sign-On & 2FA",
+    shortName: "Authelia",
+    description: "Lightweight open-source authentication and 2FA portal",
+    protocol: "OIDC (OpenID Connect)",
+    icon: "verified_user",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/authelia/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "casdoor",
+    category: "opensource",
+    name: "Casdoor UI Platform",
+    shortName: "Casdoor",
+    description: "Modern web-based IAM platform with multi-tenant and clean UI",
+    protocol: "OAuth 2.0 / OIDC / SAML",
+    icon: "door_front",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/casdoor/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "ldap",
+    category: "opensource",
+    name: "OpenLDAP / FreeIPA / Active Directory",
+    shortName: "LDAP / FreeIPA",
+    description: "LDAP protocol directory service for local network identity",
+    protocol: "LDAP / LDAPS",
+    icon: "folder_shared",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/ldap/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+  {
+    id: "generic_oidc",
+    category: "opensource",
+    name: "Custom Generic OIDC (OpenID Connect)",
+    shortName: "Generic OIDC",
+    description: "Integrate custom OpenID Connect provider via Discovery Endpoint",
+    protocol: "OpenID Connect (OIDC)",
+    icon: "extension",
+    redirectUri: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/generic_oidc/callback`,
+    isConfigured: false,
+    isActive: false,
+  },
+];
+
 type Runtime = {
   code: string;
   status: string;
@@ -1336,8 +1486,8 @@ function IntegrationCard({
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export function IntegrationsPage() {
-  const [enterpriseProviders, setEnterpriseProviders] = useState<SsoProviderItem[]>([]);
-  const [openSourceProviders, setOpenSourceProviders] = useState<SsoProviderItem[]>([]);
+  const [enterpriseProviders, setEnterpriseProviders] = useState<SsoProviderItem[]>(INITIAL_ENTERPRISE_PROVIDERS);
+  const [openSourceProviders, setOpenSourceProviders] = useState<SsoProviderItem[]>(INITIAL_OPENSOURCE_PROVIDERS);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [recentSync, setRecentSync] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1374,16 +1524,58 @@ export function IntegrationsPage() {
   const load = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const [ssoRes, intRes, keysRes] = await Promise.all([
+      const [ssoRes, ssoLegacy, googleLegacy, intRes, keysRes] = await Promise.all([
         api<{ enterprise: SsoProviderItem[]; opensource: SsoProviderItem[] }>("/admin/integrations/sso-providers").catch(() => null),
+        api<{ baseUrl?: string; clientId?: string; redirectUri?: string; loginConfigured?: boolean; hasApiKey?: boolean }>("/admin/integrations/sso-config").catch(() => null),
+        api<{ configured?: boolean; clientId?: string; redirectUri?: string }>("/admin/integrations/google-config").catch(() => null),
         api<{ catalog: CatalogItem[]; recentSync: SyncLog[] }>("/admin/integrations").catch(() => null),
         api<ApiKey[]>("/admin/api-keys").catch(() => null),
       ]);
 
-      if (ssoRes?.data) {
-        setEnterpriseProviders(ssoRes.data.enterprise || []);
-        setOpenSourceProviders(ssoRes.data.opensource || []);
+      if (ssoRes?.data?.enterprise && ssoRes.data.enterprise.length > 0) {
+        setEnterpriseProviders(ssoRes.data.enterprise);
+      } else {
+        // Fallback / Enrich Google from google-config
+        setEnterpriseProviders((prev) =>
+          prev.map((p) => {
+            if (p.id === "google") {
+              const isConf = Boolean(googleLegacy?.data?.configured || googleLegacy?.data?.clientId);
+              return {
+                ...p,
+                clientId: googleLegacy?.data?.clientId || p.clientId,
+                redirectUri: googleLegacy?.data?.redirectUri || p.redirectUri,
+                isConfigured: isConf,
+                isActive: isConf,
+              };
+            }
+            return p;
+          })
+        );
       }
+
+      if (ssoRes?.data?.opensource && ssoRes.data.opensource.length > 0) {
+        setOpenSourceProviders(ssoRes.data.opensource);
+      } else {
+        // Fallback / Enrich Kredensia from sso-config
+        setOpenSourceProviders((prev) =>
+          prev.map((p) => {
+            if (p.id === "kredensia") {
+              const isConf = Boolean(ssoLegacy?.data?.loginConfigured || ssoLegacy?.data?.clientId || ssoLegacy?.data?.baseUrl);
+              return {
+                ...p,
+                baseUrl: ssoLegacy?.data?.baseUrl || p.baseUrl,
+                clientId: ssoLegacy?.data?.clientId || p.clientId,
+                redirectUri: ssoLegacy?.data?.redirectUri || p.redirectUri,
+                isConfigured: isConf,
+                isActive: Boolean(ssoLegacy?.data?.loginConfigured),
+                hasApiKey: Boolean(ssoLegacy?.data?.hasApiKey),
+              };
+            }
+            return p;
+          })
+        );
+      }
+
       if (intRes?.data) {
         setCatalog(intRes.data.catalog ?? []);
         setRecentSync(intRes.data.recentSync ?? []);
@@ -1666,9 +1858,9 @@ export function IntegrationsPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* TABLE 1: ENTERPRISE SSO PROVIDERS */}
+            {/* ENTERPRISE SSO PROVIDERS */}
             <SsoProviderTable
-              title="Table 1: Enterprise SSO Providers"
+              title="Enterprise SSO Providers"
               subtitle="Google Workspace, Microsoft Azure AD / Entra ID, Apple ID, SAML 2.0 Enterprise & GitHub"
               badgeText="Enterprise Standards"
               providers={enterpriseProviders}
@@ -1680,9 +1872,9 @@ export function IntegrationsPage() {
               onReset={handleResetProvider}
             />
 
-            {/* TABLE 2: OPEN SOURCE & SELF-HOSTED SSO */}
+            {/* OPEN SOURCE & SELF-HOSTED SSO */}
             <SsoProviderTable
-              title="Table 2: Open Source & Self-Hosted Providers"
+              title="Open Source & Self-Hosted Providers"
               subtitle="Kredensia, Keycloak, Authentik, Authelia, Casdoor, OpenLDAP & Generic OIDC"
               badgeText="Open Source & Self-Hosted"
               providers={openSourceProviders}
