@@ -403,6 +403,14 @@ authRoutes.get("/google/login", async (c) => {
     ? `${origin}/auth/google/callback`
     : "https://siakad.sman3mjk.sch.id/auth/google/callback";
 
+  setCookie(c, "sintesa_google_redirect_uri", redirectUri, {
+    httpOnly: true,
+    secure: env.COOKIE_SECURE,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 600,
+  });
+
   const params = new URLSearchParams({
     client_id: getGoogleClientId(),
     redirect_uri: redirectUri,
@@ -425,8 +433,10 @@ authRoutes.get("/google/callback", async (c) => {
   const state = c.req.query("state");
   const errorParam = c.req.query("error");
   const storedStateHash = getCookie(c, "sintesa_google_state");
+  const storedRedirectUri = getCookie(c, "sintesa_google_redirect_uri");
 
   deleteCookie(c, "sintesa_google_state", { path: "/" });
+  deleteCookie(c, "sintesa_google_redirect_uri", { path: "/" });
 
   if (errorParam) {
     return c.redirect(`${origin}/login?error=google_denied`);
@@ -443,28 +453,47 @@ authRoutes.get("/google/callback", async (c) => {
 
   try {
     const isLocalCb = origin.includes("localhost") || origin.includes("127.0.0.1");
-    const redirectUri = isLocalCb
+    const primaryRedirectUri = storedRedirectUri || (isLocalCb
       ? `${origin}/auth/google/callback`
-      : "https://siakad.sman3mjk.sch.id/auth/google/callback";
+      : "https://siakad.sman3mjk.sch.id/auth/google/callback");
+
+    const candidateUris = [
+      primaryRedirectUri,
+      `${origin}/auth/google/callback`,
+      "http://localhost:3001/auth/google/callback",
+      "http://localhost:3001/api/auth/google/callback",
+      "http://localhost:5173/auth/google/callback",
+      "https://siakad.sman3mjk.sch.id/auth/google/callback",
+    ].filter(Boolean);
+    const uniqueUris = [...new Set(candidateUris)];
 
     // ── Exchange authorization code for access token ──────────
-    const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: getGoogleClientId(),
-        client_secret: getGoogleClientSecret(),
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }).toString(),
-    });
+    let tokenData: Record<string, string> | null = null;
+    let lastExchangeError = "unknown";
 
-    const tokenData = await tokenRes.json() as Record<string, string>;
-    if (!tokenRes.ok || !tokenData.access_token) {
-      throw new Error(
-        `Google token exchange failed: ${tokenData.error_description || tokenData.error || "unknown"}`
-      );
+    for (const testUri of uniqueUris) {
+      const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: getGoogleClientId(),
+          client_secret: getGoogleClientSecret(),
+          redirect_uri: testUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+
+      const resJson = (await tokenRes.json().catch(() => ({}))) as Record<string, string>;
+      if (tokenRes.ok && resJson.access_token) {
+        tokenData = resJson;
+        break;
+      }
+      lastExchangeError = resJson.error_description || resJson.error || "unknown";
+    }
+
+    if (!tokenData || !tokenData.access_token) {
+      throw new Error(`Google token exchange failed: ${lastExchangeError}`);
     }
 
     // ── Fetch user profile from Google ────────────────────────
