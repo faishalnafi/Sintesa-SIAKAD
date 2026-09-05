@@ -291,14 +291,14 @@ function SsoConfigModal({
       );
 
       if (res.success) {
-        alert(res.message || "Konfigurasi SSO berhasil disimpan!");
+        alert(res.message || "SSO configuration saved successfully!");
         onSaved();
         onClose();
       } else {
-        alert(res.message || "Gagal menyimpan konfigurasi.");
+        alert(res.message || "Failed to save configuration.");
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Terjadi kesalahan saat menyimpan.");
+      alert(err instanceof Error ? err.message : "An error occurred while saving.");
     } finally {
       setSubmitting(false);
     }
@@ -360,14 +360,14 @@ function SsoConfigModal({
               <span className="material-symbols-outlined text-[14px]">
                 {copiedCallback ? "check" : "content_copy"}
               </span>
-              {copiedCallback ? "Tersalin!" : "Salin URL"}
+              {copiedCallback ? "Copied!" : "Copy URL"}
             </button>
           </div>
           <code className="text-xs font-mono px-3 py-2 rounded-xl bg-[var(--surface)] border block truncate select-all" style={{ borderColor: "var(--input-border)" }}>
             {provider.redirectUri}
           </code>
           <p className="text-[11px] app-muted leading-snug">
-            Daftarkan URL di atas pada field <strong>Redirect URI / Callback URL</strong> di dashboard konsol {provider.shortName}.
+            Register the URL above in the <strong>Redirect URI / Callback URL</strong> field in the {provider.shortName} console dashboard.
           </p>
         </div>
 
@@ -377,7 +377,7 @@ function SsoConfigModal({
           {!isGoogle && !isMicrosoft && (
             <Field
               id="prov-url"
-              label={isLdap ? "URL Server LDAP (Host & Port)" : "URL Dasar Server / Realm SSO"}
+              label={isLdap ? "LDAP Server URL (Host & Port)" : "SSO Server / Realm Base URL"}
               value={baseUrl}
               onChange={setBaseUrl}
               placeholder={
@@ -387,7 +387,7 @@ function SsoConfigModal({
                   ? "ldap://ldap.sekolah.sch.id:389"
                   : "https://auth.sekolah.sch.id/realms/master"
               }
-              hint={isLdap ? "Contoh: ldap://192.168.1.10:389 atau ldaps://..." : "URL endpoint portal SSO tanpa trailing slash."}
+              hint={isLdap ? "Example: ldap://192.168.1.10:389 or ldaps://..." : "SSO portal endpoint URL without trailing slash."}
             />
           )}
 
@@ -395,11 +395,11 @@ function SsoConfigModal({
           {isMicrosoft && (
             <Field
               id="prov-tenant-id"
-              label="Directory (Tenant) ID Microsoft Azure"
+              label="Microsoft Azure Directory (Tenant) ID"
               value={tenantId}
               onChange={setTenantId}
-              placeholder="common atau xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              hint="Gunakan 'common' atau 'organizations' atau Tenant ID spesifik sekolah."
+              placeholder="common or xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              hint="Use 'common', 'organizations', or a specific Tenant ID."
             />
           )}
 
@@ -411,7 +411,7 @@ function SsoConfigModal({
               value={discoveryUrl}
               onChange={setDiscoveryUrl}
               placeholder="https://auth.sekolah.sch.id/.well-known/openid-configuration"
-              hint="URL metadata konfigurasi OIDC provider."
+              hint="OIDC provider metadata configuration URL."
             />
           )}
 
@@ -433,23 +433,23 @@ function SsoConfigModal({
                 ? "cn=admin,dc=sekolah,dc=sch,dc=id"
                 : "siakad-client-id"
             }
-            hint={isLdap ? "Distinguished Name akun pembaca LDAP." : "Identifier unik aplikasi yang dibuat di IdP."}
+            hint={isLdap ? "Distinguished Name of the LDAP reader account." : "Unique application identifier registered at the IdP."}
             required
           />
 
           {/* Client Secret */}
           <Field
             id="prov-client-secret"
-            label={isLdap ? "Password Bind LDAP" : "Client Secret / App Secret"}
+            label={isLdap ? "LDAP Bind Password" : "Client Secret / App Secret"}
             type="password"
             value={clientSecret}
             onChange={setClientSecret}
             placeholder={
               provider.hasSecret
-                ? "•••••• (sudah tersimpan — kosongkan jika tidak ingin mengubah)"
-                : "Masukkan Client Secret"
+                ? "•••••• (saved — leave blank to keep unchanged)"
+                : "Enter Client Secret"
             }
-            hint="Kunci rahasia otentikasi. Kosongkan jika tidak ingin mengubah."
+            hint="Authentication secret key. Leave blank to keep unchanged."
           />
 
           {/* Specific Kredensia API Settings */}
@@ -457,15 +457,15 @@ function SsoConfigModal({
             <div className="pt-2 border-t flex flex-col gap-3.5" style={{ borderColor: "var(--divider)" }}>
               <div className="text-xs font-semibold text-[var(--accent)] flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-[16px]">api</span>
-                <span>Kredensial API Sinkronisasi Data (Siswa, Rombel &amp; Guru)</span>
+                <span>Data Sync API Credentials (Students, Classes &amp; Teachers)</span>
               </div>
               <Field
                 id="prov-api-base-url"
-                label="URL Base API SSO"
+                label="SSO API Base URL"
                 value={apiBaseUrl}
                 onChange={setApiBaseUrl}
                 placeholder="https://sso.sekolah.sch.id/api/v1"
-                hint="Otomatis terisi <URL SSO>/api/v1 jika dikosongkan."
+                hint="Auto-filled as <SSO URL>/api/v1 if left blank."
               />
               <Field
                 id="prov-api-key"
@@ -475,10 +475,10 @@ function SsoConfigModal({
                 onChange={setApiKey}
                 placeholder={
                   provider.hasApiKey
-                    ? "•••••• (sudah tersimpan — kosongkan jika tidak ingin mengubah)"
+                    ? "•••••• (saved — leave blank to keep unchanged)"
                     : "sso_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 }
-                hint="Dibuat dari Dashboard Kredensia → Kunci API."
+                hint="Generated from Kredensia Dashboard → API Keys."
               />
             </div>
           )}
@@ -490,16 +490,16 @@ function SsoConfigModal({
             value={scopes}
             onChange={setScopes}
             placeholder="openid email profile"
-            hint="Scope izin otentikasi (dipisahkan spasi)."
+            hint="Authentication permission scopes (space-separated)."
           />
 
           <div className="pt-3 border-t flex items-center justify-end gap-3" style={{ borderColor: "var(--divider)" }}>
             <Button type="button" size="sm" variant="secondary" onClick={onClose}>
-              Batal
+              Cancel
             </Button>
             <Button type="submit" size="sm" variant="primary" disabled={submitting}>
               <span className="material-symbols-outlined text-[16px]">save</span>
-              {submitting ? "Menyimpan..." : "Simpan Konfigurasi"}
+              {submitting ? "Saving..." : "Save Configuration"}
             </Button>
           </div>
         </form>
@@ -582,14 +582,14 @@ function CreateSsoModal({
       });
 
       if (res.success) {
-        alert(res.message || "Integrasi SSO berhasil ditambahkan!");
+        alert(res.message || "SSO integration added successfully!");
         onCreated();
         onClose();
       } else {
-        alert(res.message || "Gagal menambahkan integrasi.");
+        alert(res.message || "Failed to add integration.");
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Terjadi kesalahan.");
+      alert(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
       setSubmitting(false);
     }
@@ -610,8 +610,8 @@ function CreateSsoModal({
               <span className="material-symbols-outlined text-[22px]">add_link</span>
             </span>
             <div>
-              <h3 className="font-display font-bold text-base">Tambah Integrasi SSO</h3>
-              <p className="text-xs app-muted">Pilih standar perusahaan besar atau open-source self-hosted</p>
+              <h3 className="font-display font-bold text-base">Add SSO Integration</h3>
+              <p className="text-xs app-muted">Choose an enterprise standard or open-source self-hosted provider</p>
             </div>
           </div>
           <button
@@ -639,7 +639,7 @@ function CreateSsoModal({
             }`}
           >
             <span className="material-symbols-outlined text-[16px]">domain</span>
-            <span>Standar Perusahaan Besar</span>
+            <span>Enterprise Standards</span>
           </button>
           <button
             type="button"
@@ -662,7 +662,7 @@ function CreateSsoModal({
         {/* Provider Template Grid */}
         <div className="flex flex-col gap-2">
           <label className="text-xs font-semibold app-muted uppercase tracking-wider">
-            Pilih Platform / Provider:
+            Select Platform / Provider:
           </label>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {currentTemplates.map((t) => (
@@ -692,21 +692,21 @@ function CreateSsoModal({
         <form onSubmit={handleCreate} className="flex flex-col gap-3.5 border-t pt-4" style={{ borderColor: "var(--divider)" }}>
           <Field
             id="new-prov-name"
-            label="Nama Integrasi / Label"
+            label="Integration Name / Label"
             value={customName}
             onChange={setCustomName}
-            placeholder="Contoh: Google Workspace Sekolah"
+            placeholder="e.g. Google Workspace"
             required
           />
 
           {category === "opensource" && (
             <Field
               id="new-prov-url"
-              label="URL Dasar Server SSO"
+              label="SSO Server Base URL"
               value={baseUrl}
               onChange={setBaseUrl}
               placeholder="https://auth.sekolah.sch.id"
-              hint="URL dasar endpoint server otentikasi."
+              hint="Base URL of the authentication server endpoint."
             />
           )}
 
@@ -715,7 +715,7 @@ function CreateSsoModal({
             label="Client ID / Application ID"
             value={clientId}
             onChange={setClientId}
-            placeholder="Masukkan Client ID dari dashboard provider"
+            placeholder="Enter Client ID from provider dashboard"
             required
           />
 
@@ -725,16 +725,16 @@ function CreateSsoModal({
             type="password"
             value={clientSecret}
             onChange={setClientSecret}
-            placeholder="Masukkan Client Secret"
+            placeholder="Enter Client Secret"
           />
 
           <div className="pt-3 border-t flex items-center justify-end gap-3" style={{ borderColor: "var(--divider)" }}>
             <Button type="button" size="sm" variant="secondary" onClick={onClose}>
-              Batal
+              Cancel
             </Button>
             <Button type="submit" size="sm" variant="primary" disabled={submitting}>
               <span className="material-symbols-outlined text-[16px]">add</span>
-              {submitting ? "Menambahkan..." : "Tambah Integrasi"}
+              {submitting ? "Adding..." : "Add Integration"}
             </Button>
           </div>
         </form>
@@ -780,8 +780,8 @@ function UnifiedSsoModal({
               </span>
             </span>
             <div>
-              <h3 className="font-display font-bold text-base">Sinkronisasi Data SSO</h3>
-              <p className="text-xs app-muted">Kredensia Portal Otentikasi &amp; Identitas Terpusat</p>
+              <h3 className="font-display font-bold text-base">SSO Data Sync</h3>
+              <p className="text-xs app-muted">Kredensia Centralized Authentication &amp; Identity Portal</p>
             </div>
           </div>
           {!loading && (
@@ -799,9 +799,9 @@ function UnifiedSsoModal({
           <div className="py-10 flex flex-col items-center justify-center gap-4 text-center">
             <div className="w-14 h-14 rounded-full border-4 border-[var(--accent-soft)] border-t-[var(--accent)] animate-spin" />
             <div>
-              <h4 className="font-bold text-base">Sedang Memproses...</h4>
+              <h4 className="font-bold text-base">Processing...</h4>
               <p className="text-xs app-muted mt-1 max-w-xs leading-relaxed">
-                {loadingStep || "Menyinkronkan data pengguna dan rombel dari Kredensia SSO."}
+                {loadingStep || "Syncing user data and classes from Kredensia SSO."}
               </p>
             </div>
           </div>
@@ -827,7 +827,7 @@ function UnifiedSsoModal({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold" style={{ color: testStatus.connected ? "var(--accent)" : "#ef4444" }}>
-                    {testStatus.connected ? "Koneksi API Key SSO: TERHUBUNG" : "Koneksi API Key SSO: GAGAL"}
+                    {testStatus.connected ? "SSO API Key Connection: CONNECTED" : "SSO API Key Connection: FAILED"}
                   </p>
                   <p className="app-muted mt-0.5 leading-relaxed">{testStatus.info}</p>
                 </div>
@@ -845,7 +845,7 @@ function UnifiedSsoModal({
               >
                 <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">error</span>
                 <div>
-                  <p className="font-semibold">Sinkronisasi Data Gagal</p>
+                  <p className="font-semibold">Data Sync Failed</p>
                   <p className="text-xs opacity-90 mt-0.5">{syncError}</p>
                 </div>
               </div>
@@ -853,11 +853,11 @@ function UnifiedSsoModal({
               <div className="space-y-3">
                 <div className="grid grid-cols-3 gap-2.5">
                   <div className="rounded-xl p-3 text-center border" style={{ background: "var(--hover)", borderColor: "var(--divider)" }}>
-                    <p className="app-label text-[10px]">Total Data</p>
+                    <p className="app-label text-[10px]">Total Records</p>
                     <p className="font-display font-bold text-lg mt-0.5">{syncResult.total}</p>
                   </div>
                   <div className="rounded-xl p-3 text-center border" style={{ background: "var(--accent-soft)", borderColor: "var(--accent-soft)" }}>
-                    <p className="app-label text-[10px]" style={{ color: "var(--accent)" }}>Berhasil</p>
+                    <p className="app-label text-[10px]" style={{ color: "var(--accent)" }}>Successful</p>
                     <p className="font-display font-bold text-lg mt-0.5" style={{ color: "var(--accent)" }}>{syncResult.success}</p>
                   </div>
                   <div
@@ -867,14 +867,14 @@ function UnifiedSsoModal({
                       borderColor: syncResult.failed > 0 ? "color-mix(in srgb, #ef4444 30%, transparent)" : "var(--divider)",
                     }}
                   >
-                    <p className="app-label text-[10px]" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>Gagal</p>
+                    <p className="app-label text-[10px]" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>Failed</p>
                     <p className="font-display font-bold text-lg mt-0.5" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>{syncResult.failed}</p>
                   </div>
                 </div>
 
                 {syncResult.errors.length > 0 && (
                   <div className="space-y-1.5 text-xs">
-                    <p className="font-semibold text-error text-[11px]">Detail Data Gagal ({syncResult.errors.length}):</p>
+                    <p className="font-semibold text-error text-[11px]">Failed Records Detail ({syncResult.errors.length}):</p>
                     <div
                       className="max-h-32 overflow-y-auto rounded-xl p-3 border font-mono text-[11px] space-y-1"
                       style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
@@ -891,7 +891,7 @@ function UnifiedSsoModal({
             ) : null}
 
             <Button size="sm" variant="primary" onClick={onClose} className="w-full mt-2">
-              Selesai &amp; Tutup
+              Done &amp; Close
             </Button>
           </div>
         )}
@@ -944,7 +944,7 @@ function SsoProviderTable({
           <p className="text-xs app-muted mt-0.5">{subtitle}</p>
         </div>
         <div className="text-xs font-semibold app-muted">
-          {providers.filter((p) => p.isConfigured).length} dari {providers.length} Terkonfigurasi
+          {providers.filter((p) => p.isConfigured).length} of {providers.length} Configured
         </div>
       </div>
 
@@ -954,18 +954,18 @@ function SsoProviderTable({
           <thead>
             <tr className="border-b" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
               <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Provider / Platform</th>
-              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Protokol</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Protocol</th>
               <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Client ID / Endpoint</th>
               <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Redirect URI (Callback)</th>
               <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Status</th>
-              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted text-right">Aksi</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y" style={{ borderColor: "var(--divider)" }}>
             {providers.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-5 py-8 text-center text-zinc-400">
-                  Belum ada provider dalam kategori ini.
+                  No providers configured in this category.
                 </td>
               </tr>
             ) : (
@@ -1007,7 +1007,7 @@ function SsoProviderTable({
                             type="button"
                             onClick={() => copyText(p.clientId!, `client_${p.id}`)}
                             className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
-                            title="Salin Client ID"
+                            title="Copy Client ID"
                           >
                             <span className="material-symbols-outlined text-[14px]">
                               {copiedId === `client_${p.id}` ? "check" : "content_copy"}
@@ -1017,7 +1017,7 @@ function SsoProviderTable({
                       ) : p.baseUrl ? (
                         <span className="text-[11px] font-mono app-muted truncate max-w-[160px] block">{p.baseUrl}</span>
                       ) : (
-                        <span className="text-zinc-400 italic text-[11px]">Belum diatur</span>
+                        <span className="text-zinc-400 italic text-[11px]">Not configured</span>
                       )}
                     </td>
 
@@ -1029,7 +1029,7 @@ function SsoProviderTable({
                           type="button"
                           onClick={() => copyText(p.redirectUri, `uri_${p.id}`)}
                           className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
-                          title="Salin Redirect URI"
+                          title="Copy Redirect URI"
                         >
                           <span className="material-symbols-outlined text-[14px]">
                             {copiedId === `uri_${p.id}` ? "check" : "content_copy"}
@@ -1049,11 +1049,11 @@ function SsoProviderTable({
                           }`}
                         >
                           <span className={`w-1.5 h-1.5 rounded-full ${p.isActive ? "bg-green-500" : "bg-zinc-400"}`} />
-                          {p.isActive ? "TERHUBUNG / AKTIF" : "NONAKTIF"}
+                          {p.isActive ? "CONNECTED / ACTIVE" : "INACTIVE"}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200/50 dark:border-amber-900/30">
-                          BELUM DIKONFIG
+                          NOT CONFIGURED
                         </span>
                       )}
                     </td>
@@ -1068,7 +1068,7 @@ function SsoProviderTable({
                             onClick={onSyncKredensia}
                             disabled={!p.isConfigured}
                             className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/30 flex items-center justify-center transition-colors disabled:opacity-40"
-                            title="Sinkronkan Data Anggota & Rombel"
+                            title="Sync Members & Classes"
                           >
                             <span className="material-symbols-outlined text-[15px]">sync</span>
                           </button>
@@ -1082,7 +1082,7 @@ function SsoProviderTable({
                           style={{ borderColor: "var(--input-border)", color: "var(--fg)" }}
                         >
                           <span className="material-symbols-outlined text-[14px]">settings</span>
-                          <span>Konfigurasi</span>
+                          <span>Configure</span>
                         </button>
 
                         {/* Toggle Active Button */}
@@ -1095,7 +1095,7 @@ function SsoProviderTable({
                                 ? "bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-600 dark:bg-amber-950/20 dark:border-amber-900/30"
                                 : "bg-green-50 hover:bg-green-100 border-green-200 text-green-600 dark:bg-green-950/20 dark:border-green-900/30"
                             }`}
-                            title={p.isActive ? "Nonaktifkan Login" : "Aktifkan Login"}
+                            title={p.isActive ? "Disable Login" : "Enable Login"}
                           >
                             <span className="material-symbols-outlined text-[15px]">
                               {p.isActive ? "power_settings_new" : "play_circle"}
@@ -1108,7 +1108,7 @@ function SsoProviderTable({
                           type="button"
                           onClick={() => onReset(p.id)}
                           className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 dark:bg-red-950/20 dark:border-red-900/30 flex items-center justify-center transition-colors"
-                          title="Reset Konfigurasi"
+                          title="Reset Configuration"
                         >
                           <span className="material-symbols-outlined text-[15px]">delete</span>
                         </button>
@@ -1146,7 +1146,7 @@ function IntegrationCard({
 
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!baseUrlInput.trim()) return alert("URL Base API wajib diisi.");
+    if (!baseUrlInput.trim()) return alert("API Base URL is required.");
     setSaving(true);
     try {
       const res = await api<{ success: boolean; message?: string }>(`/admin/integrations/${item.code}-config`, {
@@ -1157,14 +1157,14 @@ function IntegrationCard({
         }),
       });
       if (res.success) {
-        alert(`Konfigurasi ${item.shortName} berhasil disimpan!`);
+        alert(`${item.shortName} configuration saved successfully!`);
         setApiKeyInput("");
         onReload();
       } else {
-        alert(res.message || "Gagal menyimpan konfigurasi.");
+        alert(res.message || "Failed to save configuration.");
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Terjadi kesalahan.");
+      alert(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
       setSaving(false);
     }
@@ -1212,19 +1212,19 @@ function IntegrationCard({
 
       <p className="text-sm app-muted leading-relaxed">{item.description}</p>
 
-      {/* Konfigurasi Input API Pihak Ketiga */}
+      {/* API Connection Configuration */}
       <div className="flex flex-col gap-3 p-4 rounded-xl border bg-surface-container/10 dark:bg-white/5" style={{ borderColor: "var(--input-border)" }}>
         <div className="text-xs font-semibold text-[var(--accent)] flex items-center gap-1.5">
           <span className="material-symbols-outlined text-[16px]">settings</span>
-          <span>Konfigurasi Koneksi {item.shortName}</span>
+          <span>{item.shortName} Connection Settings</span>
         </div>
         <Field
           id={`${item.code}-base-url`}
-          label="URL Base API Aplikasi"
+          label="Application API Base URL"
           value={baseUrlInput}
           onChange={setBaseUrlInput}
           placeholder="http://localhost:8001"
-          hint={`URL dasar aplikasi PASTi (contoh: http://localhost:8001)`}
+          hint={`Base URL of the PASTi application (e.g. http://localhost:8001)`}
         />
         <Field
           id={`${item.code}-api-key`}
@@ -1232,8 +1232,8 @@ function IntegrationCard({
           type="password"
           value={apiKeyInput}
           onChange={setApiKeyInput}
-          placeholder={item.runtime?.configured ? "•••••• (sudah diisi — kosongkan jika tidak ingin mengubah)" : "Masukkan API Key"}
-          hint="API Key / Token pihak ketiga yang dibuat dari menu Developer API Key PASTi."
+          placeholder={item.runtime?.configured ? "•••••• (saved — leave blank to keep unchanged)" : "Enter API Key"}
+          hint="Third-party API Key / Token generated from the PASTi Developer API Keys menu."
         />
         <Button
           size="sm"
@@ -1243,7 +1243,7 @@ function IntegrationCard({
           className="w-full mt-1"
         >
           <span className="material-symbols-outlined text-[16px] mr-1">save</span>
-          Simpan Parameter {item.shortName}
+          Save {item.shortName} Settings
         </Button>
       </div>
 
@@ -1251,18 +1251,18 @@ function IntegrationCard({
       <div className="p-3 rounded-xl border flex flex-col gap-2 bg-surface-container/30 dark:bg-white/5" style={{ borderColor: "var(--input-border)" }}>
         <div className="text-xs font-semibold text-[var(--accent)] flex items-center gap-1.5">
           <span className="material-symbols-outlined text-[16px]">api</span>
-          <span>API Endpoint Pihak Ketiga (Developer)</span>
+          <span>Third-Party API Endpoints (Developer)</span>
         </div>
 
         <div className="space-y-1.5 text-xs font-mono">
           <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-[var(--surface)] border" style={{ borderColor: "var(--input-border)" }}>
-            <span className="truncate"><strong>GET Master Siswa:</strong> /api/v1/students</span>
+            <span className="truncate"><strong>GET Student Master:</strong> /api/v1/students</span>
             <button
               type="button"
               onClick={() => copyText(`${window.location.origin}/api/v1/students`, "get")}
               className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 shrink-0 font-sans font-medium"
             >
-              {copied === "get" ? "Tersalin!" : "Salin URL"}
+              {copied === "get" ? "Copied!" : "Copy URL"}
             </button>
           </div>
 
@@ -1273,12 +1273,12 @@ function IntegrationCard({
               onClick={() => copyText(`${window.location.origin}${webhookEndpoint}`, "post")}
               className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 shrink-0 font-sans font-medium"
             >
-              {copied === "post" ? "Tersalin!" : "Salin URL"}
+              {copied === "post" ? "Copied!" : "Copy URL"}
             </button>
           </div>
         </div>
 
-        {/* Collapsible Format JSON */}
+        {/* Collapsible JSON Format */}
         <button
           type="button"
           onClick={() => setShowDocs(!showDocs)}
@@ -1287,7 +1287,7 @@ function IntegrationCard({
           <span className="material-symbols-outlined text-[14px]">
             {showDocs ? "expand_less" : "code"}
           </span>
-          <span>{showDocs ? "Sembunyikan Contoh Payload JSON" : "Lihat Contoh Format JSON Webhook"}</span>
+          <span>{showDocs ? "Hide JSON Payload Example" : "View Webhook JSON Format Example"}</span>
         </button>
 
         {showDocs && (
@@ -1300,14 +1300,14 @@ function IntegrationCard({
               onClick={() => copyText(sampleJson, "json")}
               className="absolute top-1.5 right-1.5 text-[9px] px-2 py-0.5 rounded bg-white/20 text-white hover:bg-white/30 font-sans font-medium"
             >
-              {copied === "json" ? "Tersalin!" : "Salin JSON"}
+              {copied === "json" ? "Copied!" : "Copy JSON"}
             </button>
           </div>
         )}
       </div>
 
       <div>
-        <p className="app-label mb-1.5">Field SIAKAD</p>
+        <p className="app-label mb-1.5">SIAKAD Fields</p>
         <div className="flex flex-wrap gap-1.5">
           {item.ownsFields.map((f) => (
             <code
@@ -1328,7 +1328,7 @@ function IntegrationCard({
         disabled={busy}
         onClick={() => onSync(item.code as "gds" | "kehadiran")}
       >
-        {busy ? "Memproses..." : st === "coming_soon" ? "Uji sync (coming soon)" : `Sync Manual ${item.shortName}`}
+        {busy ? "Processing..." : st === "coming_soon" ? "Test sync (coming soon)" : `Manual Sync ${item.shortName}`}
       </Button>
     </Card>
   );
@@ -1392,7 +1392,7 @@ export function IntegrationsPage() {
         setApiKeysList(keysRes.data);
       }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Gagal memuat data integrasi");
+      setMessage(e instanceof Error ? e.message : "Failed to load integration data");
     } finally {
       if (!isSilent) setLoading(false);
       setApiKeysLoading(false);
@@ -1409,33 +1409,33 @@ export function IntegrationsPage() {
         method: "POST",
       });
       if (res.success) {
-        setMessage(res.message || "Status provider berhasil diperbarui");
+        setMessage(res.message || "Provider status updated successfully");
         load(true);
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal mengubah status provider");
+      alert(err instanceof Error ? err.message : "Failed to update provider status");
     }
   };
 
   const handleResetProvider = async (id: string) => {
-    if (!confirm(`Reset konfigurasi provider ${id}? Kredensial yang tersimpan akan dibersihkan.`)) return;
+    if (!confirm(`Reset configuration for provider "${id}"? Saved credentials will be cleared.`)) return;
     try {
       const res = await api<{ success: boolean; message: string }>(`/admin/integrations/sso-providers/${id}`, {
         method: "DELETE",
       });
       if (res.success) {
-        setMessage(res.message || "Konfigurasi provider berhasil direset");
+        setMessage(res.message || "Provider configuration reset successfully");
         load(true);
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal mereset provider");
+      alert(err instanceof Error ? err.message : "Failed to reset provider");
     }
   };
 
   const handleSyncKredensia = async () => {
     setSyncModalOpen(true);
     setSyncModalLoading(true);
-    setSyncLoadingStep("Menguji koneksi API & menyinkronkan data pengguna dari Kredensia SSO...");
+    setSyncLoadingStep("Testing API connection and syncing user data from Kredensia SSO...");
     setSyncTestResult(null);
     setSsoSyncResult(null);
     setSsoSyncError(null);
@@ -1445,13 +1445,13 @@ export function IntegrationsPage() {
       if (testRes.success) {
         setSyncTestResult({
           connected: true,
-          info: `Terhubung ke Kredensia API (Aplikasi: ${testRes.data?.meta?.app_name || "OK"})`,
+          info: `Connected to Kredensia API (App: ${testRes.data?.meta?.app_name || "OK"})`,
         });
       }
     } catch (err) {
       setSyncTestResult({
         connected: false,
-        info: err instanceof Error ? err.message : "Tidak dapat terhubung ke SSO API",
+        info: err instanceof Error ? err.message : "Unable to connect to SSO API",
       });
     }
 
@@ -1460,10 +1460,10 @@ export function IntegrationsPage() {
       if (syncRes.data) {
         setSsoSyncResult(syncRes.data);
       } else {
-        setSsoSyncError(syncRes.message || "Gagal menyinkronkan data");
+        setSsoSyncError(syncRes.message || "Failed to sync data");
       }
     } catch (err) {
-      setSsoSyncError(err instanceof Error ? err.message : "Gagal menyinkronkan data pengguna");
+      setSsoSyncError(err instanceof Error ? err.message : "Failed to sync user data");
     } finally {
       setSyncModalLoading(false);
       load(true);
@@ -1477,7 +1477,7 @@ export function IntegrationsPage() {
       const res = await api(`/admin/integrations/${code}/sync`, { method: "POST" });
       setMessage(res.message || "OK");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Sync gagal / coming soon");
+      setMessage(e instanceof Error ? e.message : "Sync failed / coming soon");
     } finally {
       setBusy(null);
       await load(true);
@@ -1488,7 +1488,7 @@ export function IntegrationsPage() {
     e.preventDefault();
     if (!newAppName.trim()) return;
     if (newPrefix.length > 5) {
-      alert("Prefix custom maksimal 5 karakter!");
+      alert("Custom prefix must be 5 characters or fewer!");
       return;
     }
     setCreateSubmitting(true);
@@ -1507,12 +1507,12 @@ export function IntegrationsPage() {
         setNewAppName("");
         setNewDomain("*");
         setNewPrefix("data");
-        setMessage("✅ Kunci API berhasil dibuat!");
+        setMessage("✅ API key created successfully!");
       } else {
-        alert(res.message || "Gagal membuat kunci API");
+        alert(res.message || "Failed to create API key");
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Terjadi kesalahan");
+      alert(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setCreateSubmitting(false);
     }
@@ -1523,35 +1523,35 @@ export function IntegrationsPage() {
       const res = await api<ApiKey>(`/admin/api-keys/${id}/toggle`, { method: "POST" });
       if (res.success && res.data) {
         setApiKeysList(apiKeysList.map((k) => (k.id === id ? { ...k, isActive: res.data!.isActive } : k)));
-        setMessage("✅ Status kunci API berhasil diubah!");
+        setMessage("✅ API key status updated successfully!");
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal mengubah status");
+      alert(err instanceof Error ? err.message : "Failed to update status");
     }
   };
 
   const handleDeleteApiKey = async (id: string) => {
-    if (!confirm("Hapus kunci API ini? Aplikasi klien tidak akan bisa mengakses API lagi.")) return;
+    if (!confirm("Delete this API key? Client applications will no longer be able to access the API.")) return;
     try {
       const res = await api(`/admin/api-keys/${id}`, { method: "DELETE" });
       if (res.success) {
         setApiKeysList(apiKeysList.filter((k) => k.id !== id));
-        setMessage("✅ Kunci API berhasil dihapus.");
+        setMessage("✅ API key deleted successfully.");
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal menghapus kunci API");
+      alert(err instanceof Error ? err.message : "Failed to delete API key");
     }
   };
 
   const clearSyncLogs = async () => {
-    if (!confirm("Hapus semua log sinkronisasi? Tindakan ini tidak dapat dibatalkan.")) return;
+    if (!confirm("Clear all sync logs? This action cannot be undone.")) return;
     setClearingLog(true);
     try {
       await api("/admin/sync-logs", { method: "DELETE" });
       setRecentSync([]);
-      setMessage("✅ Log sinkronisasi berhasil dihapus.");
+      setMessage("✅ Sync logs cleared successfully.");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Gagal menghapus log.");
+      setMessage(e instanceof Error ? e.message : "Failed to clear logs.");
     } finally {
       setClearingLog(false);
     }
@@ -1562,9 +1562,9 @@ export function IntegrationsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Ekosistem"
-        title="Integrasi"
-        description="Penyedia Single Sign-On (SSO), Kunci API Pihak Ketiga, dan Sinkronisasi Data Sekolah."
+        eyebrow="Ecosystem"
+        title="Integrations"
+        description="Single Sign-On (SSO) providers, third-party API keys, and data synchronization."
       />
 
       {message && (
@@ -1591,10 +1591,10 @@ export function IntegrationsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="font-display font-bold text-lg" style={{ color: "var(--fg)" }}>
-              Konfigurasi Single Sign-On (SSO)
+              Single Sign-On (SSO) Configuration
             </h2>
             <p className="text-xs app-muted mt-0.5">
-              Kelola otentikasi login terpusat dari standar perusahaan besar dan portal open-source sekolah.
+              Manage centralized authentication providers — enterprise standards and self-hosted open-source solutions.
             </p>
           </div>
           <Button
@@ -1604,7 +1604,7 @@ export function IntegrationsPage() {
             className="flex items-center gap-1.5 shrink-0 px-4 py-2.5 shadow-sm"
           >
             <span className="material-symbols-outlined text-[18px]">add_link</span>
-            <span>Tambah Integrasi SSO</span>
+            <span>Add SSO Integration</span>
           </Button>
         </div>
 
@@ -1618,7 +1618,7 @@ export function IntegrationsPage() {
               <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
                 {enterpriseProviders.filter((p) => p.isConfigured).length}
               </div>
-              <div className="text-[11px] app-muted">SSO Perusahaan Besar</div>
+              <div className="text-[11px] app-muted">Enterprise SSO</div>
             </div>
           </Card>
 
@@ -1630,7 +1630,7 @@ export function IntegrationsPage() {
               <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
                 {openSourceProviders.filter((p) => p.isConfigured).length}
               </div>
-              <div className="text-[11px] app-muted">SSO Open Source</div>
+              <div className="text-[11px] app-muted">Open Source SSO</div>
             </div>
           </Card>
 
@@ -1642,7 +1642,7 @@ export function IntegrationsPage() {
               <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
                 {[...enterpriseProviders, ...openSourceProviders].filter((p) => p.isActive).length}
               </div>
-              <div className="text-[11px] app-muted">Login Aktif</div>
+              <div className="text-[11px] app-muted">Active Logins</div>
             </div>
           </Card>
 
@@ -1654,7 +1654,7 @@ export function IntegrationsPage() {
               <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
                 {enterpriseProviders.length + openSourceProviders.length}
               </div>
-              <div className="text-[11px] app-muted">Total Provider</div>
+              <div className="text-[11px] app-muted">Total Providers</div>
             </div>
           </Card>
         </div>
@@ -1666,9 +1666,9 @@ export function IntegrationsPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* TABEL 1: SSO STANDAR PERUSAHAAN BESAR */}
+            {/* TABLE 1: ENTERPRISE SSO PROVIDERS */}
             <SsoProviderTable
-              title="Tabel 1: SSO Standar Perusahaan Besar"
+              title="Table 1: Enterprise SSO Providers"
               subtitle="Google Workspace, Microsoft Azure AD / Entra ID, Apple ID, SAML 2.0 Enterprise & GitHub"
               badgeText="Enterprise Standards"
               providers={enterpriseProviders}
@@ -1680,10 +1680,10 @@ export function IntegrationsPage() {
               onReset={handleResetProvider}
             />
 
-            {/* TABEL 2: SSO OPEN SOURCE & SELF-HOSTED */}
+            {/* TABLE 2: OPEN SOURCE & SELF-HOSTED SSO */}
             <SsoProviderTable
-              title="Tabel 2: SSO Open Source & Self-Hosted"
-              subtitle="Kredensia SSO (Sekolah), Keycloak, Authentik, Authelia, Casdoor, OpenLDAP & Generic OIDC"
+              title="Table 2: Open Source & Self-Hosted Providers"
+              subtitle="Kredensia SSO, Keycloak, Authentik, Authelia, Casdoor, OpenLDAP & Generic OIDC"
               badgeText="Open Source & Self-Hosted"
               providers={openSourceProviders}
               onConfigure={(p) => {
@@ -1704,9 +1704,9 @@ export function IntegrationsPage() {
       <section className="space-y-4 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
         <div className="flex flex-col gap-1">
           <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-            Kunci API REST SIAKAD
+            SIAKAD REST API Keys
           </h2>
-          <p className="text-xs app-muted">Kelola kunci API untuk integrasi data oleh aplikasi pihak ketiga.</p>
+          <p className="text-xs app-muted">Manage API keys for data integration by third-party applications.</p>
         </div>
 
         {/* Search & Actions Bar */}
@@ -1715,7 +1715,7 @@ export function IntegrationsPage() {
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px]" style={{ color: "var(--muted)" }}>search</span>
             <input
               type="text"
-              placeholder="Cari kunci API..."
+              placeholder="Search API keys..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border focus:outline-none focus:ring-1 focus:ring-primary"
@@ -1724,7 +1724,7 @@ export function IntegrationsPage() {
           </div>
           <Button size="sm" variant="primary" onClick={() => setShowCreateKeyModal(true)} className="flex items-center gap-1.5 shrink-0 px-4 py-2">
             <span className="material-symbols-outlined text-[16px]">add</span>
-            Buat Kunci API
+            Create API Key
           </Button>
         </Card>
 
@@ -1734,23 +1734,23 @@ export function IntegrationsPage() {
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b" style={{ borderColor: "var(--divider)", background: "var(--hover)" }}>
-                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Nama Aplikasi</th>
-                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Domain Diizinkan</th>
+                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Application Name</th>
+                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Allowed Domain</th>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Prefix</th>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">API Key</th>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Status</th>
-                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Terakhir Digunakan</th>
-                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted text-right">Aksi</th>
+                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Last Used</th>
+                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y" style={{ borderColor: "var(--divider)" }}>
                 {apiKeysLoading ? (
                   <tr>
-                    <td colSpan={7} className="px-5 py-8 text-center text-zinc-400">Memuat data kunci API...</td>
+                    <td colSpan={7} className="px-5 py-8 text-center text-zinc-400">Loading API keys...</td>
                   </tr>
                 ) : apiKeysList.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-5 py-8 text-center text-zinc-400">Tidak ada data kunci API.</td>
+                    <td colSpan={7} className="px-5 py-8 text-center text-zinc-400">No API keys found.</td>
                   </tr>
                 ) : (
                   apiKeysList
@@ -1778,7 +1778,7 @@ export function IntegrationsPage() {
                                   setTimeout(() => setCopiedKey(null), 2000);
                                 }}
                                 className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
-                                title="Salin Kunci"
+                                title="Copy Key"
                               >
                                 <span className="material-symbols-outlined text-[14px]">
                                   {isCopied ? "check" : "content_copy"}
@@ -1792,11 +1792,11 @@ export function IntegrationsPage() {
                                 ? "bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400" 
                                 : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
                             }`}>
-                              {key.isActive ? "AKTIF" : "NONAKTIF"}
+                              {key.isActive ? "ACTIVE" : "INACTIVE"}
                             </span>
                           </td>
                           <td className="px-5 py-3.5 text-zinc-500 text-[11px]">
-                            {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString("id-ID") : "Belum pernah"}
+                            {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString("en-US") : "Never"}
                           </td>
                           <td className="px-5 py-3.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
@@ -1808,7 +1808,7 @@ export function IntegrationsPage() {
                                     ? "bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-600 dark:bg-amber-950/20 dark:border-amber-900/30"
                                     : "bg-green-50 hover:bg-green-100 border-green-200 text-green-600 dark:bg-green-950/20 dark:border-green-900/30"
                                 }`}
-                                title={key.isActive ? "Nonaktifkan" : "Aktifkan"}
+                                title={key.isActive ? "Disable" : "Enable"}
                               >
                                 <span className="material-symbols-outlined text-[15px]">{key.isActive ? "power_settings_new" : "play_circle"}</span>
                               </button>
@@ -1816,7 +1816,7 @@ export function IntegrationsPage() {
                                 type="button"
                                 onClick={() => handleDeleteApiKey(key.id)}
                                 className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 dark:bg-red-950/20 dark:border-red-900/30 flex items-center justify-center"
-                                title="Hapus"
+                                title="Delete"
                               >
                                 <span className="material-symbols-outlined text-[15px]">delete</span>
                               </button>
@@ -1838,7 +1838,7 @@ export function IntegrationsPage() {
       {syncCards.length > 0 && (
         <section className="space-y-3 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
           <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-            Sinkronisasi Pihak Ketiga (GDS &amp; Kehadiran)
+            Third-Party Data Sync (GDS & Attendance)
           </h2>
           <div className="grid md:grid-cols-2 gap-4 md:gap-5">
             {loading
@@ -1862,8 +1862,8 @@ export function IntegrationsPage() {
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--divider)" }}>
           <div>
-            <div className="font-semibold text-sm" style={{ color: "var(--fg)" }}>Log Sinkronisasi</div>
-            <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>Riwayat sinkronisasi data dari Kredensia SSO, GDS, dan Kehadiran</div>
+            <div className="font-semibold text-sm" style={{ color: "var(--fg)" }}>Sync Logs</div>
+            <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>Data sync history from Kredensia SSO, GDS, and Attendance</div>
           </div>
           {recentSync.length > 0 && (
             <button
@@ -1882,7 +1882,7 @@ export function IntegrationsPage() {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4h6v2" />
               </svg>
-              {clearingLog ? "Menghapus…" : "Bersihkan Log"}
+              {clearingLog ? "Clearing…" : "Clear Logs"}
             </button>
           )}
         </div>
@@ -1892,7 +1892,7 @@ export function IntegrationsPage() {
               <Skeleton className="h-12 w-full" />
             </div>
           ) : recentSync.length === 0 ? (
-            <div className="p-6 text-sm app-muted text-center">Belum ada log sinkronisasi.</div>
+            <div className="p-6 text-sm app-muted text-center">No sync logs yet.</div>
           ) : (
             recentSync.map((s) => (
               <div
@@ -1905,11 +1905,11 @@ export function IntegrationsPage() {
                       {s.source}
                     </span>
                     <span className="font-medium text-xs" style={{ color: "var(--fg)" }}>
-                      {s.payloadSummary?.message || "Sinkronisasi selesai"}
+                      {s.payloadSummary?.message || "Sync completed"}
                     </span>
                   </div>
                   <span className="text-[11px] app-muted">
-                    {new Date(s.createdAt).toLocaleString("id-ID")}
+                    {new Date(s.createdAt).toLocaleString("en-US")}
                   </span>
                 </div>
               </div>
@@ -1959,7 +1959,7 @@ export function IntegrationsPage() {
             <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">vpn_key</span>
-                <h3 className="font-display font-bold text-base">Buat Kunci API Baru</h3>
+                <h3 className="font-display font-bold text-base">Create New API Key</h3>
               </div>
               <button
                 type="button"
@@ -1971,12 +1971,12 @@ export function IntegrationsPage() {
             </div>
 
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Nama Aplikasi / Klien</label>
+              <label className="text-xs font-semibold">Application / Client Name</label>
               <input
                 type="text"
                 value={newAppName}
                 onChange={(e) => setNewAppName(e.target.value)}
-                placeholder="Contoh: Aplikasi Presensi PASTi"
+                placeholder="e.g. PASTi Attendance App"
                 required
                 className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
@@ -1984,40 +1984,40 @@ export function IntegrationsPage() {
             </div>
 
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Prefix Custom Token (Maks. 5 Karakter)</label>
+              <label className="text-xs font-semibold">Custom Token Prefix (Max. 5 Characters)</label>
               <input
                 type="text"
                 value={newPrefix}
                 onChange={(e) => setNewPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5))}
-                placeholder="Contoh: data atau pasti"
+                placeholder="e.g. data or pasti"
                 maxLength={5}
                 required
                 className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
               />
-              <p className="text-[10px] app-muted">Hanya huruf kecil dan angka. Prefiks token Anda (Contoh: <code>data_...</code>)</p>
+              <p className="text-[10px] app-muted">Lowercase letters and numbers only. Your token prefix (e.g. <code>data_...</code>)</p>
             </div>
 
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Domain / IP Yang Diizinkan</label>
+              <label className="text-xs font-semibold">Allowed Domain / IP</label>
               <input
                 type="text"
                 value={newDomain}
                 onChange={(e) => setNewDomain(e.target.value)}
-                placeholder="* atau localhost atau domain.com"
+                placeholder="* or localhost or domain.com"
                 required
                 className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
               />
-              <p className="text-[10px] app-muted">Gunakan <code>*</code> untuk memperbolehkan semua domain host.</p>
+              <p className="text-[10px] app-muted">Use <code>*</code> to allow all host domains.</p>
             </div>
 
             <div className="pt-2 flex justify-end gap-2 border-t mt-2" style={{ borderColor: "var(--divider)" }}>
               <Button type="button" size="sm" variant="secondary" onClick={() => setShowCreateKeyModal(false)}>
-                Batal
+                Cancel
               </Button>
               <Button type="submit" size="sm" variant="primary" disabled={createSubmitting}>
-                {createSubmitting ? "Membuat..." : "Simpan Kunci"}
+                {createSubmitting ? "Creating..." : "Save Key"}
               </Button>
             </div>
           </form>
