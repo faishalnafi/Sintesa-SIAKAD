@@ -186,22 +186,29 @@ import {
 function getOriginFromRequest(c: any): string {
   const host = c.req.header("Host") || "";
   const forwarded = c.req.header("X-Forwarded-Proto") || "";
+  const forwardedHost = c.req.header("X-Forwarded-Host") || "";
 
-  // Update the module-level cache for other code paths
-  updateDetectedAppDomain(c.req.header("Origin") || null);
-  updateDetectedAppDomain(c.req.header("Referer") || null);
+  // Only update domain cache from Origin header (never Referer, which may be Google/external)
+  const reqOrigin = c.req.header("Origin");
+  if (reqOrigin) {
+    updateDetectedAppDomain(reqOrigin);
+  }
 
-  if (host && !host.includes("localhost") && !host.includes("127.0.0.1")) {
+  const effectiveHost = forwardedHost || host;
+  if (effectiveHost) {
+    const isLocal = effectiveHost.includes("localhost") || effectiveHost.includes("127.0.0.1");
+    if (isLocal) {
+      return (env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
+    }
     const proto = forwarded ||
       (c.req.header("X-Forwarded-Ssl") === "on" ? "https" : null) ||
-      (host.includes("localhost") ? "http" : "https");
-    const origin = `${proto}://${host}`;
+      "https";
+    const origin = `${proto}://${effectiveHost}`.replace(/\/$/, "");
     updateDetectedAppDomain(origin);
     return origin;
   }
 
-  // Fallback: module-level cache or FRONTEND_URL
-  return getSsoRequestOrigin();
+  return (env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
 }
 
 

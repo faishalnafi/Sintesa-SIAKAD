@@ -49,11 +49,15 @@ export function buildSsoAuthorizeUrl(state?: string, dynamicOrigin?: string): st
     );
   }
   const origin = dynamicOrigin || getSsoRequestOrigin();
+  const envUri = (process.env.SSO_REDIRECT_URI || env.SSO_REDIRECT_URI || "").trim();
 
   let redirectUri = `${origin}/auth/callback`;
-  const envUri = (process.env.SSO_REDIRECT_URI || "").trim();
-  if (envUri && !envUri.includes("localhost") && !envUri.includes("127.0.0.1")) {
-    redirectUri = envUri;
+  if (envUri) {
+    if (origin.includes("localhost") || origin.includes("127.0.0.1")) {
+      redirectUri = envUri;
+    } else if (!envUri.includes("localhost") && !envUri.includes("127.0.0.1")) {
+      redirectUri = envUri;
+    }
   }
 
   const url = new URL(`${env.SSO_BASE_URL}/otentikasi`);

@@ -4,6 +4,14 @@ import { env } from "./env.js";
 import { syncGds } from "./services/integrations/gds.js";
 import { syncKehadiran } from "./services/integrations/kehadiran.js";
 
+process.on("uncaughtException", (err) => {
+  console.error("[Process Error] Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[Process Error] Unhandled Rejection:", reason);
+});
+
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`SINTESA API listening on http://localhost:${info.port}`);
 

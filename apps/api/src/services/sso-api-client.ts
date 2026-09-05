@@ -74,6 +74,12 @@ export function updateDetectedAppDomain(originOrHost?: string | null) {
       return;
     }
 
+    // Filter out third-party OAuth/identity domains (Google, Apple, Microsoft, GitHub, etc.)
+    const thirdPartyDomains = ["google.com", "accounts.google.com", "googleapis.com", "apple.com", "microsoft.com", "github.com", "live.com"];
+    if (thirdPartyDomains.some(t => u.hostname.toLowerCase().endsWith(t))) {
+      return;
+    }
+
     if (u.hostname) {
       activeAppDomain = `${u.protocol}//${u.host}`;
     }
@@ -86,7 +92,11 @@ export function getSsoRequestOrigin(): string {
     let domain = fe.replace(/\/$/, "");
     if (domain.includes("localhost") || domain.includes("127.0.0.1")) {
       if (activeAppDomain && !activeAppDomain.includes("localhost") && !activeAppDomain.includes("127.0.0.1")) {
-        return activeAppDomain;
+        const thirdPartyDomains = ["google.com", "accounts.google.com", "googleapis.com", "apple.com", "microsoft.com", "github.com", "live.com"];
+        const isThirdParty = thirdPartyDomains.some(t => activeAppDomain.toLowerCase().includes(t));
+        if (!isThirdParty) {
+          return activeAppDomain;
+        }
       }
       return domain.replace(/^https:\/\//i, "http://");
     }
