@@ -1627,10 +1627,16 @@ adminRoutes.get("/integrations/sso-providers", async (c) => {
     
     // Live env overrides for live active services
     if (def.id === "google") {
+      merged.name = "Google Workspace";
+      merged.shortName = "Google";
+      merged.description = "OAuth 2.0 / OIDC authentication for students, teachers, and staff";
       merged.clientId = getGoogleClientId() || merged.clientId || null;
       merged.isActive = s.isActive ?? isGoogleConfigured();
     }
     if (def.id === "kredensia") {
+      merged.name = "Kredensia";
+      merged.shortName = "Kredensia";
+      merged.description = "Centralized Authentication & Identity Portal with Class & Academic Year sync";
       merged.baseUrl = env.SSO_BASE_URL || merged.baseUrl || null;
       merged.clientId = env.SSO_CLIENT_ID || merged.clientId || null;
       merged.apiBaseUrl = env.SSO_API_BASE_URL || merged.apiBaseUrl || null;

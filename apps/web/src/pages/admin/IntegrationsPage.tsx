@@ -939,7 +939,6 @@ function SsoProviderTable({
   onConfigure,
   onToggle,
   onReset,
-  onSyncKredensia,
 }: {
   title: string;
   subtitle: string;
@@ -948,7 +947,6 @@ function SsoProviderTable({
   onConfigure: (p: SsoProviderItem) => void;
   onToggle: (id: string) => void;
   onReset: (id: string) => void;
-  onSyncKredensia?: () => void;
 }) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -1006,6 +1004,9 @@ function SsoProviderTable({
                     : p.clientId
                   : null;
 
+                const displayName = p.id === "kredensia" ? "Kredensia" : p.name;
+                const displayDesc = p.id === "kredensia" ? "Centralized Authentication & Identity Portal" : p.description;
+
                 return (
                   <tr key={p.id} className="hover:bg-zinc-50/60 dark:hover:bg-zinc-800/20 transition-colors">
                     {/* Platform */}
@@ -1015,8 +1016,8 @@ function SsoProviderTable({
                           <ProviderLogo icon={p.icon} className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
-                          <div className="font-bold text-xs" style={{ color: "var(--fg)" }}>{p.name}</div>
-                          <div className="text-[11px] app-muted truncate max-w-[220px]">{p.description}</div>
+                          <div className="font-bold text-xs" style={{ color: "var(--fg)" }}>{displayName}</div>
+                          <div className="text-[11px] app-muted truncate max-w-[220px]">{displayDesc}</div>
                         </div>
                       </div>
                     </td>
@@ -1091,19 +1092,6 @@ function SsoProviderTable({
                     {/* Actions */}
                     <td className="px-5 py-3.5 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
-                        {/* Sync button specifically for Kredensia */}
-                        {p.id === "kredensia" && onSyncKredensia && (
-                          <button
-                            type="button"
-                            onClick={onSyncKredensia}
-                            disabled={!p.isConfigured}
-                            className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/30 flex items-center justify-center transition-colors disabled:opacity-40"
-                            title="Sync Members & Classes"
-                          >
-                            <span className="material-symbols-outlined text-[15px]">sync</span>
-                          </button>
-                        )}
-
                         {/* Config Button */}
                         <button
                           type="button"
@@ -1155,26 +1143,252 @@ function SsoProviderTable({
   );
 }
 
-// ─── Third Party Sync Card (GDS & Kehadiran) ──────────────────────────────────
-function IntegrationCard({
-  item,
-  onSync,
+// ─── Dedicated Data Synchronization Table (Tarik Data) ─────────────────────────
+function DataSyncTable({
+  kredensiaItem,
+  gdsItem,
+  kehadiranItem,
+  recentSync,
   busy,
-  onReload,
+  onSyncKredensia,
+  onSyncThirdParty,
+  onConfigureKredensia,
+  onConfigureThirdParty,
 }: {
-  item: CatalogItem;
-  onSync: (code: "gds" | "kehadiran") => void;
-  busy: boolean;
-  onReload: () => void;
+  kredensiaItem?: SsoProviderItem | null;
+  gdsItem?: CatalogItem | null;
+  kehadiranItem?: CatalogItem | null;
+  recentSync: SyncLog[];
+  busy: string | null;
+  onSyncKredensia: () => void;
+  onSyncThirdParty: (code: "gds" | "kehadiran") => void;
+  onConfigureKredensia: () => void;
+  onConfigureThirdParty: (item: CatalogItem) => void;
 }) {
+  const getLastSync = (keyword: string) => {
+    const log = recentSync.find((s) => s.source?.toLowerCase().includes(keyword.toLowerCase()));
+    return log ? new Date(log.createdAt).toLocaleString("en-US") : "Never";
+  };
+
+  const sources = [
+    {
+      id: "kredensia",
+      name: "Kredensia",
+      shortName: "Kredensia",
+      description: "Centralized Authentication & Identity Portal",
+      icon: "lock_person",
+      type: "Master Identity & Academic",
+      entities: ["Students", "Teachers", "Classes", "Academic Years"],
+      endpoint: kredensiaItem?.apiBaseUrl || kredensiaItem?.baseUrl || "http://localhost:8000/api/v1",
+      lastSync: getLastSync("kredensia") !== "Never" ? getLastSync("kredensia") : getLastSync("sso"),
+      isConfigured: Boolean(kredensiaItem?.isConfigured),
+      isActive: Boolean(kredensiaItem?.isActive),
+      onSync: onSyncKredensia,
+      onConfigure: onConfigureKredensia,
+      isBusy: false,
+    },
+    {
+      id: "gds",
+      name: "Gerbang Disiplin Siswa (GDS)",
+      shortName: "GDS",
+      description: "Student discipline violations & merit points from PASTi GDS",
+      icon: "assignment_turned_in",
+      type: "Student Discipline & Violations",
+      entities: ["Discipline Points", "Violation Records"],
+      endpoint: gdsItem?.runtime?.baseUrl || "http://localhost:8001",
+      lastSync: getLastSync("gds"),
+      isConfigured: Boolean(gdsItem?.runtime?.configured || gdsItem?.status === "ready"),
+      isActive: true,
+      onSync: () => onSyncThirdParty("gds"),
+      onConfigure: () => gdsItem && onConfigureThirdParty(gdsItem),
+      isBusy: busy === "gds",
+    },
+    {
+      id: "kehadiran",
+      name: "Kehadiran Siswa (Presensi)",
+      shortName: "Kehadiran",
+      description: "Daily attendance logs (Present, Sick, Permitted, Absent) from PASTi Kehadiran",
+      icon: "fact_check",
+      type: "Student Daily Attendance",
+      entities: ["Present", "Sick", "Permission", "Absent"],
+      endpoint: kehadiranItem?.runtime?.baseUrl || "http://localhost:8001",
+      lastSync: getLastSync("kehadiran"),
+      isConfigured: Boolean(kehadiranItem?.runtime?.configured || kehadiranItem?.status === "ready"),
+      isActive: true,
+      onSync: () => onSyncThirdParty("kehadiran"),
+      onConfigure: () => kehadiranItem && onConfigureThirdParty(kehadiranItem),
+      isBusy: busy === "kehadiran",
+    },
+  ];
+
+  return (
+    <Card className="overflow-hidden border" style={{ borderColor: "var(--divider)" }}>
+      {/* Table Section Header */}
+      <div className="px-5 py-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3" style={{ borderColor: "var(--divider)", background: "var(--hover)" }}>
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="font-display font-bold text-sm sm:text-base" style={{ color: "var(--fg)" }}>
+              Data Synchronization
+            </h3>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              Inbound Data Ingestion
+            </span>
+          </div>
+          <p className="text-xs app-muted mt-0.5">
+            Pull and synchronize academic master data, student discipline records, and daily attendance into SIAKAD.
+          </p>
+        </div>
+        <div className="text-xs font-semibold app-muted">
+          {sources.filter((s) => s.isConfigured).length} of {sources.length} Configured
+        </div>
+      </div>
+
+      {/* Table Content */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr className="border-b" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Service / Data Source</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Synchronized Entities</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Endpoint / Source</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Last Synchronized</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Status</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y" style={{ borderColor: "var(--divider)" }}>
+            {sources.map((src) => (
+              <tr key={src.id} className="hover:bg-zinc-50/60 dark:hover:bg-zinc-800/20 transition-colors">
+                {/* Source Name & Icon */}
+                <td className="px-5 py-3.5">
+                  <div className="flex items-center gap-3 min-w-[200px]">
+                    <div className="w-8 h-8 rounded-xl p-1 flex items-center justify-center shrink-0 border border-black/5 dark:border-white/10" style={{ background: "var(--hover)" }}>
+                      <span className="material-symbols-outlined text-[18px] text-[var(--accent)]">{src.icon}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-xs" style={{ color: "var(--fg)" }}>{src.name}</div>
+                      <div className="text-[11px] app-muted truncate max-w-[220px]">{src.description}</div>
+                    </div>
+                  </div>
+                </td>
+
+                {/* Synchronized Entities */}
+                <td className="px-5 py-3.5">
+                  <div className="flex flex-wrap gap-1 max-w-[220px]">
+                    {src.entities.map((e) => (
+                      <span
+                        key={e}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-900/30"
+                      >
+                        {e}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+
+                {/* Endpoint */}
+                <td className="px-5 py-3.5">
+                  <span className="font-mono text-[11px] app-muted truncate max-w-[180px] block" title={src.endpoint}>
+                    {src.endpoint}
+                  </span>
+                </td>
+
+                {/* Last Sync */}
+                <td className="px-5 py-3.5 whitespace-nowrap text-zinc-500 text-[11px]">
+                  {src.lastSync}
+                </td>
+
+                {/* Status */}
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      src.isConfigured
+                        ? "bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400"
+                        : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${src.isConfigured ? "bg-green-500" : "bg-zinc-400"}`} />
+                    {src.isConfigured ? "CONNECTED" : "NOT CONFIGURED"}
+                  </span>
+                </td>
+
+                {/* Actions */}
+                <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                  <div className="flex items-center justify-end gap-1.5">
+                    {/* Tarik Data / Sync Button */}
+                    <button
+                      type="button"
+                      onClick={src.onSync}
+                      disabled={src.isBusy || !src.isConfigured}
+                      className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] transition-colors flex items-center gap-1 shadow-sm disabled:opacity-40"
+                      title={`Tarik data dari ${src.shortName}`}
+                    >
+                      <span className={`material-symbols-outlined text-[15px] ${src.isBusy ? "animate-spin" : ""}`}>sync</span>
+                      <span>{src.isBusy ? "Syncing..." : "Sync Now"}</span>
+                    </button>
+
+                    {/* Configure Button */}
+                    <button
+                      type="button"
+                      onClick={src.onConfigure}
+                      className="px-2.5 py-1.5 rounded-lg border font-semibold text-[11px] bg-[var(--surface)] hover:bg-[var(--hover)] transition-colors flex items-center gap-1"
+                      style={{ borderColor: "var(--input-border)", color: "var(--fg)" }}
+                      title={`Configure ${src.shortName}`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">settings</span>
+                      <span>Configure</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Modal Configure for Third-Party Sync Sources (GDS / Kehadiran) ────────────
+function SyncSourceConfigModal({
+  isOpen,
+  onClose,
+  item,
+  onSaved,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  item: CatalogItem | null;
+  onSaved: () => void;
+}) {
+  const [baseUrlInput, setBaseUrlInput] = useState(item?.runtime?.baseUrl || "");
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [saving, setSaving] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
-  const [baseUrlInput, setBaseUrlInput] = useState(item.runtime?.baseUrl || "");
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (item) {
+      setBaseUrlInput(item.runtime?.baseUrl || "");
+      setApiKeyInput("");
+    }
+  }, [item]);
 
-  const handleSaveConfig = async (e: React.FormEvent) => {
+  if (!isOpen || !item) return null;
+
+  const isGds = item.code === "gds";
+  const webhookEndpoint = isGds ? "/api/v1/webhooks/gds" : "/api/v1/webhooks/kehadiran";
+  const sampleJson = isGds
+    ? `{\n  "points": [\n    { "nisn": "0051234567", "poin": 95, "catatan": "Terlambat 3x, perlu perhatian" },\n    { "nisn": "0107782261", "poin": 80 }\n  ]\n}`
+    : `{\n  "rekap": [\n    { "nisn": "0051234567", "sakit": 1, "izin": 0, "alpa": 0, "catatan": "Izin sakit demam" },\n    { "nisn": "0107782261", "sakit": 0, "izin": 2, "alpa": 1 }\n  ]\n}`;
+
+  const copyText = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!baseUrlInput.trim()) return alert("API Base URL is required.");
     setSaving(true);
@@ -1188,8 +1402,8 @@ function IntegrationCard({
       });
       if (res.success) {
         alert(`${item.shortName} configuration saved successfully!`);
-        setApiKeyInput("");
-        onReload();
+        onSaved();
+        onClose();
       } else {
         alert(res.message || "Failed to save configuration.");
       }
@@ -1200,167 +1414,88 @@ function IntegrationCard({
     }
   };
 
-  const st = item.runtime?.status ?? item.status;
-  const isGds = item.code === "gds";
-  const webhookEndpoint = isGds ? "/api/v1/webhooks/gds" : "/api/v1/webhooks/kehadiran";
-  const sampleJson = isGds
-    ? `{\n  "points": [\n    { "nisn": "0051234567", "poin": 95, "catatan": "Terlambat 3x, perlu perhatian" },\n    { "nisn": "0107782261", "poin": 80 }\n  ]\n}`
-    : `{\n  "rekap": [\n    { "nisn": "0051234567", "sakit": 1, "izin": 0, "alpa": 0, "catatan": "Ijin sakit demam" },\n    { "nisn": "0107782261", "sakit": 0, "izin": 2, "alpa": 1 }\n  ]\n}`;
-
-  const copyText = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(label);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
-  const badgeStatus = (s?: string) => {
-    if (s === "live" || s === "ready" || s === "success") return "success";
-    if (s === "coming_soon") return "pending";
-    if (s === "error" || s === "misconfigured") return "incomplete";
-    return "draft";
-  };
-
   return (
-    <Card className="p-5 flex flex-col gap-4 hover:shadow-[var(--shadow-lg)] transition-shadow duration-300">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <span
-            className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
-            style={{ background: "var(--accent-soft)" }}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
+      <div className="relative w-full max-w-lg rounded-2xl border bg-[var(--surface)] p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" style={{ borderColor: "var(--divider)" }}>
+        <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">{item.icon}</span>
+            <h3 className="font-display font-bold text-base">{item.shortName} Connection Settings</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
           >
-            <span className="material-symbols-outlined text-[var(--accent)]">{item.icon}</span>
-          </span>
-          <div className="min-w-0">
-            <div className="font-display font-bold text-sm leading-snug">{item.shortName}</div>
-            <div className="text-[11px] app-muted truncate">{item.name}</div>
-          </div>
-        </div>
-        <Badge status={badgeStatus(st)}>
-          {st === "coming_soon" ? "Coming soon" : st}
-        </Badge>
-      </div>
-
-      <p className="text-sm app-muted leading-relaxed">{item.description}</p>
-
-      {/* API Connection Configuration */}
-      <div className="flex flex-col gap-3 p-4 rounded-xl border bg-surface-container/10 dark:bg-white/5" style={{ borderColor: "var(--input-border)" }}>
-        <div className="text-xs font-semibold text-[var(--accent)] flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[16px]">settings</span>
-          <span>{item.shortName} Connection Settings</span>
-        </div>
-        <Field
-          id={`${item.code}-base-url`}
-          label="Application API Base URL"
-          value={baseUrlInput}
-          onChange={setBaseUrlInput}
-          placeholder="http://localhost:8001"
-          hint={`Base URL of the PASTi application (e.g. http://localhost:8001)`}
-        />
-        <Field
-          id={`${item.code}-api-key`}
-          label="API Key (X-API-Key)"
-          type="password"
-          value={apiKeyInput}
-          onChange={setApiKeyInput}
-          placeholder={item.runtime?.configured ? "•••••• (saved — leave blank to keep unchanged)" : "Enter API Key"}
-          hint="Third-party API Key / Token generated from the PASTi Developer API Keys menu."
-        />
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={handleSaveConfig}
-          disabled={saving}
-          className="w-full mt-1"
-        >
-          <span className="material-symbols-outlined text-[16px] mr-1">save</span>
-          Save {item.shortName} Settings
-        </Button>
-      </div>
-
-      {/* API Endpoints Info Section for Third-Party Developers */}
-      <div className="p-3 rounded-xl border flex flex-col gap-2 bg-surface-container/30 dark:bg-white/5" style={{ borderColor: "var(--input-border)" }}>
-        <div className="text-xs font-semibold text-[var(--accent)] flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[16px]">api</span>
-          <span>Third-Party API Endpoints (Developer)</span>
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
         </div>
 
-        <div className="space-y-1.5 text-xs font-mono">
-          <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-[var(--surface)] border" style={{ borderColor: "var(--input-border)" }}>
-            <span className="truncate"><strong>GET Student Master:</strong> /api/v1/students</span>
+        <p className="text-xs app-muted">{item.description}</p>
+
+        <form onSubmit={handleSave} className="space-y-4">
+          <Field
+            id={`${item.code}-modal-base-url`}
+            label="Application API Base URL"
+            value={baseUrlInput}
+            onChange={setBaseUrlInput}
+            placeholder="http://localhost:8001"
+            hint={`Base URL of the ${item.shortName} service (e.g. http://localhost:8001)`}
+          />
+          <Field
+            id={`${item.code}-modal-api-key`}
+            label="API Key (X-API-Key)"
+            type="password"
+            value={apiKeyInput}
+            onChange={setApiKeyInput}
+            placeholder={item.runtime?.configured ? "•••••• (saved — leave blank to keep unchanged)" : "Enter API Key"}
+            hint="API Key / Token generated from the external service."
+          />
+
+          {/* Webhook Developer Section */}
+          <div className="p-3 rounded-xl border flex flex-col gap-2 bg-surface-container/30 dark:bg-white/5 text-xs font-mono" style={{ borderColor: "var(--input-border)" }}>
+            <div className="font-sans font-semibold text-[var(--accent)] flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[16px]">api</span>
+              <span>Webhook Endpoints</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-[var(--surface)] border" style={{ borderColor: "var(--input-border)" }}>
+              <span className="truncate"><strong>Push Webhook:</strong> {webhookEndpoint}</span>
+              <button
+                type="button"
+                onClick={() => copyText(`${window.location.origin}${webhookEndpoint}`, "post")}
+                className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 shrink-0 font-sans font-medium"
+              >
+                {copied === "post" ? "Copied!" : "Copy URL"}
+              </button>
+            </div>
             <button
               type="button"
-              onClick={() => copyText(`${window.location.origin}/api/v1/students`, "get")}
-              className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 shrink-0 font-sans font-medium"
+              onClick={() => setShowDocs(!showDocs)}
+              className="text-[11px] text-primary hover:underline flex items-center gap-1 mt-1 font-sans font-medium"
             >
-              {copied === "get" ? "Copied!" : "Copy URL"}
+              <span className="material-symbols-outlined text-[14px]">
+                {showDocs ? "expand_less" : "code"}
+              </span>
+              <span>{showDocs ? "Hide JSON Format" : "View Webhook JSON Format"}</span>
             </button>
+            {showDocs && (
+              <pre className="text-[10px] font-mono p-2.5 rounded-lg bg-slate-900 text-emerald-400 overflow-x-auto">
+                {sampleJson}
+              </pre>
+            )}
           </div>
 
-          <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-[var(--surface)] border" style={{ borderColor: "var(--input-border)" }}>
-            <span className="truncate"><strong>POST Push Webhook:</strong> {webhookEndpoint}</span>
-            <button
-              type="button"
-              onClick={() => copyText(`${window.location.origin}${webhookEndpoint}`, "post")}
-              className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 shrink-0 font-sans font-medium"
-            >
-              {copied === "post" ? "Copied!" : "Copy URL"}
-            </button>
+          <div className="pt-3 flex justify-end gap-2 border-t" style={{ borderColor: "var(--divider)" }}>
+            <Button type="button" size="sm" variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" variant="primary" disabled={saving}>
+              {saving ? "Saving..." : "Save Settings"}
+            </Button>
           </div>
-        </div>
-
-        {/* Collapsible JSON Format */}
-        <button
-          type="button"
-          onClick={() => setShowDocs(!showDocs)}
-          className="text-[11px] text-primary hover:underline flex items-center gap-1 mt-1 font-medium"
-        >
-          <span className="material-symbols-outlined text-[14px]">
-            {showDocs ? "expand_less" : "code"}
-          </span>
-          <span>{showDocs ? "Hide JSON Payload Example" : "View Webhook JSON Format Example"}</span>
-        </button>
-
-        {showDocs && (
-          <div className="mt-1 relative">
-            <pre className="text-[10px] font-mono p-2.5 rounded-lg bg-slate-900 text-emerald-400 overflow-x-auto">
-              {sampleJson}
-            </pre>
-            <button
-              type="button"
-              onClick={() => copyText(sampleJson, "json")}
-              className="absolute top-1.5 right-1.5 text-[9px] px-2 py-0.5 rounded bg-white/20 text-white hover:bg-white/30 font-sans font-medium"
-            >
-              {copied === "json" ? "Copied!" : "Copy JSON"}
-            </button>
-          </div>
-        )}
+        </form>
       </div>
-
-      <div>
-        <p className="app-label mb-1.5">SIAKAD Fields</p>
-        <div className="flex flex-wrap gap-1.5">
-          {item.ownsFields.map((f) => (
-            <code
-              key={f}
-              className="text-[10px] px-2 py-1 rounded-lg"
-              style={{ background: "var(--hover)", color: "var(--muted)" }}
-            >
-              {f}
-            </code>
-          ))}
-        </div>
-      </div>
-
-      <Button
-        size="sm"
-        className="w-full"
-        variant={st === "coming_soon" ? "secondary" : "primary"}
-        disabled={busy}
-        onClick={() => onSync(item.code as "gds" | "kehadiran")}
-      >
-        {busy ? "Processing..." : st === "coming_soon" ? "Test sync (coming soon)" : `Manual Sync ${item.shortName}`}
-      </Button>
-    </Card>
+    </div>
   );
 }
 
@@ -1379,6 +1514,8 @@ export function IntegrationsPage() {
   const [editingProvider, setEditingProvider] = useState<SsoProviderItem | null>(null);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingSyncSource, setEditingSyncSource] = useState<CatalogItem | null>(null);
+  const [showSyncSourceModal, setShowSyncSourceModal] = useState(false);
 
   // Unified Kredensia sync modal state
   const [syncModalOpen, setSyncModalOpen] = useState(false);
@@ -1635,8 +1772,6 @@ export function IntegrationsPage() {
     }
   };
 
-  const syncCards = catalog.filter((i) => i.code === "gds" || i.code === "kehadiran");
-
   return (
     <div className="space-y-8">
       <PageHeader
@@ -1770,10 +1905,33 @@ export function IntegrationsPage() {
               }}
               onToggle={handleToggleProvider}
               onReset={handleResetProvider}
-              onSyncKredensia={handleSyncKredensia}
             />
           </div>
         )}
+      </section>
+
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── SECTION 2: DATA SYNCHRONIZATION (TARIK DATA) ────────────────────── */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      <section className="space-y-4 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
+        <DataSyncTable
+          kredensiaItem={openSourceProviders.find((p) => p.id === "kredensia") || INITIAL_OPENSOURCE_PROVIDERS[0]}
+          gdsItem={catalog.find((c) => c.code === "gds") || null}
+          kehadiranItem={catalog.find((c) => c.code === "kehadiran") || null}
+          recentSync={recentSync}
+          busy={busy}
+          onSyncKredensia={handleSyncKredensia}
+          onSyncThirdParty={sync}
+          onConfigureKredensia={() => {
+            const k = openSourceProviders.find((p) => p.id === "kredensia") || INITIAL_OPENSOURCE_PROVIDERS[0];
+            setEditingProvider(k);
+            setShowConfigModal(true);
+          }}
+          onConfigureThirdParty={(item) => {
+            setEditingSyncSource(item);
+            setShowSyncSourceModal(true);
+          }}
+        />
       </section>
 
       {/* ─────────────────────────────────────────────────────────────────────── */}
@@ -1911,30 +2069,6 @@ export function IntegrationsPage() {
       </section>
 
       {/* ─────────────────────────────────────────────────────────────────────── */}
-      {/* ─── SECTION: SINKRONISASI DATA GDS & KEHADIRAN ──────────────────────── */}
-      {/* ─────────────────────────────────────────────────────────────────────── */}
-      {syncCards.length > 0 && (
-        <section className="space-y-3 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
-          <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-            Third-Party Data Sync (GDS & Attendance)
-          </h2>
-          <div className="grid md:grid-cols-2 gap-4 md:gap-5">
-            {loading
-              ? [0, 1].map((i) => <Skeleton key={i} className="h-56 rounded-2xl" />)
-              : syncCards.map((item) => (
-                  <IntegrationCard
-                    key={item.code}
-                    item={item}
-                    busy={busy === item.code}
-                    onSync={sync}
-                    onReload={() => load(true)}
-                  />
-                ))}
-          </div>
-        </section>
-      )}
-
-      {/* ─────────────────────────────────────────────────────────────────────── */}
       {/* ─── SECTION: LOG SINKRONISASI ───────────────────────────────────────── */}
       {/* ─────────────────────────────────────────────────────────────────────── */}
       <Card className="overflow-hidden">
@@ -2026,7 +2160,18 @@ export function IntegrationsPage() {
         onClose={() => setSyncModalOpen(false)}
       />
 
-      {/* 4. Modal Create API Key */}
+      {/* 4. Modal Configure Third-Party Sync Source (GDS / Kehadiran) */}
+      <SyncSourceConfigModal
+        isOpen={showSyncSourceModal}
+        onClose={() => {
+          setShowSyncSourceModal(false);
+          setEditingSyncSource(null);
+        }}
+        item={editingSyncSource}
+        onSaved={() => load(true)}
+      />
+
+      {/* 5. Modal Create API Key */}
       {showCreateKeyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
           <form
