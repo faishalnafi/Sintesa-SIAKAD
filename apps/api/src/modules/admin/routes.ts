@@ -1487,9 +1487,9 @@ adminRoutes.get("/integrations/sso-providers", async (c) => {
     {
       id: "google",
       category: "enterprise",
-      name: "Google Workspace (OAuth 2.0)",
+      name: "Google Workspace",
       shortName: "Google",
-      description: "Otentikasi Akun Google Siswa, Guru, & Staf (@sekolah.sch.id atau publik)",
+      description: "OAuth 2.0 / OIDC authentication for students, teachers, and staff",
       protocol: "OAuth 2.0 / OIDC",
       icon: "google",
       clientId: getGoogleClientId() || null,
@@ -1542,9 +1542,9 @@ adminRoutes.get("/integrations/sso-providers", async (c) => {
     {
       id: "kredensia",
       category: "opensource",
-      name: "Kredensia SSO (SINTESA SSO Sekolah)",
+      name: "Kredensia",
       shortName: "Kredensia",
-      description: "Portal SSO Sekolah & Manajemen Identitas Terpusat dengan Sinkronisasi Rombel/Tahun Pelajaran",
+      description: "Centralized Authentication & Identity Portal with Class & Academic Year sync",
       protocol: "OAuth 2.0 + REST API",
       icon: "lock_person",
       baseUrl: env.SSO_BASE_URL || null,
@@ -1654,16 +1654,18 @@ adminRoutes.get("/integrations/sso-providers", async (c) => {
     };
   };
 
-  const enterpriseList = enterpriseDefaults.map(mapItem);
-  const openSourceList = openSourceDefaults.map(mapItem);
+  const enterpriseList = enterpriseDefaults.map(mapItem).filter((p) => p.isConfigured);
+  const openSourceList = openSourceDefaults.map(mapItem).filter((p) => p.isConfigured);
 
-  // Append any custom added providers from stored
+  // Append any custom added providers from stored (only if configured)
   for (const [key, val] of Object.entries(stored)) {
     if (!enterpriseDefaults.some(d => d.id === key) && !openSourceDefaults.some(d => d.id === key)) {
+      const isConfigured = Boolean(val.clientId || val.baseUrl || val.bindDn);
+      if (!isConfigured) continue;
       const item = {
         ...val,
         redirectUri: getRedirectUri(val.id),
-        isConfigured: Boolean(val.clientId || val.baseUrl),
+        isConfigured: true,
         hasSecret: Boolean(val.clientSecret),
         hasApiKey: Boolean(val.apiKey),
         clientSecret: undefined,
