@@ -1,10 +1,36 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
-import { Card, CardHeader } from "@/components/ui/Card";
+import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+export type SsoProviderItem = {
+  id: string;
+  category: "enterprise" | "opensource";
+  name: string;
+  shortName: string;
+  description: string;
+  protocol: string;
+  icon: string;
+  baseUrl?: string | null;
+  clientId?: string | null;
+  apiBaseUrl?: string | null;
+  tenantId?: string | null;
+  discoveryUrl?: string | null;
+  bindDn?: string | null;
+  scopes?: string | null;
+  redirectUri: string;
+  isConfigured: boolean;
+  isActive: boolean;
+  hasSecret?: boolean;
+  hasApiKey?: boolean;
+  isCustom?: boolean;
+  lastTestedAt?: string | null;
+  lastSyncAt?: string | null;
+};
 
 type Runtime = {
   code: string;
@@ -42,21 +68,110 @@ type SyncLog = {
   payloadSummary?: SyncLogPayload | null;
 };
 
-type SsoConfig = {
-  loginConfigured: boolean;
-  apiKeyConfigured: boolean;
-  baseUrl: string | null;
-  clientId: string | null;
-  redirectUri: string | null;
-  apiBaseUrl: string | null;
-};
-
 type SsoSyncResult = {
   total: number;
   success: number;
   failed: number;
   errors: Array<{ id: string; message: string }>;
 };
+
+export type ApiKey = {
+  id: string;
+  namaAplikasi: string;
+  domainPrefix: string;
+  customPrefix: string;
+  apiKey: string;
+  isActive: boolean;
+  lastUsedAt?: string | null;
+  createdAt: string;
+};
+
+// ─── Provider Logos Component ──────────────────────────────────────────────────
+function ProviderLogo({ icon, className = "w-6 h-6" }: { icon: string; className?: string }) {
+  if (icon === "google") {
+    return (
+      <svg className={className} viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+      </svg>
+    );
+  }
+
+  if (icon === "microsoft") {
+    return (
+      <svg className={className} viewBox="0 0 24 24">
+        <path fill="#f25022" d="M1 1h10v10H1z" />
+        <path fill="#00a4ef" d="M1 13h10v10H1z" />
+        <path fill="#7fba00" d="M13 1h10v10H13z" />
+        <path fill="#ffb900" d="M13 13h10v10H13z" />
+      </svg>
+    );
+  }
+
+  if (icon === "apple") {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.38c.62-.75 1.04-1.8 0.92-2.85-.9.04-1.99.6-2.63 1.35-.57.65-1.06 1.71-.93 2.73 1 .08 2.02-.48 2.64-1.23z" />
+      </svg>
+    );
+  }
+
+  if (icon === "lock_person" || icon === "kredensia") {
+    return (
+      <div className="w-full h-full rounded-xl flex items-center justify-center bg-blue-500/15 text-blue-600 dark:text-blue-400">
+        <span className="material-symbols-outlined text-[20px]">lock_person</span>
+      </div>
+    );
+  }
+
+  if (icon === "vpn_key" || icon === "keycloak") {
+    return (
+      <div className="w-full h-full rounded-xl flex items-center justify-center bg-cyan-500/15 text-cyan-600 dark:text-cyan-400">
+        <span className="material-symbols-outlined text-[20px]">vpn_key</span>
+      </div>
+    );
+  }
+
+  if (icon === "shield" || icon === "authentik") {
+    return (
+      <div className="w-full h-full rounded-xl flex items-center justify-center bg-orange-500/15 text-orange-600 dark:text-orange-400">
+        <span className="material-symbols-outlined text-[20px]">shield</span>
+      </div>
+    );
+  }
+
+  if (icon === "verified_user" || icon === "authelia") {
+    return (
+      <div className="w-full h-full rounded-xl flex items-center justify-center bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+        <span className="material-symbols-outlined text-[20px]">verified_user</span>
+      </div>
+    );
+  }
+
+  if (icon === "door_front" || icon === "casdoor") {
+    return (
+      <div className="w-full h-full rounded-xl flex items-center justify-center bg-purple-500/15 text-purple-600 dark:text-purple-400">
+        <span className="material-symbols-outlined text-[20px]">door_front</span>
+      </div>
+    );
+  }
+
+  if (icon === "folder_shared" || icon === "ldap") {
+    return (
+      <div className="w-full h-full rounded-xl flex items-center justify-center bg-amber-500/15 text-amber-600 dark:text-amber-400">
+        <span className="material-symbols-outlined text-[20px]">folder_shared</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-full rounded-xl flex items-center justify-center bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
+      <span className="material-symbols-outlined text-[20px]">{icon || "hub"}</span>
+    </div>
+  );
+}
 
 // ─── Input Field Component ────────────────────────────────────────────────────
 function Field({
@@ -67,6 +182,7 @@ function Field({
   onChange,
   placeholder,
   hint,
+  required = false,
 }: {
   label: string;
   id: string;
@@ -75,11 +191,12 @@ function Field({
   onChange: (v: string) => void;
   placeholder?: string;
   hint?: string;
+  required?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className="app-label text-[12px] font-semibold">
-        {label}
+        {label} {required && <span className="text-red-500">*</span>}
       </label>
       <input
         id={id}
@@ -87,8 +204,9 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        required={required}
         autoComplete="off"
-        className="w-full rounded-xl px-3.5 py-2.5 text-sm border transition-colors focus:outline-none focus:ring-2"
+        className="w-full rounded-xl px-3.5 py-2.5 text-sm border transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
         style={{
           background: "var(--surface)",
           borderColor: "var(--input-border)",
@@ -100,468 +218,130 @@ function Field({
   );
 }
 
-// ─── Unified Modal for SSO Save & Sync Progress/Result ────────────────────────
-function UnifiedSsoModal({
+// ─── Modal Edit / Konfigurasi SSO Provider ───────────────────────────────────
+function SsoConfigModal({
+  provider,
   isOpen,
-  loading,
-  loadingStep,
-  saveResult,
-  testStatus,
-  syncResult,
-  syncError,
   onClose,
+  onSaved,
 }: {
+  provider: SsoProviderItem | null;
   isOpen: boolean;
-  loading: boolean;
-  loadingStep?: string;
-  saveResult?: { success: boolean; message: string } | null;
-  testStatus?: { connected: boolean; info?: string } | null;
-  syncResult?: SsoSyncResult | null;
-  syncError?: string | null;
   onClose: () => void;
+  onSaved: () => void;
 }) {
-  if (!isOpen) return null;
+  const [baseUrl, setBaseUrl] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiBaseUrl, setApiBaseUrl] = useState("");
+  const [tenantId, setTenantId] = useState("");
+  const [discoveryUrl, setDiscoveryUrl] = useState("");
+  const [bindDn, setBindDn] = useState("");
+  const [scopes, setScopes] = useState("");
+  const [copiedCallback, setCopiedCallback] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (provider) {
+      setBaseUrl(provider.baseUrl || "");
+      setClientId(provider.clientId || "");
+      setClientSecret("");
+      setApiKey("");
+      setApiBaseUrl(provider.apiBaseUrl || "");
+      setTenantId(provider.tenantId || "");
+      setDiscoveryUrl(provider.discoveryUrl || "");
+      setBindDn(provider.bindDn || "");
+      setScopes(provider.scopes || "openid email profile");
+    }
+  }, [provider]);
+
+  if (!isOpen || !provider) return null;
+
+  const copyCallbackUrl = () => {
+    navigator.clipboard.writeText(provider.redirectUri);
+    setCopiedCallback(true);
+    setTimeout(() => setCopiedCallback(false), 2000);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await api<{ success: boolean; message?: string }>(
+        `/admin/integrations/sso-providers/${provider.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            baseUrl: baseUrl.trim() || undefined,
+            clientId: clientId.trim() || undefined,
+            clientSecret: clientSecret.trim() || undefined,
+            apiKey: apiKey.trim() || undefined,
+            apiBaseUrl: apiBaseUrl.trim() || undefined,
+            tenantId: tenantId.trim() || undefined,
+            discoveryUrl: discoveryUrl.trim() || undefined,
+            bindDn: bindDn.trim() || undefined,
+            scopes: scopes.trim() || undefined,
+            category: provider.category,
+            name: provider.name,
+            shortName: provider.shortName,
+            protocol: provider.protocol,
+          }),
+        },
+      );
+
+      if (res.success) {
+        alert(res.message || "Konfigurasi SSO berhasil disimpan!");
+        onSaved();
+        onClose();
+      } else {
+        alert(res.message || "Gagal menyimpan konfigurasi.");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Terjadi kesalahan saat menyimpan.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const isKredensia = provider.id === "kredensia";
+  const isGoogle = provider.id === "google";
+  const isMicrosoft = provider.id === "microsoft";
+  const isLdap = provider.id === "ldap";
+  const isGenericOidc = provider.id === "generic_oidc";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
       <div
-        className="w-full max-w-lg rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-xl rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
         style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b pb-4" style={{ borderColor: "var(--divider)" }}>
           <div className="flex items-center gap-3">
-            <span
-              className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0"
-              style={{ background: "var(--accent-soft)" }}
-            >
-              <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">
-                hub
-              </span>
-            </span>
+            <div className="w-10 h-10 rounded-2xl p-1.5 flex items-center justify-center shrink-0 border border-black/5 dark:border-white/10" style={{ background: "var(--hover)" }}>
+              <ProviderLogo icon={provider.icon} />
+            </div>
             <div>
-              <h3 className="font-display font-bold text-base">Status Integrasi &amp; Sinkronisasi SSO</h3>
-              <p className="text-xs app-muted">Kredensia Portal Otentikasi &amp; Identitas Terpusat</p>
+              <div className="flex items-center gap-2">
+                <h3 className="font-display font-bold text-base">{provider.name}</h3>
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                  {provider.protocol}
+                </span>
+              </div>
+              <p className="text-xs app-muted">{provider.description}</p>
             </div>
           </div>
-          {!loading && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
+          >
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
         </div>
 
-        {/* Loading Spinner State */}
-        {loading ? (
-          <div className="py-10 flex flex-col items-center justify-center gap-4 text-center">
-            <div className="w-14 h-14 rounded-full border-4 border-[var(--accent-soft)] border-t-[var(--accent)] animate-spin" />
-            <div>
-              <h4 className="font-bold text-base">Sedang Memproses...</h4>
-              <p className="text-xs app-muted mt-1 max-w-xs leading-relaxed">
-                {loadingStep || "Menyimpan konfigurasi, menguji koneksi, dan menyinkronkan data dari Kredensia SSO."}
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {/* Section 1: Konfigurasi & Koneksi Portal SSO */}
-            <div className="space-y-3">
-              <p className="text-xs font-bold uppercase tracking-wider app-muted flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[16px] text-[var(--accent)]">settings</span>
-                1. Konfigurasi &amp; Koneksi Portal SSO
-              </p>
-
-              {/* Status .env */}
-              {saveResult && (
-                <div
-                  className="rounded-xl p-3.5 border flex items-start gap-3 text-xs"
-                  style={{
-                    background: saveResult.success
-                      ? "var(--accent-soft)"
-                      : "color-mix(in srgb, #ef4444 12%, transparent)",
-                    borderColor: saveResult.success
-                      ? "var(--accent-soft)"
-                      : "color-mix(in srgb, #ef4444 25%, transparent)",
-                  }}
-                >
-                  <span
-                    className="material-symbols-outlined text-[18px] shrink-0 mt-0.5"
-                    style={{ color: saveResult.success ? "var(--accent)" : "#ef4444" }}
-                  >
-                    {saveResult.success ? "check_circle" : "error"}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="font-semibold" style={{ color: saveResult.success ? "var(--accent)" : "#ef4444" }}>
-                      {saveResult.success ? "Simpan File .env: BERHASIL" : "Simpan File .env: GAGAL"}
-                    </p>
-                    <p className="app-muted mt-0.5 leading-relaxed">{saveResult.message}</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Status Connection Test */}
-              {testStatus && (
-                <div
-                  className="rounded-xl p-3.5 border flex items-start gap-3 text-xs"
-                  style={{
-                    background: testStatus.connected
-                      ? "var(--accent-soft)"
-                      : "color-mix(in srgb, #ef4444 12%, transparent)",
-                    borderColor: testStatus.connected
-                      ? "var(--accent-soft)"
-                      : "color-mix(in srgb, #ef4444 25%, transparent)",
-                  }}
-                >
-                  <span
-                    className="material-symbols-outlined text-[18px] shrink-0 mt-0.5"
-                    style={{ color: testStatus.connected ? "var(--accent)" : "#ef4444" }}
-                  >
-                    {testStatus.connected ? "verified" : "cloud_off"}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold" style={{ color: testStatus.connected ? "var(--accent)" : "#ef4444" }}>
-                        {testStatus.connected ? "Koneksi API Key SSO: TERHUBUNG" : "Koneksi API Key SSO: GAGAL"}
-                      </p>
-                      <Badge status={testStatus.connected ? "success" : "incomplete"}>
-                        {testStatus.connected ? "Terhubung" : "Gagal"}
-                      </Badge>
-                    </div>
-                    <p className="app-muted mt-0.5 leading-relaxed">{testStatus.info}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Section 2: Sinkronisasi Data Pengguna / Siswa */}
-            <div className="space-y-3 border-t pt-4" style={{ borderColor: "var(--divider)" }}>
-              <p className="text-xs font-bold uppercase tracking-wider app-muted flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[16px] text-[var(--accent)]">sync</span>
-                2. Sinkronisasi Data Pengguna &amp; Siswa
-              </p>
-
-              {syncError ? (
-                <div
-                  className="rounded-xl p-3.5 border flex items-start gap-3 text-xs"
-                  style={{
-                    background: "color-mix(in srgb, #ef4444 12%, transparent)",
-                    borderColor: "color-mix(in srgb, #ef4444 25%, transparent)",
-                    color: "#ef4444",
-                  }}
-                >
-                  <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">error</span>
-                  <div>
-                    <p className="font-semibold">Sinkronisasi Data Gagal</p>
-                    <p className="text-xs opacity-90 mt-0.5">{syncError}</p>
-                  </div>
-                </div>
-              ) : syncResult ? (
-                <div className="space-y-3">
-                  {/* Metrics Row */}
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <div
-                      className="rounded-xl p-3 text-center border"
-                      style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
-                    >
-                      <p className="app-label text-[10px]">Total Data</p>
-                      <p className="font-display font-bold text-lg mt-0.5">{syncResult.total}</p>
-                    </div>
-                    <div
-                      className="rounded-xl p-3 text-center border"
-                      style={{
-                        background: "var(--accent-soft)",
-                        borderColor: "var(--accent-soft)",
-                      }}
-                    >
-                      <p className="app-label text-[10px]" style={{ color: "var(--accent)" }}>
-                        Berhasil
-                      </p>
-                      <p className="font-display font-bold text-lg mt-0.5" style={{ color: "var(--accent)" }}>
-                        {syncResult.success}
-                      </p>
-                    </div>
-                    <div
-                      className="rounded-xl p-3 text-center border"
-                      style={{
-                        background:
-                          syncResult.failed > 0
-                            ? "color-mix(in srgb, #ef4444 12%, transparent)"
-                            : "var(--hover)",
-                        borderColor:
-                          syncResult.failed > 0
-                            ? "color-mix(in srgb, #ef4444 30%, transparent)"
-                            : "var(--divider)",
-                      }}
-                    >
-                      <p className="app-label text-[10px]" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>
-                        Gagal
-                      </p>
-                      <p className="font-display font-bold text-lg mt-0.5" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>
-                        {syncResult.failed}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Field Tags */}
-                  <div className="rounded-xl p-3 text-xs border space-y-1.5" style={{ background: "var(--hover)", borderColor: "var(--divider)" }}>
-                    <p className="app-label text-[10px]">Field Yang Berhasil Disinkronkan:</p>
-                    <div className="flex flex-wrap gap-1">
-                      {[
-                        "nama_lengkap",
-                        "email",
-                        "nik",
-                        "nip_nis",
-                        "jk",
-                        "no_telp",
-                        "tgl_lahir",
-                        "is_active",
-                        "claimed_at",
-                        "roles",
-                      ].map((f) => (
-                        <span
-                          key={f}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/10"
-                          style={{ color: "var(--muted)" }}
-                        >
-                          {f}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Errors Breakdown */}
-                  {syncResult.errors.length > 0 && (
-                    <div className="space-y-1.5 text-xs">
-                      <p className="font-semibold text-error text-[11px]">Detail Data Gagal ({syncResult.errors.length}):</p>
-                      <div
-                        className="max-h-32 overflow-y-auto rounded-xl p-3 border font-mono text-[11px] space-y-1"
-                        style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
-                      >
-                        {syncResult.errors.map((err, idx) => (
-                          <div key={idx} className="text-error truncate">
-                            • [{err.id.slice(0, 8)}] {err.message}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : null}
-            </div>
-
-            <Button size="sm" variant="primary" onClick={onClose} className="w-full mt-2">
-              Selesai &amp; Tutup
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── SSO Config Card ──────────────────────────────────────────────────────────
-function SsoConfigCard({
-  ssoConfig,
-  onReload,
-}: {
-  ssoConfig: SsoConfig | null;
-  onReload: () => void;
-}) {
-  const [url, setUrl] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [apiBaseUrl, setApiBaseUrl] = useState("");
-  const [copiedCallback, setCopiedCallback] = useState(false);
-
-  // Modal State
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalLoading, setModalLoading] = useState(false);
-  const [loadingStep, setLoadingStep] = useState("");
-  const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [testResult, setTestResult] = useState<{ connected: boolean; info?: string } | null>(null);
-  const [syncResult, setSyncResult] = useState<SsoSyncResult | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [rosterSyncLoading, setRosterSyncLoading] = useState(false);
-  const [rosterSyncResult, setRosterSyncResult] = useState<{ message: string; totalUpdated: number } | null>(null);
-  const [rosterSyncError, setRosterSyncError] = useState<string | null>(null);
-
-  const callbackUrl = `${window.location.origin}/auth/callback`;
-
-  useEffect(() => {
-    if (ssoConfig) {
-      setUrl(ssoConfig.baseUrl || "");
-      setClientId(ssoConfig.clientId || "");
-      setApiBaseUrl(ssoConfig.apiBaseUrl || "");
-    }
-  }, [ssoConfig]);
-
-  const copyCallbackUrl = () => {
-    navigator.clipboard.writeText(callbackUrl);
-    setCopiedCallback(true);
-    setTimeout(() => setCopiedCallback(false), 2000);
-  };
-
-  // Full unified Save + Connection Test + Data Sync flow
-  const handleSaveAndSync = async () => {
-    if (!url.trim()) return alert("URL SSO wajib diisi.");
-    if (!clientId.trim()) return alert("Client ID wajib diisi.");
-
-    setModalOpen(true);
-    setModalLoading(true);
-    setLoadingStep("1/2: Menyimpan konfigurasi & menguji koneksi API...");
-    setSaveResult(null);
-    setTestResult(null);
-    setSyncResult(null);
-    setSyncError(null);
-
-    let saveOk = false;
-
-    try {
-      const res = await api<{ message: string }>("/admin/integrations/sso-config", {
-        method: "PUT",
-        body: JSON.stringify({
-          baseUrl: url.trim(),
-          clientId: clientId.trim(),
-          clientSecret: clientSecret.trim(),
-          apiKey: apiKey.trim(),
-          apiBaseUrl: apiBaseUrl.trim(),
-        }),
-      });
-
-      saveOk = true;
-      setSaveResult({ success: true, message: res.message || "Konfigurasi SSO disimpan ke .env" });
-
-      // Test SSO connection
-      try {
-        const testRes = await api<{ data?: { status?: string }; meta?: { app_name?: string } }>("/admin/sso/test");
-        if (testRes.success) {
-          setTestResult({
-            connected: true,
-            info: `Terhubung ke Kredensia API (Aplikasi: ${testRes.data?.meta?.app_name || "OK"})`,
-          });
-        }
-      } catch (err) {
-        setTestResult({
-          connected: false,
-          info: err instanceof Error ? err.message : "Tidak dapat terhubung ke SSO API",
-        });
-      }
-
-      setClientSecret("");
-      setApiKey("");
-    } catch (e) {
-      setSaveResult({
-        success: false,
-        message: e instanceof Error ? e.message : "Gagal menyimpan konfigurasi.",
-      });
-    }
-
-    // Step 2: Data sync
-    if (saveOk) {
-      setLoadingStep("2/2: Menarik dan menyinkronkan data pengguna dari Kredensia SSO...");
-      try {
-        const syncRes = await api<SsoSyncResult>("/admin/sso/sync-members", { method: "POST" });
-        if (syncRes.data) {
-          setSyncResult(syncRes.data);
-        } else {
-          setSyncError(syncRes.message || "Gagal menyinkronkan data");
-        }
-      } catch (err) {
-        setSyncError(err instanceof Error ? err.message : "Koneksi API Key SSO belum valid / gagal sync");
-      }
-    } else {
-      setSyncError("Sinkronisasi dilewati karena penyimpanan .env gagal.");
-    }
-
-    setModalLoading(false);
-    onReload();
-  };
-
-  // Sync data only
-  const handleSyncOnly = async () => {
-    setModalOpen(true);
-    setModalLoading(true);
-    setLoadingStep("Menarik data pengguna dari Kredensia SSO...");
-    setSaveResult(null);
-    setTestResult(null);
-    setSyncResult(null);
-    setSyncError(null);
-
-    try {
-      const syncRes = await api<SsoSyncResult>("/admin/sso/sync-members", { method: "POST" });
-      if (syncRes.data) {
-        setSyncResult(syncRes.data);
-      } else {
-        setSyncError(syncRes.message || "Gagal menyinkronkan data");
-      }
-    } catch (err) {
-      setSyncError(err instanceof Error ? err.message : "Gagal menyinkronkan data pengguna");
-    } finally {
-      setModalLoading(false);
-      onReload();
-    }
-  };
-
-  // Sync class rosters (kelasLabel + classId per student)
-  const handleSyncRoster = async () => {
-    setRosterSyncLoading(true);
-    setRosterSyncResult(null);
-    setRosterSyncError(null);
-    try {
-      const res = await api<{ message: string; totalUpdated: number }>("/admin/sso/sync-kelas-roster", { method: "POST" });
-      if (res.data) {
-        setRosterSyncResult(res.data);
-      } else {
-        setRosterSyncError(res.message || "Gagal sync roster kelas");
-      }
-    } catch (e) {
-      setRosterSyncError(e instanceof Error ? e.message : "Gagal sync roster kelas");
-    } finally {
-      setRosterSyncLoading(false);
-    }
-  };
-
-  const isLive = ssoConfig?.loginConfigured;
-  const hasApiKey = ssoConfig?.apiKeyConfigured;
-
-  return (
-    <>
-      <Card className="p-6 flex flex-col gap-5">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span
-              className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
-              style={{ background: "var(--accent-soft)" }}
-            >
-              <span className="material-symbols-outlined text-[var(--accent)]">lock_person</span>
-            </span>
-            <div>
-              <div className="font-display font-bold text-sm">Kredensia SSO</div>
-              <div className="text-[11px] app-muted">Single Sign-On &amp; Manajemen Identitas</div>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Badge status={isLive ? "success" : "incomplete"}>
-              {isLive ? "Login Terhubung" : "Login Belum Diconfig"}
-            </Badge>
-            <Badge status={hasApiKey ? "success" : "draft"}>
-              {hasApiKey ? "API Key Aktif" : "API Key Kosong"}
-            </Badge>
-          </div>
-        </div>
-
-        <p className="text-sm app-muted leading-relaxed">
-          Hubungkan SIAKAD dengan portal SSO sekolah (Kredensia) untuk login terpusat dan impor data
-          pengguna, tahun pelajaran, serta rombel.
-        </p>
-
-        {/* Callback URL Notice Card */}
+        {/* Redirect URI Info Pill */}
         <div
           className="rounded-2xl p-4 border flex flex-col gap-2"
           style={{ background: "var(--hover)", borderColor: "var(--accent-soft)" }}
@@ -569,7 +349,7 @@ function SsoConfigCard({
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-[var(--accent)] flex items-center gap-1.5">
               <span className="material-symbols-outlined text-[16px]">link</span>
-              URL Callback Login SSO (Redirect URI)
+              Redirect URI / Callback URL
             </span>
             <button
               type="button"
@@ -584,288 +364,768 @@ function SsoConfigCard({
             </button>
           </div>
           <code className="text-xs font-mono px-3 py-2 rounded-xl bg-[var(--surface)] border block truncate select-all" style={{ borderColor: "var(--input-border)" }}>
-            {callbackUrl}
+            {provider.redirectUri}
           </code>
           <p className="text-[11px] app-muted leading-snug">
-            Daftarkan URL callback di atas pada field <strong>Login Callback URL</strong> saat mendaftarkan SIAKAD di portal Kredensia SSO.
+            Daftarkan URL di atas pada field <strong>Redirect URI / Callback URL</strong> di dashboard konsol {provider.shortName}.
           </p>
         </div>
 
-        {/* Section 1 — SSO Login */}
-        <div className="flex flex-col gap-4">
-          <div
-            className="px-4 py-2.5 rounded-xl flex items-center gap-2"
-            style={{ background: "var(--hover)" }}
-          >
-            <span className="material-symbols-outlined text-[16px] text-[var(--accent)]">
-              login
-            </span>
-            <span className="text-xs font-semibold uppercase tracking-wider app-muted">
-              Konfigurasi Login SSO
-            </span>
-          </div>
+        {/* Form Body */}
+        <form onSubmit={handleSave} className="flex flex-col gap-4">
+          {/* Base URL (if applicable) */}
+          {!isGoogle && !isMicrosoft && (
+            <Field
+              id="prov-url"
+              label={isLdap ? "URL Server LDAP (Host & Port)" : "URL Dasar Server / Realm SSO"}
+              value={baseUrl}
+              onChange={setBaseUrl}
+              placeholder={
+                isKredensia
+                  ? "https://sso.sekolah.sch.id"
+                  : isLdap
+                  ? "ldap://ldap.sekolah.sch.id:389"
+                  : "https://auth.sekolah.sch.id/realms/master"
+              }
+              hint={isLdap ? "Contoh: ldap://192.168.1.10:389 atau ldaps://..." : "URL endpoint portal SSO tanpa trailing slash."}
+            />
+          )}
+
+          {/* Microsoft Tenant ID */}
+          {isMicrosoft && (
+            <Field
+              id="prov-tenant-id"
+              label="Directory (Tenant) ID Microsoft Azure"
+              value={tenantId}
+              onChange={setTenantId}
+              placeholder="common atau xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              hint="Gunakan 'common' atau 'organizations' atau Tenant ID spesifik sekolah."
+            />
+          )}
+
+          {/* Discovery URL for Generic OIDC */}
+          {isGenericOidc && (
+            <Field
+              id="prov-discovery-url"
+              label="OpenID Connect Discovery URL (.well-known)"
+              value={discoveryUrl}
+              onChange={setDiscoveryUrl}
+              placeholder="https://auth.sekolah.sch.id/.well-known/openid-configuration"
+              hint="URL metadata konfigurasi OIDC provider."
+            />
+          )}
+
+          {/* Client ID / App ID / Bind DN */}
           <Field
-            id="sso-url"
-            label="URL Portal SSO"
-            value={url}
-            onChange={setUrl}
-            placeholder="https://sso.sekolah.sch.id"
-            hint="URL dasar portal Kredensia tanpa trailing slash."
+            id="prov-client-id"
+            label={isLdap ? "Bind DN (Admin User DN)" : "Client ID / Application ID"}
+            value={clientId || (isLdap ? bindDn : "")}
+            onChange={(v) => {
+              if (isLdap) setBindDn(v);
+              else setClientId(v);
+            }}
+            placeholder={
+              isGoogle
+                ? "xxxxxxxxxxxx.apps.googleusercontent.com"
+                : isKredensia
+                ? "019f7d42-6977-7053-853f-4707fa9ea7cf"
+                : isLdap
+                ? "cn=admin,dc=sekolah,dc=sch,dc=id"
+                : "siakad-client-id"
+            }
+            hint={isLdap ? "Distinguished Name akun pembaca LDAP." : "Identifier unik aplikasi yang dibuat di IdP."}
+            required
           />
+
+          {/* Client Secret */}
           <Field
-            id="sso-client-id"
-            label="Client ID (UUID Aplikasi)"
+            id="prov-client-secret"
+            label={isLdap ? "Password Bind LDAP" : "Client Secret / App Secret"}
+            type="password"
+            value={clientSecret}
+            onChange={setClientSecret}
+            placeholder={
+              provider.hasSecret
+                ? "•••••• (sudah tersimpan — kosongkan jika tidak ingin mengubah)"
+                : "Masukkan Client Secret"
+            }
+            hint="Kunci rahasia otentikasi. Kosongkan jika tidak ingin mengubah."
+          />
+
+          {/* Specific Kredensia API Settings */}
+          {isKredensia && (
+            <div className="pt-2 border-t flex flex-col gap-3.5" style={{ borderColor: "var(--divider)" }}>
+              <div className="text-xs font-semibold text-[var(--accent)] flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[16px]">api</span>
+                <span>Kredensial API Sinkronisasi Data (Siswa, Rombel &amp; Guru)</span>
+              </div>
+              <Field
+                id="prov-api-base-url"
+                label="URL Base API SSO"
+                value={apiBaseUrl}
+                onChange={setApiBaseUrl}
+                placeholder="https://sso.sekolah.sch.id/api/v1"
+                hint="Otomatis terisi <URL SSO>/api/v1 jika dikosongkan."
+              />
+              <Field
+                id="prov-api-key"
+                label="API Key (X-API-Key)"
+                type="password"
+                value={apiKey}
+                onChange={setApiKey}
+                placeholder={
+                  provider.hasApiKey
+                    ? "•••••• (sudah tersimpan — kosongkan jika tidak ingin mengubah)"
+                    : "sso_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                }
+                hint="Dibuat dari Dashboard Kredensia → Kunci API."
+              />
+            </div>
+          )}
+
+          {/* Scopes */}
+          <Field
+            id="prov-scopes"
+            label="OAuth Scopes"
+            value={scopes}
+            onChange={setScopes}
+            placeholder="openid email profile"
+            hint="Scope izin otentikasi (dipisahkan spasi)."
+          />
+
+          <div className="pt-3 border-t flex items-center justify-end gap-3" style={{ borderColor: "var(--divider)" }}>
+            <Button type="button" size="sm" variant="secondary" onClick={onClose}>
+              Batal
+            </Button>
+            <Button type="submit" size="sm" variant="primary" disabled={submitting}>
+              <span className="material-symbols-outlined text-[16px]">save</span>
+              {submitting ? "Menyimpan..." : "Simpan Konfigurasi"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal Tambah Integrasi SSO Baru ─────────────────────────────────────────
+function CreateSsoModal({
+  isOpen,
+  onClose,
+  onCreated,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [category, setCategory] = useState<"enterprise" | "opensource">("enterprise");
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("google");
+  const [customName, setCustomName] = useState("");
+  const [protocol, setProtocol] = useState("OAuth 2.0 / OIDC");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scopes, setScopes] = useState("openid email profile");
+  const [submitting, setSubmitting] = useState(false);
+
+  const enterpriseTemplates = [
+    { id: "google", name: "Google Workspace", icon: "google", protocol: "OAuth 2.0 / OIDC" },
+    { id: "microsoft", name: "Microsoft 365 / Entra ID", icon: "microsoft", protocol: "OIDC / OAuth 2.0" },
+    { id: "apple", name: "Apple ID Sign-In", icon: "apple", protocol: "OAuth 2.0 / OIDC" },
+    { id: "saml_okta", name: "Okta / SAML 2.0 Enterprise", icon: "security", protocol: "SAML 2.0 / OIDC" },
+    { id: "github", name: "GitHub / GitLab Enterprise", icon: "code", protocol: "OAuth 2.0" },
+    { id: "custom_ent", name: "Custom Enterprise IdP", icon: "hub", protocol: "SAML 2.0 / OIDC" },
+  ];
+
+  const openSourceTemplates = [
+    { id: "kredensia", name: "Kredensia SSO (Sekolah)", icon: "lock_person", protocol: "OAuth 2.0 + API" },
+    { id: "keycloak", name: "Keycloak IAM (Red Hat)", icon: "vpn_key", protocol: "OIDC / SAML 2.0" },
+    { id: "authentik", name: "Authentik Self-Hosted", icon: "shield", protocol: "OIDC / OAuth 2.0" },
+    { id: "authelia", name: "Authelia 2FA / SSO", icon: "verified_user", protocol: "OIDC" },
+    { id: "casdoor", name: "Casdoor UI Platform", icon: "door_front", protocol: "OAuth 2.0 / OIDC" },
+    { id: "ldap", name: "OpenLDAP / FreeIPA", icon: "folder_shared", protocol: "LDAP / LDAPS" },
+    { id: "generic_oidc", name: "Generic OpenID Connect", icon: "extension", protocol: "OIDC Standard" },
+    { id: "custom_os", name: "Custom Open Source IdP", icon: "hub", protocol: "OIDC / OAuth 2.0" },
+  ];
+
+  const currentTemplates = category === "enterprise" ? enterpriseTemplates : openSourceTemplates;
+
+  const handleSelectTemplate = (t: typeof enterpriseTemplates[0]) => {
+    setSelectedTemplate(t.id);
+    setProtocol(t.protocol);
+    if (!t.id.startsWith("custom_")) {
+      setCustomName(t.name);
+    } else {
+      setCustomName("");
+    }
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalName = customName.trim() || currentTemplates.find(t => t.id === selectedTemplate)?.name || "SSO Provider";
+    setSubmitting(true);
+    try {
+      const res = await api<{ success: boolean; message?: string }>("/admin/integrations/sso-providers", {
+        method: "POST",
+        body: JSON.stringify({
+          id: selectedTemplate.startsWith("custom_") ? undefined : selectedTemplate,
+          category,
+          name: finalName,
+          shortName: finalName.split(" ")[0],
+          protocol,
+          baseUrl: baseUrl.trim() || undefined,
+          clientId: clientId.trim() || undefined,
+          clientSecret: clientSecret.trim() || undefined,
+          scopes: scopes.trim() || undefined,
+          icon: currentTemplates.find(t => t.id === selectedTemplate)?.icon || "hub",
+        }),
+      });
+
+      if (res.success) {
+        alert(res.message || "Integrasi SSO berhasil ditambahkan!");
+        onCreated();
+        onClose();
+      } else {
+        alert(res.message || "Gagal menambahkan integrasi.");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Terjadi kesalahan.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+      <div
+        className="w-full max-w-xl rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
+        style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b pb-4" style={{ borderColor: "var(--divider)" }}>
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-2xl flex items-center justify-center bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
+              <span className="material-symbols-outlined text-[22px]">add_link</span>
+            </span>
+            <div>
+              <h3 className="font-display font-bold text-base">Tambah Integrasi SSO</h3>
+              <p className="text-xs app-muted">Pilih standar perusahaan besar atau open-source self-hosted</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
+          >
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
+        </div>
+
+        {/* Category Selector Tabs */}
+        <div className="grid grid-cols-2 gap-2 p-1.5 rounded-xl border" style={{ background: "var(--hover)", borderColor: "var(--divider)" }}>
+          <button
+            type="button"
+            onClick={() => {
+              setCategory("enterprise");
+              setSelectedTemplate("google");
+              setCustomName("Google Workspace");
+            }}
+            className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              category === "enterprise"
+                ? "bg-white dark:bg-zinc-800 text-blue-600 dark:text-blue-400 shadow-sm"
+                : "app-muted hover:text-[var(--fg)]"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">domain</span>
+            <span>Standar Perusahaan Besar</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCategory("opensource");
+              setSelectedTemplate("kredensia");
+              setCustomName("Kredensia SSO");
+            }}
+            className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              category === "opensource"
+                ? "bg-white dark:bg-zinc-800 text-blue-600 dark:text-blue-400 shadow-sm"
+                : "app-muted hover:text-[var(--fg)]"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">terminal</span>
+            <span>Open Source &amp; Self-Hosted</span>
+          </button>
+        </div>
+
+        {/* Provider Template Grid */}
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-semibold app-muted uppercase tracking-wider">
+            Pilih Platform / Provider:
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {currentTemplates.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => handleSelectTemplate(t)}
+                className={`p-3 rounded-xl border text-left flex flex-col gap-2 transition-all ${
+                  selectedTemplate === t.id
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]"
+                    : "border-[var(--input-border)] hover:bg-[var(--hover)]"
+                }`}
+              >
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center">
+                  <ProviderLogo icon={t.icon} className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="font-bold text-xs truncate" style={{ color: "var(--fg)" }}>{t.name}</div>
+                  <div className="text-[10px] app-muted">{t.protocol}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Form Fields */}
+        <form onSubmit={handleCreate} className="flex flex-col gap-3.5 border-t pt-4" style={{ borderColor: "var(--divider)" }}>
+          <Field
+            id="new-prov-name"
+            label="Nama Integrasi / Label"
+            value={customName}
+            onChange={setCustomName}
+            placeholder="Contoh: Google Workspace Sekolah"
+            required
+          />
+
+          {category === "opensource" && (
+            <Field
+              id="new-prov-url"
+              label="URL Dasar Server SSO"
+              value={baseUrl}
+              onChange={setBaseUrl}
+              placeholder="https://auth.sekolah.sch.id"
+              hint="URL dasar endpoint server otentikasi."
+            />
+          )}
+
+          <Field
+            id="new-prov-client-id"
+            label="Client ID / Application ID"
             value={clientId}
             onChange={setClientId}
-            placeholder="019f7d42-6977-7053-853f-4707fa9ea7cf"
-            hint="UUID aplikasi SIAKAD yang terdaftar di panel Manajemen Aplikasi Kredensia."
+            placeholder="Masukkan Client ID dari dashboard provider"
+            required
           />
+
           <Field
-            id="sso-client-secret"
+            id="new-prov-client-secret"
             label="Client Secret"
             type="password"
             value={clientSecret}
             onChange={setClientSecret}
-            placeholder="Kosongkan jika tidak ingin mengubah"
-            hint="Biarkan kosong jika tidak ingin mengubah secret yang sudah tersimpan."
+            placeholder="Masukkan Client Secret"
           />
-        </div>
 
-        {/* Section 2 — API Data Import */}
-        <div className="flex flex-col gap-4">
-          <div
-            className="px-4 py-2.5 rounded-xl flex items-center gap-2"
-            style={{ background: "var(--hover)" }}
-          >
-            <span className="material-symbols-outlined text-[16px] text-[var(--accent)]">
-              api
-            </span>
-            <span className="text-xs font-semibold uppercase tracking-wider app-muted">
-              Kredensial API Impor Data
-            </span>
+          <div className="pt-3 border-t flex items-center justify-end gap-3" style={{ borderColor: "var(--divider)" }}>
+            <Button type="button" size="sm" variant="secondary" onClick={onClose}>
+              Batal
+            </Button>
+            <Button type="submit" size="sm" variant="primary" disabled={submitting}>
+              <span className="material-symbols-outlined text-[16px]">add</span>
+              {submitting ? "Menambahkan..." : "Tambah Integrasi"}
+            </Button>
           </div>
-          <p className="text-xs app-muted leading-relaxed -mt-2">
-            Digunakan untuk menarik data <strong>Pengguna</strong>, <strong>Tahun Pelajaran</strong>,
-            dan <strong>Rombel</strong> dari SSO. Buat API Key di{" "}
-            <strong>Dashboard Kredensia → Kunci API</strong>.
-          </p>
-          <Field
-            id="sso-api-base-url"
-            label="URL Base API SSO"
-            value={apiBaseUrl}
-            onChange={setApiBaseUrl}
-            placeholder="https://sso.sekolah.sch.id/api/v1"
-            hint="Otomatis terisi <URL SSO>/api/v1 jika dikosongkan. Ubah hanya jika berbeda."
-          />
-          <Field
-            id="sso-api-key"
-            label="API Key (X-API-Key)"
-            type="password"
-            value={apiKey}
-            onChange={setApiKey}
-            placeholder={
-              hasApiKey
-                ? "•••••• (sudah diisi — kosongkan jika tidak ingin mengubah)"
-                : "sso_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-            }
-            hint={
-              hasApiKey
-                ? "API Key sudah tersimpan. Kosongkan jika tidak ingin mengubah."
-                : "API Key dari menu Kunci API di portal Kredensia (prefix: sso_)."
-            }
-          />
-        </div>
-
-        {/* Action Buttons */}
-        <div className="pt-2 flex flex-col sm:flex-row gap-3">
-          <Button size="sm" variant="primary" onClick={handleSaveAndSync} className="flex-1">
-            <span className="material-symbols-outlined text-[18px]">save</span>
-            Simpan Konfigurasi &amp; Sinkronkan Data SSO
-          </Button>
-
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={handleSyncOnly}
-            disabled={!hasApiKey && !apiKey}
-            className="flex-1"
-          >
-            <span className="material-symbols-outlined text-[18px]">cloud_download</span>
-            Hanya Sinkronkan Data SSO
-          </Button>
-        </div>
-      </Card>
-
-      {/* Unified Status Modal */}
-      <UnifiedSsoModal
-        isOpen={modalOpen}
-        loading={modalLoading}
-        loadingStep={loadingStep}
-        saveResult={saveResult}
-        testStatus={testResult}
-        syncResult={syncResult}
-        syncError={syncError}
-        onClose={() => setModalOpen(false)}
-      />
-    </>
+        </form>
+      </div>
+    </div>
   );
 }
 
-function GoogleOAuthCard() {
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [configured, setConfigured] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [copied, setCopied] = useState(false);
+// ─── Unified Modal for SSO Save & Sync Progress/Result ────────────────────────
+function UnifiedSsoModal({
+  isOpen,
+  loading,
+  loadingStep,
+  testStatus,
+  syncResult,
+  syncError,
+  onClose,
+}: {
+  isOpen: boolean;
+  loading: boolean;
+  loadingStep?: string;
+  testStatus?: { connected: boolean; info?: string } | null;
+  syncResult?: SsoSyncResult | null;
+  syncError?: string | null;
+  onClose: () => void;
+}) {
+  if (!isOpen) return null;
 
-  const googleCallbackUrl = `${window.location.origin}/auth/google/callback`;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+      <div
+        className="w-full max-w-lg rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
+        style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
+      >
+        <div className="flex items-center justify-between border-b pb-4" style={{ borderColor: "var(--divider)" }}>
+          <div className="flex items-center gap-3">
+            <span
+              className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0"
+              style={{ background: "var(--accent-soft)" }}
+            >
+              <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">
+                hub
+              </span>
+            </span>
+            <div>
+              <h3 className="font-display font-bold text-base">Sinkronisasi Data SSO</h3>
+              <p className="text-xs app-muted">Kredensia Portal Otentikasi &amp; Identitas Terpusat</p>
+            </div>
+          </div>
+          {!loading && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          )}
+        </div>
 
-  useEffect(() => {
-    api<{ configured: boolean; clientId: string | null; hasSecret: boolean }>("/admin/integrations/google-config")
-      .then((res) => {
-        if (res.data) {
-          setConfigured(res.data.configured);
-          if (res.data.clientId) setClientId(res.data.clientId);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+        {loading ? (
+          <div className="py-10 flex flex-col items-center justify-center gap-4 text-center">
+            <div className="w-14 h-14 rounded-full border-4 border-[var(--accent-soft)] border-t-[var(--accent)] animate-spin" />
+            <div>
+              <h4 className="font-bold text-base">Sedang Memproses...</h4>
+              <p className="text-xs app-muted mt-1 max-w-xs leading-relaxed">
+                {loadingStep || "Menyinkronkan data pengguna dan rombel dari Kredensia SSO."}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {testStatus && (
+              <div
+                className="rounded-xl p-3.5 border flex items-start gap-3 text-xs"
+                style={{
+                  background: testStatus.connected
+                    ? "var(--accent-soft)"
+                    : "color-mix(in srgb, #ef4444 12%, transparent)",
+                  borderColor: testStatus.connected
+                    ? "var(--accent-soft)"
+                    : "color-mix(in srgb, #ef4444 25%, transparent)",
+                }}
+              >
+                <span
+                  className="material-symbols-outlined text-[18px] shrink-0 mt-0.5"
+                  style={{ color: testStatus.connected ? "var(--accent)" : "#ef4444" }}
+                >
+                  {testStatus.connected ? "verified" : "cloud_off"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold" style={{ color: testStatus.connected ? "var(--accent)" : "#ef4444" }}>
+                    {testStatus.connected ? "Koneksi API Key SSO: TERHUBUNG" : "Koneksi API Key SSO: GAGAL"}
+                  </p>
+                  <p className="app-muted mt-0.5 leading-relaxed">{testStatus.info}</p>
+                </div>
+              </div>
+            )}
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!clientId.trim()) return alert("Google Client ID wajib diisi.");
-    setSaving(true);
-    try {
-      const res = await api<{ success: boolean; message: string }>("/admin/integrations/google-config", {
-        method: "PUT",
-        body: JSON.stringify({
-          clientId: clientId.trim(),
-          clientSecret: clientSecret.trim(),
-        }),
-      });
-      if (res.success) {
-        alert(res.message || "Konfigurasi Google OAuth berhasil disimpan!");
-        setConfigured(true);
-        setClientSecret("");
-      } else {
-        alert(res.message || "Gagal menyimpan konfigurasi.");
-      }
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal menyimpan konfigurasi Google OAuth.");
-    } finally {
-      setSaving(false);
-    }
-  };
+            {syncError ? (
+              <div
+                className="rounded-xl p-3.5 border flex items-start gap-3 text-xs"
+                style={{
+                  background: "color-mix(in srgb, #ef4444 12%, transparent)",
+                  borderColor: "color-mix(in srgb, #ef4444 25%, transparent)",
+                  color: "#ef4444",
+                }}
+              >
+                <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">error</span>
+                <div>
+                  <p className="font-semibold">Sinkronisasi Data Gagal</p>
+                  <p className="text-xs opacity-90 mt-0.5">{syncError}</p>
+                </div>
+              </div>
+            ) : syncResult ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="rounded-xl p-3 text-center border" style={{ background: "var(--hover)", borderColor: "var(--divider)" }}>
+                    <p className="app-label text-[10px]">Total Data</p>
+                    <p className="font-display font-bold text-lg mt-0.5">{syncResult.total}</p>
+                  </div>
+                  <div className="rounded-xl p-3 text-center border" style={{ background: "var(--accent-soft)", borderColor: "var(--accent-soft)" }}>
+                    <p className="app-label text-[10px]" style={{ color: "var(--accent)" }}>Berhasil</p>
+                    <p className="font-display font-bold text-lg mt-0.5" style={{ color: "var(--accent)" }}>{syncResult.success}</p>
+                  </div>
+                  <div
+                    className="rounded-xl p-3 text-center border"
+                    style={{
+                      background: syncResult.failed > 0 ? "color-mix(in srgb, #ef4444 12%, transparent)" : "var(--hover)",
+                      borderColor: syncResult.failed > 0 ? "color-mix(in srgb, #ef4444 30%, transparent)" : "var(--divider)",
+                    }}
+                  >
+                    <p className="app-label text-[10px]" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>Gagal</p>
+                    <p className="font-display font-bold text-lg mt-0.5" style={{ color: syncResult.failed > 0 ? "#ef4444" : undefined }}>{syncResult.failed}</p>
+                  </div>
+                </div>
 
-  const copyRedirectUri = () => {
-    navigator.clipboard.writeText(googleCallbackUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+                {syncResult.errors.length > 0 && (
+                  <div className="space-y-1.5 text-xs">
+                    <p className="font-semibold text-error text-[11px]">Detail Data Gagal ({syncResult.errors.length}):</p>
+                    <div
+                      className="max-h-32 overflow-y-auto rounded-xl p-3 border font-mono text-[11px] space-y-1"
+                      style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
+                    >
+                      {syncResult.errors.map((err, idx) => (
+                        <div key={idx} className="text-error truncate">
+                          • [{err.id.slice(0, 8)}] {err.message}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            <Button size="sm" variant="primary" onClick={onClose} className="w-full mt-2">
+              Selesai &amp; Tutup
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Table Component for SSO Providers ─────────────────────────────────────────
+function SsoProviderTable({
+  title,
+  subtitle,
+  badgeText,
+  providers,
+  onConfigure,
+  onToggle,
+  onReset,
+  onSyncKredensia,
+}: {
+  title: string;
+  subtitle: string;
+  badgeText: string;
+  providers: SsoProviderItem[];
+  onConfigure: (p: SsoProviderItem) => void;
+  onToggle: (id: string) => void;
+  onReset: (id: string) => void;
+  onSyncKredensia?: () => void;
+}) {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyText = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   return (
-    <Card className="p-6 flex flex-col gap-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span
-            className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
-            style={{ background: "rgba(66, 133, 244, 0.1)" }}
-          >
-            <svg className="w-6 h-6" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-              />
-            </svg>
-          </span>
-          <div>
-            <div className="font-display font-bold text-sm">Masuk dengan Google (OAuth 2.0)</div>
-            <div className="text-[11px] app-muted">Otentikasi Akun Google Siswa, Guru, &amp; Staf</div>
-          </div>
-        </div>
-        <Badge status={configured ? "success" : "incomplete"}>
-          {configured ? "Google Terhubung" : "Belum Dikonfigurasi"}
-        </Badge>
-      </div>
-
-      <p className="text-sm app-muted leading-relaxed">
-        Aktifkan login Google agar siswa, guru, dan staf dapat masuk ke SIAKAD menggunakan akun Google sekolah atau akun pribadi.
-      </p>
-
-      {/* Authorized Redirect URI Notice */}
-      <div
-        className="rounded-2xl p-4 border flex flex-col gap-2"
-        style={{ background: "var(--hover)", borderColor: "var(--accent-soft)" }}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-[var(--accent)] flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[16px]">link</span>
-            Authorized Redirect URI (Google Console)
-          </span>
-          <button
-            type="button"
-            onClick={copyRedirectUri}
-            className="px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1 shrink-0"
-            style={{ background: "var(--surface)", borderColor: "var(--input-border)" }}
-          >
-            <span className="material-symbols-outlined text-[14px]">
-              {copied ? "check" : "content_copy"}
+    <Card className="overflow-hidden border" style={{ borderColor: "var(--divider)" }}>
+      {/* Table Section Header */}
+      <div className="px-5 py-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3" style={{ borderColor: "var(--divider)", background: "var(--hover)" }}>
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="font-display font-bold text-sm sm:text-base" style={{ color: "var(--fg)" }}>
+              {title}
+            </h3>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              {badgeText}
             </span>
-            {copied ? "Tersalin!" : "Salin URL"}
-          </button>
+          </div>
+          <p className="text-xs app-muted mt-0.5">{subtitle}</p>
         </div>
-        <code className="text-xs font-mono px-3 py-2 rounded-xl bg-[var(--surface)] border block truncate select-all" style={{ borderColor: "var(--input-border)" }}>
-          {googleCallbackUrl}
-        </code>
-        <p className="text-[11px] app-muted leading-snug">
-          Daftarkan URL di atas pada field <strong>Authorized redirect URIs</strong> di Google Cloud Console (Credentials &rarr; OAuth 2.0 Client IDs).
-        </p>
+        <div className="text-xs font-semibold app-muted">
+          {providers.filter((p) => p.isConfigured).length} dari {providers.length} Terkonfigurasi
+        </div>
       </div>
 
-      {/* Config Form */}
-      <form onSubmit={handleSave} className="flex flex-col gap-4">
-        <Field
-          id="google-client-id"
-          label="Google Client ID"
-          value={clientId}
-          onChange={setClientId}
-          placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com"
-          hint="Client ID aplikasi dari Google Cloud Console Credentials."
-        />
-        <Field
-          id="google-client-secret"
-          label="Google Client Secret"
-          type="password"
-          value={clientSecret}
-          onChange={setClientSecret}
-          placeholder={configured ? "•••••• (sudah diisi — kosongkan jika tidak ingin mengubah)" : "GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx"}
-          hint="Client Secret dari Google Cloud Console. Kosongkan jika tidak ingin mengubah."
-        />
+      {/* Table Content */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr className="border-b" style={{ borderColor: "var(--divider)", background: "var(--surface)" }}>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Provider / Platform</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Protokol</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Client ID / Endpoint</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Redirect URI (Callback)</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Status</th>
+              <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted text-right">Aksi</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y" style={{ borderColor: "var(--divider)" }}>
+            {providers.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-5 py-8 text-center text-zinc-400">
+                  Belum ada provider dalam kategori ini.
+                </td>
+              </tr>
+            ) : (
+              providers.map((p) => {
+                const isMaskedId = p.clientId
+                  ? p.clientId.length > 20
+                    ? p.clientId.slice(0, 10) + "..." + p.clientId.slice(-6)
+                    : p.clientId
+                  : null;
 
-        <Button size="sm" variant="primary" type="submit" disabled={saving}>
-          <span className="material-symbols-outlined text-[18px]">save</span>
-          {saving ? "Memproses..." : "Simpan Konfigurasi Google OAuth"}
-        </Button>
-      </form>
+                return (
+                  <tr key={p.id} className="hover:bg-zinc-50/60 dark:hover:bg-zinc-800/20 transition-colors">
+                    {/* Platform */}
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-3 min-w-[200px]">
+                        <div className="w-8 h-8 rounded-xl p-1 flex items-center justify-center shrink-0 border border-black/5 dark:border-white/10" style={{ background: "var(--hover)" }}>
+                          <ProviderLogo icon={p.icon} className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-bold text-xs" style={{ color: "var(--fg)" }}>{p.name}</div>
+                          <div className="text-[11px] app-muted truncate max-w-[220px]">{p.description}</div>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Protocol */}
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <span className="px-2 py-0.5 rounded-lg text-[10px] font-mono font-semibold bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/30">
+                        {p.protocol}
+                      </span>
+                    </td>
+
+                    {/* Client ID / Endpoint */}
+                    <td className="px-5 py-3.5">
+                      {p.clientId ? (
+                        <div className="flex items-center gap-1.5 font-mono text-[11px] bg-zinc-50 dark:bg-zinc-900/40 px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-800 w-fit">
+                          <span style={{ color: "var(--fg)" }}>{isMaskedId}</span>
+                          <button
+                            type="button"
+                            onClick={() => copyText(p.clientId!, `client_${p.id}`)}
+                            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                            title="Salin Client ID"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">
+                              {copiedId === `client_${p.id}` ? "check" : "content_copy"}
+                            </span>
+                          </button>
+                        </div>
+                      ) : p.baseUrl ? (
+                        <span className="text-[11px] font-mono app-muted truncate max-w-[160px] block">{p.baseUrl}</span>
+                      ) : (
+                        <span className="text-zinc-400 italic text-[11px]">Belum diatur</span>
+                      )}
+                    </td>
+
+                    {/* Redirect URI */}
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-1.5 font-mono text-[11px] bg-zinc-50 dark:bg-zinc-900/40 px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-800 w-fit">
+                        <span className="truncate max-w-[140px]" style={{ color: "var(--muted)" }}>{p.redirectUri}</span>
+                        <button
+                          type="button"
+                          onClick={() => copyText(p.redirectUri, `uri_${p.id}`)}
+                          className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                          title="Salin Redirect URI"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">
+                            {copiedId === `uri_${p.id}` ? "check" : "content_copy"}
+                          </span>
+                        </button>
+                      </div>
+                    </td>
+
+                    {/* Status */}
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {p.isConfigured ? (
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            p.isActive
+                              ? "bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400"
+                              : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${p.isActive ? "bg-green-500" : "bg-zinc-400"}`} />
+                          {p.isActive ? "TERHUBUNG / AKTIF" : "NONAKTIF"}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200/50 dark:border-amber-900/30">
+                          BELUM DIKONFIG
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {/* Sync button specifically for Kredensia */}
+                        {p.id === "kredensia" && onSyncKredensia && (
+                          <button
+                            type="button"
+                            onClick={onSyncKredensia}
+                            disabled={!p.isConfigured}
+                            className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/30 flex items-center justify-center transition-colors disabled:opacity-40"
+                            title="Sinkronkan Data Anggota & Rombel"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">sync</span>
+                          </button>
+                        )}
+
+                        {/* Config Button */}
+                        <button
+                          type="button"
+                          onClick={() => onConfigure(p)}
+                          className="px-2.5 py-1.5 rounded-lg border font-semibold text-[11px] bg-[var(--surface)] hover:bg-[var(--hover)] transition-colors flex items-center gap-1"
+                          style={{ borderColor: "var(--input-border)", color: "var(--fg)" }}
+                        >
+                          <span className="material-symbols-outlined text-[14px]">settings</span>
+                          <span>Konfigurasi</span>
+                        </button>
+
+                        {/* Toggle Active Button */}
+                        {p.isConfigured && (
+                          <button
+                            type="button"
+                            onClick={() => onToggle(p.id)}
+                            className={`p-1.5 rounded-lg border transition-colors flex items-center justify-center ${
+                              p.isActive
+                                ? "bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-600 dark:bg-amber-950/20 dark:border-amber-900/30"
+                                : "bg-green-50 hover:bg-green-100 border-green-200 text-green-600 dark:bg-green-950/20 dark:border-green-900/30"
+                            }`}
+                            title={p.isActive ? "Nonaktifkan Login" : "Aktifkan Login"}
+                          >
+                            <span className="material-symbols-outlined text-[15px]">
+                              {p.isActive ? "power_settings_new" : "play_circle"}
+                            </span>
+                          </button>
+                        )}
+
+                        {/* Reset / Delete Button */}
+                        <button
+                          type="button"
+                          onClick={() => onReset(p.id)}
+                          className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 dark:bg-red-950/20 dark:border-red-900/30 flex items-center justify-center transition-colors"
+                          title="Reset Konfigurasi"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">delete</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
 
-
+// ─── Third Party Sync Card (GDS & Kehadiran) ──────────────────────────────────
 function IntegrationCard({
   item,
   onSync,
@@ -879,7 +1139,7 @@ function IntegrationCard({
 }) {
   const [showDocs, setShowDocs] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
-  
+
   const [baseUrlInput, setBaseUrlInput] = useState(item.runtime?.baseUrl || "");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -993,7 +1253,7 @@ function IntegrationCard({
           <span className="material-symbols-outlined text-[16px]">api</span>
           <span>API Endpoint Pihak Ketiga (Developer)</span>
         </div>
-        
+
         <div className="space-y-1.5 text-xs font-mono">
           <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-[var(--surface)] border" style={{ borderColor: "var(--input-border)" }}>
             <span className="truncate"><strong>GET Master Siswa:</strong> /api/v1/students</span>
@@ -1074,31 +1334,34 @@ function IntegrationCard({
   );
 }
 
-export type ApiKey = {
-  id: string;
-  namaAplikasi: string;
-  domainPrefix: string;
-  customPrefix: string;
-  apiKey: string;
-  isActive: boolean;
-  lastUsedAt?: string | null;
-  createdAt: string;
-};
-
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export function IntegrationsPage() {
+  const [enterpriseProviders, setEnterpriseProviders] = useState<SsoProviderItem[]>([]);
+  const [openSourceProviders, setOpenSourceProviders] = useState<SsoProviderItem[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [recentSync, setRecentSync] = useState<SyncLog[]>([]);
-  const [ssoConfig, setSsoConfig] = useState<SsoConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [clearingLog, setClearingLog] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  // Modals state
+  const [editingProvider, setEditingProvider] = useState<SsoProviderItem | null>(null);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Unified Kredensia sync modal state
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncModalLoading, setSyncModalLoading] = useState(false);
+  const [syncLoadingStep, setSyncLoadingStep] = useState("");
+  const [syncTestResult, setSyncTestResult] = useState<{ connected: boolean; info?: string } | null>(null);
+  const [ssoSyncResult, setSsoSyncResult] = useState<SsoSyncResult | null>(null);
+  const [ssoSyncError, setSsoSyncError] = useState<string | null>(null);
+
   // API Keys state
   const [apiKeysList, setApiKeysList] = useState<ApiKey[]>([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(true);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -1111,17 +1374,25 @@ export function IntegrationsPage() {
   const load = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const [intRes, ssoRes, keysRes] = await Promise.all([
-        api<{ catalog: CatalogItem[]; recentSync: SyncLog[] }>("/admin/integrations"),
-        api<SsoConfig>("/admin/sso/config").catch(() => null),
+      const [ssoRes, intRes, keysRes] = await Promise.all([
+        api<{ enterprise: SsoProviderItem[]; opensource: SsoProviderItem[] }>("/admin/integrations/sso-providers").catch(() => null),
+        api<{ catalog: CatalogItem[]; recentSync: SyncLog[] }>("/admin/integrations").catch(() => null),
         api<ApiKey[]>("/admin/api-keys").catch(() => null),
       ]);
-      setCatalog(intRes.data?.catalog ?? []);
-      setRecentSync(intRes.data?.recentSync ?? []);
-      if (ssoRes?.data) setSsoConfig(ssoRes.data);
-      if (keysRes?.data) setApiKeysList(keysRes.data);
+
+      if (ssoRes?.data) {
+        setEnterpriseProviders(ssoRes.data.enterprise || []);
+        setOpenSourceProviders(ssoRes.data.opensource || []);
+      }
+      if (intRes?.data) {
+        setCatalog(intRes.data.catalog ?? []);
+        setRecentSync(intRes.data.recentSync ?? []);
+      }
+      if (keysRes?.data) {
+        setApiKeysList(keysRes.data);
+      }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Gagal memuat");
+      setMessage(e instanceof Error ? e.message : "Gagal memuat data integrasi");
     } finally {
       if (!isSilent) setLoading(false);
       setApiKeysLoading(false);
@@ -1131,6 +1402,73 @@ export function IntegrationsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const handleToggleProvider = async (id: string) => {
+    try {
+      const res = await api<{ success: boolean; message: string }>(`/admin/integrations/sso-providers/${id}/toggle`, {
+        method: "POST",
+      });
+      if (res.success) {
+        setMessage(res.message || "Status provider berhasil diperbarui");
+        load(true);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Gagal mengubah status provider");
+    }
+  };
+
+  const handleResetProvider = async (id: string) => {
+    if (!confirm(`Reset konfigurasi provider ${id}? Kredensial yang tersimpan akan dibersihkan.`)) return;
+    try {
+      const res = await api<{ success: boolean; message: string }>(`/admin/integrations/sso-providers/${id}`, {
+        method: "DELETE",
+      });
+      if (res.success) {
+        setMessage(res.message || "Konfigurasi provider berhasil direset");
+        load(true);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Gagal mereset provider");
+    }
+  };
+
+  const handleSyncKredensia = async () => {
+    setSyncModalOpen(true);
+    setSyncModalLoading(true);
+    setSyncLoadingStep("Menguji koneksi API & menyinkronkan data pengguna dari Kredensia SSO...");
+    setSyncTestResult(null);
+    setSsoSyncResult(null);
+    setSsoSyncError(null);
+
+    try {
+      const testRes = await api<{ data?: { status?: string }; meta?: { app_name?: string } }>("/admin/sso/test");
+      if (testRes.success) {
+        setSyncTestResult({
+          connected: true,
+          info: `Terhubung ke Kredensia API (Aplikasi: ${testRes.data?.meta?.app_name || "OK"})`,
+        });
+      }
+    } catch (err) {
+      setSyncTestResult({
+        connected: false,
+        info: err instanceof Error ? err.message : "Tidak dapat terhubung ke SSO API",
+      });
+    }
+
+    try {
+      const syncRes = await api<SsoSyncResult>("/admin/sso/sync-members", { method: "POST" });
+      if (syncRes.data) {
+        setSsoSyncResult(syncRes.data);
+      } else {
+        setSsoSyncError(syncRes.message || "Gagal menyinkronkan data");
+      }
+    } catch (err) {
+      setSsoSyncError(err instanceof Error ? err.message : "Gagal menyinkronkan data pengguna");
+    } finally {
+      setSyncModalLoading(false);
+      load(true);
+    }
+  };
 
   const sync = async (code: "gds" | "kehadiran") => {
     setBusy(code);
@@ -1142,7 +1480,7 @@ export function IntegrationsPage() {
       setMessage(e instanceof Error ? e.message : "Sync gagal / coming soon");
     } finally {
       setBusy(null);
-      await load();
+      await load(true);
     }
   };
 
@@ -1165,7 +1503,7 @@ export function IntegrationsPage() {
       });
       if (res.success && res.data) {
         setApiKeysList([res.data, ...apiKeysList]);
-        setShowCreateModal(false);
+        setShowCreateKeyModal(false);
         setNewAppName("");
         setNewDomain("*");
         setNewPrefix("data");
@@ -1184,7 +1522,7 @@ export function IntegrationsPage() {
     try {
       const res = await api<ApiKey>(`/admin/api-keys/${id}/toggle`, { method: "POST" });
       if (res.success && res.data) {
-        setApiKeysList(apiKeysList.map(k => k.id === id ? { ...k, isActive: res.data!.isActive } : k));
+        setApiKeysList(apiKeysList.map((k) => (k.id === id ? { ...k, isActive: res.data!.isActive } : k)));
         setMessage("✅ Status kunci API berhasil diubah!");
       }
     } catch (err) {
@@ -1197,7 +1535,7 @@ export function IntegrationsPage() {
     try {
       const res = await api(`/admin/api-keys/${id}`, { method: "DELETE" });
       if (res.success) {
-        setApiKeysList(apiKeysList.filter(k => k.id !== id));
+        setApiKeysList(apiKeysList.filter((k) => k.id !== id));
         setMessage("✅ Kunci API berhasil dihapus.");
       }
     } catch (err) {
@@ -1221,85 +1559,154 @@ export function IntegrationsPage() {
 
   const syncCards = catalog.filter((i) => i.code === "gds" || i.code === "kehadiran");
 
-  const badgeStatus = (s?: string) => {
-    if (s === "live" || s === "ready" || s === "success") return "success";
-    if (s === "coming_soon") return "pending";
-    if (s === "error" || s === "misconfigured") return "incomplete";
-    return "draft";
-  };
-
   return (
     <div className="space-y-8">
       <PageHeader
         eyebrow="Ekosistem"
         title="Integrasi"
-        description="Kredensia untuk identitas & data. GDS untuk poin. Kehadiran untuk absensi."
+        description="Penyedia Single Sign-On (SSO), Kunci API Pihak Ketiga, dan Sinkronisasi Data Sekolah."
       />
 
       {message && (
         <div
-          className="rounded-2xl px-4 py-3 text-sm"
+          className="rounded-2xl px-4 py-3 text-sm flex items-center justify-between gap-3 shadow-xs"
           style={{ background: "var(--accent-soft)", color: "var(--fg)" }}
         >
-          {message}
+          <span>{message}</span>
+          <button
+            type="button"
+            onClick={() => setMessage(null)}
+            className="w-6 h-6 rounded-md flex items-center justify-center opacity-70 hover:opacity-100"
+          >
+            <span className="material-symbols-outlined text-[16px]">close</span>
+          </button>
         </div>
       )}
 
-      {/* SSO Config Section */}
-      <section className="space-y-3">
-        <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-          Konfigurasi SSO
-        </h2>
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── SECTION: KONFIGURASI SSO (2 TABEL) ──────────────────────────────── */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      <section className="space-y-6">
+        {/* Header Section with Title and Add SSO Button */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="font-display font-bold text-lg" style={{ color: "var(--fg)" }}>
+              Konfigurasi Single Sign-On (SSO)
+            </h2>
+            <p className="text-xs app-muted mt-0.5">
+              Kelola otentikasi login terpusat dari standar perusahaan besar dan portal open-source sekolah.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-1.5 shrink-0 px-4 py-2.5 shadow-sm"
+          >
+            <span className="material-symbols-outlined text-[18px]">add_link</span>
+            <span>Tambah Integrasi SSO</span>
+          </Button>
+        </div>
+
+        {/* Metrics Row */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+          <Card className="p-4 border flex items-center gap-3.5" style={{ borderColor: "var(--divider)" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-blue-500/10 text-blue-600 dark:text-blue-400 shrink-0">
+              <span className="material-symbols-outlined text-[22px]">domain</span>
+            </div>
+            <div>
+              <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
+                {enterpriseProviders.filter((p) => p.isConfigured).length}
+              </div>
+              <div className="text-[11px] app-muted">SSO Perusahaan Besar</div>
+            </div>
+          </Card>
+
+          <Card className="p-4 border flex items-center gap-3.5" style={{ borderColor: "var(--divider)" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 shrink-0">
+              <span className="material-symbols-outlined text-[22px]">terminal</span>
+            </div>
+            <div>
+              <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
+                {openSourceProviders.filter((p) => p.isConfigured).length}
+              </div>
+              <div className="text-[11px] app-muted">SSO Open Source</div>
+            </div>
+          </Card>
+
+          <Card className="p-4 border flex items-center gap-3.5" style={{ borderColor: "var(--divider)" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-green-500/10 text-green-600 dark:text-green-400 shrink-0">
+              <span className="material-symbols-outlined text-[22px]">verified</span>
+            </div>
+            <div>
+              <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
+                {[...enterpriseProviders, ...openSourceProviders].filter((p) => p.isActive).length}
+              </div>
+              <div className="text-[11px] app-muted">Login Aktif</div>
+            </div>
+          </Card>
+
+          <Card className="p-4 border flex items-center gap-3.5" style={{ borderColor: "var(--divider)" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-purple-500/10 text-purple-600 dark:text-purple-400 shrink-0">
+              <span className="material-symbols-outlined text-[22px]">hub</span>
+            </div>
+            <div>
+              <div className="text-lg font-bold font-display" style={{ color: "var(--fg)" }}>
+                {enterpriseProviders.length + openSourceProviders.length}
+              </div>
+              <div className="text-[11px] app-muted">Total Provider</div>
+            </div>
+          </Card>
+        </div>
+
         {loading ? (
-          <Skeleton className="h-[520px] rounded-2xl" />
+          <div className="space-y-6">
+            <Skeleton className="h-64 rounded-2xl" />
+            <Skeleton className="h-64 rounded-2xl" />
+          </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <SsoConfigCard ssoConfig={ssoConfig} onReload={() => load(true)} />
-            <GoogleOAuthCard />
+          <div className="space-y-6">
+            {/* TABEL 1: SSO STANDAR PERUSAHAAN BESAR */}
+            <SsoProviderTable
+              title="Tabel 1: SSO Standar Perusahaan Besar"
+              subtitle="Google Workspace, Microsoft Azure AD / Entra ID, Apple ID, SAML 2.0 Enterprise & GitHub"
+              badgeText="Enterprise Standards"
+              providers={enterpriseProviders}
+              onConfigure={(p) => {
+                setEditingProvider(p);
+                setShowConfigModal(true);
+              }}
+              onToggle={handleToggleProvider}
+              onReset={handleResetProvider}
+            />
+
+            {/* TABEL 2: SSO OPEN SOURCE & SELF-HOSTED */}
+            <SsoProviderTable
+              title="Tabel 2: SSO Open Source & Self-Hosted"
+              subtitle="Kredensia SSO (Sekolah), Keycloak, Authentik, Authelia, Casdoor, OpenLDAP & Generic OIDC"
+              badgeText="Open Source & Self-Hosted"
+              providers={openSourceProviders}
+              onConfigure={(p) => {
+                setEditingProvider(p);
+                setShowConfigModal(true);
+              }}
+              onToggle={handleToggleProvider}
+              onReset={handleResetProvider}
+              onSyncKredensia={handleSyncKredensia}
+            />
           </div>
         )}
       </section>
 
-      {/* Kunci API Section */}
-      <section className="space-y-4">
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── SECTION: KUNCI API REST UNTUK KLIEN ─────────────────────────────── */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      <section className="space-y-4 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
         <div className="flex flex-col gap-1">
           <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-            Kunci API
+            Kunci API REST SIAKAD
           </h2>
           <p className="text-xs app-muted">Kelola kunci API untuk integrasi data oleh aplikasi pihak ketiga.</p>
-        </div>
-
-        {/* Metrics Row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="p-4 flex items-center gap-4 bg-white dark:bg-zinc-900 border" style={{ borderColor: "var(--divider)" }}>
-            <span className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: "rgba(59, 130, 246, 0.1)" }}>
-              <span className="material-symbols-outlined text-blue-500 text-[26px]">key</span>
-            </span>
-            <div>
-              <div className="text-xl font-bold font-display" style={{ color: "var(--fg)" }}>{apiKeysList.length}</div>
-              <div className="text-xs app-muted">Total Kunci</div>
-            </div>
-          </Card>
-          
-          <Card className="p-4 flex items-center gap-4 bg-white dark:bg-zinc-900 border" style={{ borderColor: "var(--divider)" }}>
-            <span className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: "rgba(34, 197, 94, 0.1)" }}>
-              <span className="material-symbols-outlined text-green-500 text-[26px]">check_circle</span>
-            </span>
-            <div>
-              <div className="text-xl font-bold font-display" style={{ color: "var(--fg)" }}>{apiKeysList.filter(k => k.isActive).length}</div>
-              <div className="text-xs app-muted">Kunci Aktif</div>
-            </div>
-          </Card>
-
-          <Card className="p-4 flex items-center gap-4 bg-white dark:bg-zinc-900 border" style={{ borderColor: "var(--divider)" }}>
-            <span className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: "rgba(245, 158, 11, 0.1)" }}>
-              <span className="material-symbols-outlined text-amber-500 text-[26px]">history</span>
-            </span>
-            <div>
-              <div className="text-xl font-bold font-display" style={{ color: "var(--fg)" }}>{apiKeysList.filter(k => k.lastUsedAt).length}</div>
-              <div className="text-xs app-muted">Pernah Digunakan</div>
-            </div>
-          </Card>
         </div>
 
         {/* Search & Actions Bar */}
@@ -1315,9 +1722,9 @@ export function IntegrationsPage() {
               style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
             />
           </div>
-          <Button size="sm" variant="primary" onClick={() => setShowCreateModal(true)} className="flex items-center gap-1.5 shrink-0 px-4 py-2">
+          <Button size="sm" variant="primary" onClick={() => setShowCreateKeyModal(true)} className="flex items-center gap-1.5 shrink-0 px-4 py-2">
             <span className="material-symbols-outlined text-[16px]">add</span>
-            Buat Kunci
+            Buat Kunci API
           </Button>
         </Card>
 
@@ -1328,7 +1735,7 @@ export function IntegrationsPage() {
               <thead>
                 <tr className="border-b" style={{ borderColor: "var(--divider)", background: "var(--hover)" }}>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Nama Aplikasi</th>
-                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Domain Yang Diizinkan</th>
+                  <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Domain Diizinkan</th>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Prefix</th>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">API Key</th>
                   <th className="px-5 py-3 font-bold uppercase tracking-wider text-[10px] app-muted">Status</th>
@@ -1347,7 +1754,7 @@ export function IntegrationsPage() {
                   </tr>
                 ) : (
                   apiKeysList
-                    .filter(k => k.namaAplikasi.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .filter((k) => k.namaAplikasi.toLowerCase().includes(searchQuery.toLowerCase()))
                     .map((key) => {
                       const isCopied = copiedKey === key.id;
                       const maskedKey = key.apiKey.slice(0, 12) + "..." + key.apiKey.slice(-4);
@@ -1356,12 +1763,12 @@ export function IntegrationsPage() {
                           <td className="px-5 py-3.5 font-bold" style={{ color: "var(--fg)" }}>{key.namaAplikasi}</td>
                           <td className="px-5 py-3.5 font-mono text-[11px]" style={{ color: "var(--muted)" }}>{key.domainPrefix}</td>
                           <td className="px-5 py-3.5">
-                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-mono font-semibold bg-blue-550 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30">
+                            <span className="px-2 py-0.5 rounded-lg text-[10px] font-mono font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900/30">
                               {key.customPrefix}
                             </span>
                           </td>
                           <td className="px-5 py-3.5">
-                            <div className="flex items-center gap-1.5 font-mono text-[11px] bg-zinc-50 dark:bg-zinc-900/40 px-2 py-1 rounded-lg border border-zinc-100 dark:border-zinc-800 w-fit">
+                            <div className="flex items-center gap-1.5 font-mono text-[11px] bg-zinc-50 dark:bg-zinc-900/40 px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-800 w-fit">
                               <span style={{ color: "var(--fg)" }}>{maskedKey}</span>
                               <button
                                 type="button"
@@ -1422,112 +1829,16 @@ export function IntegrationsPage() {
               </tbody>
             </table>
           </div>
-          
-          {/* Docs Section */}
-          <div className="p-5 border-t bg-zinc-50/50 dark:bg-zinc-900/20 text-xs text-zinc-500 leading-relaxed" style={{ borderColor: "var(--divider)" }}>
-            <div className="font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[16px] text-zinc-400">info</span>
-              PANDUAN INTEGRASI REST API SIAKAD
-            </div>
-            <div className="grid md:grid-cols-3 gap-4 font-normal">
-              <div className="flex items-start gap-2">
-                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 text-[10px] font-bold">1</span>
-                <span>Buat kunci API untuk aplikasi klien dan simpan token dengan aman.</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 text-[10px] font-bold">2</span>
-                <span>Kirim request dengan header <code className="px-1.5 py-0.5 bg-zinc-200/50 dark:bg-zinc-800 rounded font-mono">Authorization: Bearer &lt;kunci&gt;</code> ke endpoint API SIAKAD.</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 text-[10px] font-bold">3</span>
-                <span>Mendukung filter query parameter seperti <code className="px-1.5 py-0.5 bg-zinc-200/50 dark:bg-zinc-800 rounded font-mono">?status=siswa</code> atau <code className="px-1.5 py-0.5 bg-zinc-200/50 dark:bg-zinc-800 rounded font-mono">?limit=100</code>.</span>
-              </div>
-            </div>
-          </div>
         </Card>
       </section>
 
-      {/* Create Api Key Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-          <form
-            onSubmit={handleCreateApiKey}
-            className="w-full max-w-md rounded-2xl p-6 border shadow-2xl flex flex-col gap-4 text-left animate-scaleUp"
-            style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
-          >
-            <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">vpn_key</span>
-                <h3 className="font-display font-bold text-base">Buat Kunci API Baru</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
-              >
-                <span className="material-symbols-outlined text-[18px]">close</span>
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Nama Aplikasi / Klien</label>
-              <input
-                type="text"
-                value={newAppName}
-                onChange={(e) => setNewAppName(e.target.value)}
-                placeholder="Contoh: Aplikasi Presensi PASTi"
-                required
-                className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2"
-                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Prefix Custom Token (Maks. 5 Karakter)</label>
-              <input
-                type="text"
-                value={newPrefix}
-                onChange={(e) => setNewPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5))}
-                placeholder="Contoh: data atau pasti"
-                maxLength={5}
-                required
-                className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2"
-                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
-              />
-              <p className="text-[10px] app-muted">Hanya huruf kecil dan angka. Prefiks token Anda (Contoh: <code>data_...</code>)</p>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Domain / IP Yang Diizinkan</label>
-              <input
-                type="text"
-                value={newDomain}
-                onChange={(e) => setNewDomain(e.target.value)}
-                placeholder="* atau localhost atau domain.com"
-                required
-                className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2"
-                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
-              />
-              <p className="text-[10px] app-muted">Gunakan <code>*</code> untuk memperbolehkan semua domain host.</p>
-            </div>
-
-            <div className="pt-2 flex justify-end gap-2 border-t mt-2" style={{ borderColor: "var(--divider)" }}>
-              <Button type="button" size="sm" variant="secondary" onClick={() => setShowCreateModal(false)}>
-                Batal
-              </Button>
-              <Button type="submit" size="sm" variant="primary" disabled={createSubmitting}>
-                {createSubmitting ? "Membuat..." : "Simpan Kunci"}
-              </Button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Sync Section */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── SECTION: SINKRONISASI DATA GDS & KEHADIRAN ──────────────────────── */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
       {syncCards.length > 0 && (
-        <section className="space-y-3">
+        <section className="space-y-3 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
           <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-            Sinkronisasi Data
+            Sinkronisasi Pihak Ketiga (GDS &amp; Kehadiran)
           </h2>
           <div className="grid md:grid-cols-2 gap-4 md:gap-5">
             {loading
@@ -1545,7 +1856,9 @@ export function IntegrationsPage() {
         </section>
       )}
 
-      {/* Sync Logs */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── SECTION: LOG SINKRONISASI ───────────────────────────────────────── */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--divider)" }}>
           <div>
@@ -1581,103 +1894,135 @@ export function IntegrationsPage() {
           ) : recentSync.length === 0 ? (
             <div className="p-6 text-sm app-muted text-center">Belum ada log sinkronisasi.</div>
           ) : (
-            recentSync.map((s) => {
-              const summary = s.payloadSummary;
-              const isSso = s.source === "kredensia" || s.source === "sso";
-              const fields = summary?.fieldsImported ?? [];
-              const errors = summary?.errors ?? [];
-
-              return (
-                <div
-                  key={s.id}
-                  className="px-5 py-4 border-b app-divider last:border-0 row-hover flex flex-col gap-2.5"
-                >
-                  {/* Top line: Source tag, message, status, time */}
-                  <div className="flex items-start justify-between gap-3 text-sm">
-                    <div className="flex flex-wrap items-center gap-2 min-w-0">
-                      <span
-                        className="font-bold text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-md shrink-0"
-                        style={{
-                          background: isSso
-                            ? "var(--accent-soft)"
-                            : "var(--hover)",
-                          color: isSso ? "var(--accent)" : "var(--fg)",
-                        }}
-                      >
-                        {isSso ? "KREDENSIA SSO" : s.source.toUpperCase()}
-                      </span>
-                      <span className="font-medium text-xs leading-snug">
-                        {summary?.message || `Sinkronisasi ${s.source}`}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge status={badgeStatus(s.status)}>{s.status}</Badge>
-                      <span className="text-[11px] app-muted whitespace-nowrap">
-                        {new Date(s.createdAt).toLocaleString("id-ID")}
-                      </span>
-                    </div>
+            recentSync.map((s) => (
+              <div
+                key={s.id}
+                className="px-5 py-4 border-b app-divider last:border-0 row-hover flex flex-col gap-2"
+              >
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600">
+                      {s.source}
+                    </span>
+                    <span className="font-medium text-xs" style={{ color: "var(--fg)" }}>
+                      {s.payloadSummary?.message || "Sinkronisasi selesai"}
+                    </span>
                   </div>
-
-                  {/* Metrics Pills (if total available) */}
-                  {summary?.total !== undefined && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="app-muted">Metrics:</span>
-                      <span className="px-2 py-0.5 rounded-lg border font-mono text-[11px]" style={{ borderColor: "var(--divider)" }}>
-                        Total: <strong>{summary.total}</strong>
-                      </span>
-                      <span className="px-2 py-0.5 rounded-lg border font-mono text-[11px] text-[var(--accent)]" style={{ borderColor: "var(--accent-soft)", background: "var(--accent-soft)" }}>
-                        Berhasil: <strong>{summary.success ?? 0}</strong>
-                      </span>
-                      {(summary.failed ?? 0) > 0 && (
-                        <span className="px-2 py-0.5 rounded-lg border font-mono text-[11px] text-error" style={{ borderColor: "color-mix(in srgb, #ef4444 30%, transparent)", background: "color-mix(in srgb, #ef4444 10%, transparent)" }}>
-                          Gagal: <strong>{summary.failed}</strong>
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Imported Fields List */}
-                  {fields.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1 text-[11px]">
-                      <span className="app-muted text-[10px] uppercase font-semibold mr-1">Field ter-sync:</span>
-                      {fields.map((f) => (
-                        <span
-                          key={f}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-mono"
-                          style={{ background: "var(--hover)", color: "var(--muted)" }}
-                        >
-                          {f}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Error Breakdown if any */}
-                  {errors.length > 0 && (
-                    <details className="mt-1 text-xs">
-                      <summary className="cursor-pointer text-error font-medium hover:underline flex items-center gap-1 text-[11px]">
-                        <span className="material-symbols-outlined text-[14px]">error</span>
-                        Lihat {errors.length} detail data gagal
-                      </summary>
-                      <div
-                        className="mt-2 p-3 rounded-xl border space-y-1 font-mono text-[11px]"
-                        style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
-                      >
-                        {errors.map((err, idx) => (
-                          <div key={idx} className="text-error truncate">
-                            • [{err.id.slice(0, 8)}] {err.message}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )}
+                  <span className="text-[11px] app-muted">
+                    {new Date(s.createdAt).toLocaleString("id-ID")}
+                  </span>
                 </div>
-              );
-            })
+              </div>
+            ))
           )}
         </div>
       </Card>
+
+      {/* ─── MODALS ──────────────────────────────────────────────────────────── */}
+      {/* 1. Modal Edit Config */}
+      <SsoConfigModal
+        provider={editingProvider}
+        isOpen={showConfigModal}
+        onClose={() => {
+          setShowConfigModal(false);
+          setEditingProvider(null);
+        }}
+        onSaved={() => load(true)}
+      />
+
+      {/* 2. Modal Create SSO Integration */}
+      <CreateSsoModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onCreated={() => load(true)}
+      />
+
+      {/* 3. Modal Kredensia Sync Progress */}
+      <UnifiedSsoModal
+        isOpen={syncModalOpen}
+        loading={syncModalLoading}
+        loadingStep={syncLoadingStep}
+        testStatus={syncTestResult}
+        syncResult={ssoSyncResult}
+        syncError={ssoSyncError}
+        onClose={() => setSyncModalOpen(false)}
+      />
+
+      {/* 4. Modal Create API Key */}
+      {showCreateKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+          <form
+            onSubmit={handleCreateApiKey}
+            className="w-full max-w-md rounded-2xl p-6 border shadow-2xl flex flex-col gap-4 text-left animate-scaleUp"
+            style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
+          >
+            <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">vpn_key</span>
+                <h3 className="font-display font-bold text-base">Buat Kunci API Baru</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateKeyModal(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold">Nama Aplikasi / Klien</label>
+              <input
+                type="text"
+                value={newAppName}
+                onChange={(e) => setNewAppName(e.target.value)}
+                placeholder="Contoh: Aplikasi Presensi PASTi"
+                required
+                className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold">Prefix Custom Token (Maks. 5 Karakter)</label>
+              <input
+                type="text"
+                value={newPrefix}
+                onChange={(e) => setNewPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5))}
+                placeholder="Contoh: data atau pasti"
+                maxLength={5}
+                required
+                className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
+              />
+              <p className="text-[10px] app-muted">Hanya huruf kecil dan angka. Prefiks token Anda (Contoh: <code>data_...</code>)</p>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold">Domain / IP Yang Diizinkan</label>
+              <input
+                type="text"
+                value={newDomain}
+                onChange={(e) => setNewDomain(e.target.value)}
+                placeholder="* atau localhost atau domain.com"
+                required
+                className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
+              />
+              <p className="text-[10px] app-muted">Gunakan <code>*</code> untuk memperbolehkan semua domain host.</p>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2 border-t mt-2" style={{ borderColor: "var(--divider)" }}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setShowCreateKeyModal(false)}>
+                Batal
+              </Button>
+              <Button type="submit" size="sm" variant="primary" disabled={createSubmitting}>
+                {createSubmitting ? "Membuat..." : "Simpan Kunci"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

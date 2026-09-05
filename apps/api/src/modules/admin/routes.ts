@@ -28,6 +28,7 @@ import {
   teacherJournals,
   apiKeys,
   assessmentComponents,
+  systemSettings,
 } from "../../db/schema/index.js";
 import { requireAuth, type AuthVariables } from "../../middlewares/auth.js";
 import { requireRoles } from "../../middlewares/rbac.js";
@@ -1415,6 +1416,438 @@ adminRoutes.put("/integrations/google-config", async (c) => {
       clientId: body.clientId,
       secretUpdated: Boolean(body.clientSecret?.trim()),
     },
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ─── SSO PROVIDERS MANAGEMENT (Enterprise & Open Source Tables) ───────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+type SsoProviderStored = {
+  id: string;
+  category: "enterprise" | "opensource";
+  name: string;
+  shortName: string;
+  description: string;
+  protocol: string;
+  icon: string;
+  baseUrl?: string | null;
+  clientId?: string | null;
+  clientSecret?: string | null;
+  apiKey?: string | null;
+  apiBaseUrl?: string | null;
+  tenantId?: string | null;
+  discoveryUrl?: string | null;
+  bindDn?: string | null;
+  scopes?: string | null;
+  isActive?: boolean;
+  isCustom?: boolean;
+  lastTestedAt?: string | null;
+  lastSyncAt?: string | null;
+};
+
+async function getStoredSsoProviders(): Promise<Record<string, SsoProviderStored>> {
+  try {
+    const [row] = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, "sso_providers_config"))
+      .limit(1);
+    if (!row?.value) return {};
+    return JSON.parse(row.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveStoredSsoProviders(data: Record<string, SsoProviderStored>) {
+  await db
+    .insert(systemSettings)
+    .values({
+      key: "sso_providers_config",
+      value: JSON.stringify(data),
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: {
+        value: JSON.stringify(data),
+        updatedAt: new Date(),
+      },
+    });
+}
+
+/** GET: Daftar semua provider SSO (Enterprise & Open Source) */
+adminRoutes.get("/integrations/sso-providers", async (c) => {
+  const origin = getSsoRequestOrigin();
+  const stored = await getStoredSsoProviders();
+
+  // 1. Enterprise Standard Providers
+  const enterpriseDefaults: SsoProviderStored[] = [
+    {
+      id: "google",
+      category: "enterprise",
+      name: "Google Workspace (OAuth 2.0)",
+      shortName: "Google",
+      description: "Otentikasi Akun Google Siswa, Guru, & Staf (@sekolah.sch.id atau publik)",
+      protocol: "OAuth 2.0 / OIDC",
+      icon: "google",
+      clientId: getGoogleClientId() || null,
+      isActive: isGoogleConfigured(),
+    },
+    {
+      id: "microsoft",
+      category: "enterprise",
+      name: "Microsoft 365 & Azure AD (Entra ID)",
+      shortName: "Microsoft",
+      description: "Single Sign-On akun Microsoft Education / Office 365 organisasi",
+      protocol: "OIDC / OAuth 2.0",
+      icon: "microsoft",
+      isActive: false,
+    },
+    {
+      id: "apple",
+      category: "enterprise",
+      name: "Apple Sign-In (Apple ID)",
+      shortName: "Apple",
+      description: "Masuk aman menggunakan ID Apple untuk perangkat iOS / macOS / Web",
+      protocol: "OAuth 2.0 / OIDC",
+      icon: "apple",
+      isActive: false,
+    },
+    {
+      id: "saml_okta",
+      category: "enterprise",
+      name: "Okta / Auth0 / SAML 2.0 Enterprise",
+      shortName: "SAML 2.0 / Okta",
+      description: "Federasi identitas standar SAML 2.0 Enterprise IdP (Okta, Auth0, PingIdentity)",
+      protocol: "SAML 2.0 / OIDC",
+      icon: "security",
+      isActive: false,
+    },
+    {
+      id: "github",
+      category: "enterprise",
+      name: "GitHub / GitLab Enterprise",
+      shortName: "GitHub",
+      description: "Otentikasi pengembang & staf IT via akun GitHub atau GitLab",
+      protocol: "OAuth 2.0",
+      icon: "code",
+      isActive: false,
+    },
+  ];
+
+  // 2. Open Source & Self-Hosted Providers
+  const openSourceDefaults: SsoProviderStored[] = [
+    {
+      id: "kredensia",
+      category: "opensource",
+      name: "Kredensia SSO (SINTESA SSO Sekolah)",
+      shortName: "Kredensia",
+      description: "Portal SSO Sekolah & Manajemen Identitas Terpusat dengan Sinkronisasi Rombel/Tahun Pelajaran",
+      protocol: "OAuth 2.0 + REST API",
+      icon: "lock_person",
+      baseUrl: env.SSO_BASE_URL || null,
+      clientId: env.SSO_CLIENT_ID || null,
+      apiBaseUrl: env.SSO_API_BASE_URL || null,
+      isActive: isSsoConfigured(),
+    },
+    {
+      id: "keycloak",
+      category: "opensource",
+      name: "Keycloak Identity & Access Management (Red Hat)",
+      shortName: "Keycloak",
+      description: "Open Source IAM Server standar industri untuk manajemen akses dan realm otentikasi",
+      protocol: "OpenID Connect (OIDC) / SAML 2.0",
+      icon: "vpn_key",
+      isActive: false,
+    },
+    {
+      id: "authentik",
+      category: "opensource",
+      name: "Authentik Self-Hosted IdP",
+      shortName: "Authentik",
+      description: "Penyedia identitas modern open-source yang fleksibel untuk integrasi aplikasi internal",
+      protocol: "OIDC / OAuth 2.0",
+      icon: "shield",
+      isActive: false,
+    },
+    {
+      id: "authelia",
+      category: "opensource",
+      name: "Authelia Single Sign-On & 2FA",
+      shortName: "Authelia",
+      description: "Portal otentikasi ringan dan proxy forward auth open-source",
+      protocol: "OIDC (OpenID Connect)",
+      icon: "verified_user",
+      isActive: false,
+    },
+    {
+      id: "casdoor",
+      category: "opensource",
+      name: "Casdoor UI-First IAM Platform",
+      shortName: "Casdoor",
+      description: "Platform IAM open-source berbasis web dengan dukungan multi-tenant dan UI modern",
+      protocol: "OAuth 2.0 / OIDC / SAML",
+      icon: "door_front",
+      isActive: false,
+    },
+    {
+      id: "ldap",
+      category: "opensource",
+      name: "OpenLDAP / FreeIPA / Samba Active Directory",
+      shortName: "LDAP / FreeIPA",
+      description: "Direktori identitas pengguna berbasis protokol LDAP untuk jaringan lokal sekolah",
+      protocol: "LDAP / LDAPS Protocol",
+      icon: "folder_shared",
+      isActive: false,
+    },
+    {
+      id: "generic_oidc",
+      category: "opensource",
+      name: "Custom Generic OIDC (OpenID Connect)",
+      shortName: "Generic OIDC",
+      description: "Integrasikan server OpenID Connect kustom apapun melalui Discovery Endpoint",
+      protocol: "OpenID Connect (OIDC)",
+      icon: "extension",
+      isActive: false,
+    },
+  ];
+
+  // Callback URL mapping
+  const getRedirectUri = (id: string) => {
+    if (id === "kredensia") return `${origin}/auth/callback`;
+    if (id === "google") return `${origin}/auth/google/callback`;
+    return `${origin}/auth/${id}/callback`;
+  };
+
+  const mapItem = (def: SsoProviderStored) => {
+    const s = stored[def.id] || {};
+    const merged = { ...def, ...s };
+    
+    // Live env overrides for live active services
+    if (def.id === "google") {
+      merged.clientId = getGoogleClientId() || merged.clientId || null;
+      merged.isActive = s.isActive ?? isGoogleConfigured();
+    }
+    if (def.id === "kredensia") {
+      merged.baseUrl = env.SSO_BASE_URL || merged.baseUrl || null;
+      merged.clientId = env.SSO_CLIENT_ID || merged.clientId || null;
+      merged.apiBaseUrl = env.SSO_API_BASE_URL || merged.apiBaseUrl || null;
+      merged.isActive = s.isActive ?? isSsoConfigured();
+    }
+
+    const isConfigured = def.id === "kredensia"
+      ? isSsoConfigured()
+      : def.id === "google"
+      ? isGoogleConfigured()
+      : Boolean(merged.clientId || merged.baseUrl || merged.bindDn);
+
+    return {
+      ...merged,
+      redirectUri: getRedirectUri(def.id),
+      isConfigured,
+      hasSecret: Boolean(merged.clientSecret || (def.id === "google" && getGoogleClientSecret())),
+      hasApiKey: Boolean(merged.apiKey || (def.id === "kredensia" && env.SSO_API_KEY)),
+      clientSecret: undefined, // never leak secret in GET list
+      apiKey: undefined, // never leak api key in GET list
+    };
+  };
+
+  const enterpriseList = enterpriseDefaults.map(mapItem);
+  const openSourceList = openSourceDefaults.map(mapItem);
+
+  // Append any custom added providers from stored
+  for (const [key, val] of Object.entries(stored)) {
+    if (!enterpriseDefaults.some(d => d.id === key) && !openSourceDefaults.some(d => d.id === key)) {
+      const item = {
+        ...val,
+        redirectUri: getRedirectUri(val.id),
+        isConfigured: Boolean(val.clientId || val.baseUrl),
+        hasSecret: Boolean(val.clientSecret),
+        hasApiKey: Boolean(val.apiKey),
+        clientSecret: undefined,
+        apiKey: undefined,
+      };
+      if (val.category === "enterprise") {
+        enterpriseList.push(item);
+      } else {
+        openSourceList.push(item);
+      }
+    }
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      enterprise: enterpriseList,
+      opensource: openSourceList,
+    },
+  });
+});
+
+/** PUT: Simpan / Update konfigurasi provider SSO */
+adminRoutes.put("/integrations/sso-providers/:id", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const stored = await getStoredSsoProviders();
+
+  // If google, sync to .env as well
+  if (id === "google" && body.clientId) {
+    const envPath = new URL("../../../.env", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
+    const fs = await import("fs/promises");
+    let content = "";
+    try {
+      content = await fs.readFile(envPath, "utf-8");
+    } catch {}
+    const setEnvLine = (text: string, key: string, value: string): string => {
+      const regex = new RegExp(`^(${key}=).*$`, "m");
+      if (regex.test(text)) return text.replace(regex, `$1${value}`);
+      return text + `\n${key}=${value}`;
+    };
+    content = setEnvLine(content, "GOOGLE_CLIENT_ID", String(body.clientId).trim());
+    process.env.GOOGLE_CLIENT_ID = String(body.clientId).trim();
+    if (body.clientSecret && String(body.clientSecret).trim() && !String(body.clientSecret).includes("•")) {
+      content = setEnvLine(content, "GOOGLE_CLIENT_SECRET", String(body.clientSecret).trim());
+      process.env.GOOGLE_CLIENT_SECRET = String(body.clientSecret).trim();
+    }
+    await fs.writeFile(envPath, content, "utf-8");
+  }
+
+  // If kredensia, sync to .env as well
+  if (id === "kredensia" && body.baseUrl && body.clientId) {
+    const envPath = new URL("../../../.env", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
+    const fs = await import("fs/promises");
+    let content = "";
+    try {
+      content = await fs.readFile(envPath, "utf-8");
+    } catch {}
+    const setEnvLine = (text: string, key: string, value: string): string => {
+      const regex = new RegExp(`^(${key}=).*$`, "m");
+      if (regex.test(text)) return text.replace(regex, `$1${value}`);
+      return text + `\n${key}=${value}`;
+    };
+    const cleanBaseUrl = cleanUrlProtocol(String(body.baseUrl).trim());
+    content = setEnvLine(content, "SSO_BASE_URL", cleanBaseUrl);
+    process.env.SSO_BASE_URL = cleanBaseUrl;
+    content = setEnvLine(content, "SSO_CLIENT_ID", String(body.clientId).trim());
+    process.env.SSO_CLIENT_ID = String(body.clientId).trim();
+    process.env.SSO_APP_ID = String(body.clientId).trim();
+
+    if (body.clientSecret && String(body.clientSecret).trim() && !String(body.clientSecret).includes("•")) {
+      content = setEnvLine(content, "SSO_CLIENT_SECRET", String(body.clientSecret).trim());
+      process.env.SSO_CLIENT_SECRET = String(body.clientSecret).trim();
+    }
+    if (body.apiKey && String(body.apiKey).trim() && !String(body.apiKey).includes("•")) {
+      content = setEnvLine(content, "SSO_API_KEY", String(body.apiKey).trim());
+      process.env.SSO_API_KEY = String(body.apiKey).trim();
+    }
+    let apiBase = body.apiBaseUrl ? cleanUrlProtocol(String(body.apiBaseUrl).trim()) : `${cleanBaseUrl}/api/v1`;
+    content = setEnvLine(content, "SSO_API_BASE_URL", apiBase);
+    process.env.SSO_API_BASE_URL = apiBase;
+    await fs.writeFile(envPath, content, "utf-8");
+  }
+
+  const existing = stored[id] || { id, category: body.category || "opensource" };
+  const updated: SsoProviderStored = {
+    ...existing,
+    ...body,
+    id,
+    isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
+    lastTestedAt: new Date().toISOString(),
+  };
+
+  // Keep existing secrets if incoming is masked or empty
+  if (!body.clientSecret || String(body.clientSecret).includes("•")) {
+    updated.clientSecret = existing.clientSecret;
+  }
+  if (!body.apiKey || String(body.apiKey).includes("•")) {
+    updated.apiKey = existing.apiKey;
+  }
+
+  stored[id] = updated;
+  await saveStoredSsoProviders(stored);
+
+  return c.json({
+    success: true,
+    message: `Konfigurasi SSO ${updated.shortName || id} berhasil disimpan!`,
+    data: {
+      id,
+      isConfigured: true,
+      isActive: updated.isActive,
+    },
+  });
+});
+
+/** POST: Toggle aktif / nonaktif SSO Provider */
+adminRoutes.post("/integrations/sso-providers/:id/toggle", async (c) => {
+  const id = c.req.param("id");
+  const stored = await getStoredSsoProviders();
+  const existing = stored[id] || { id, category: "enterprise", isActive: false };
+  const newActive = !existing.isActive;
+  stored[id] = { ...existing, id, isActive: newActive };
+  await saveStoredSsoProviders(stored);
+
+  return c.json({
+    success: true,
+    message: `Status provider ${existing.name || id} diubah menjadi ${newActive ? "AKTIF" : "NONAKTIF"}`,
+    data: { id, isActive: newActive },
+  });
+});
+
+/** DELETE: Reset / Hapus SSO Provider */
+adminRoutes.delete("/integrations/sso-providers/:id", async (c) => {
+  const id = c.req.param("id");
+  const stored = await getStoredSsoProviders();
+  if (stored[id]) {
+    delete stored[id];
+    await saveStoredSsoProviders(stored);
+  }
+  return c.json({
+    success: true,
+    message: `Konfigurasi provider ${id} berhasil direset.`,
+  });
+});
+
+/** POST: Tambah SSO Provider Baru (Custom) */
+adminRoutes.post("/integrations/sso-providers", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (!body.name || !body.category) {
+    return c.json({ success: false, message: "Nama provider dan kategori wajib diisi" }, 400);
+  }
+
+  const id = (body.id || `custom_${Date.now()}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const stored = await getStoredSsoProviders();
+
+  const newProvider: SsoProviderStored = {
+    id,
+    category: body.category === "enterprise" ? "enterprise" : "opensource",
+    name: body.name,
+    shortName: body.shortName || body.name,
+    description: body.description || `Integrasi SSO ${body.name}`,
+    protocol: body.protocol || "OAuth 2.0 / OIDC",
+    icon: body.icon || "hub",
+    baseUrl: body.baseUrl || null,
+    clientId: body.clientId || null,
+    clientSecret: body.clientSecret || null,
+    apiKey: body.apiKey || null,
+    apiBaseUrl: body.apiBaseUrl || null,
+    tenantId: body.tenantId || null,
+    discoveryUrl: body.discoveryUrl || null,
+    bindDn: body.bindDn || null,
+    scopes: body.scopes || "openid email profile",
+    isActive: true,
+    isCustom: true,
+    lastTestedAt: new Date().toISOString(),
+  };
+
+  stored[id] = newProvider;
+  await saveStoredSsoProviders(stored);
+
+  return c.json({
+    success: true,
+    message: `Integrasi SSO baru "${newProvider.name}" berhasil ditambahkan!`,
+    data: newProvider,
   });
 });
 
