@@ -490,6 +490,17 @@ app.get("/auth/google/callback", (c) => {
   return c.redirect(`/api/auth/google/callback${query}`);
 });
 
+// Intercept SSO callback when accessed as /auth/callback?token=...
+app.get("/auth/callback", async (c, next) => {
+  const token = c.req.query("token");
+  if (token) {
+    const urlString = c.req.url || "";
+    const query = urlString.includes("?") ? urlString.slice(urlString.indexOf("?")) : "";
+    return c.redirect(`/api/auth/sso/callback${query}`);
+  }
+  await next();
+});
+
 // Static file serving for React Frontend
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
