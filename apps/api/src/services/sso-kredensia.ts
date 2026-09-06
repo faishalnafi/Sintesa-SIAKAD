@@ -149,21 +149,29 @@ export async function verifySsoToken(token: string): Promise<SsoJwtPayload> {
   }
 
   let lastErr: unknown;
+  let hasExpired = false;
+
   for (const secret of secrets) {
     try {
       const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), {
         algorithms: ["HS256"],
+        clockTolerance: 120, // 2 minutes tolerance for server clock differences
       });
       return parseSsoPayload(payload as Record<string, unknown>);
     } catch (err) {
+      if (err instanceof Error && (/expir/i.test(err.message) || (err as { code?: string }).code === "ERR_JWT_EXPIRED")) {
+        hasExpired = true;
+        break;
+      }
       lastErr = err;
       // try next secret
     }
   }
 
-  if (lastErr instanceof Error && /expir/i.test(lastErr.message)) {
-    throw new Error("Token SSO kedaluwarsa (TTL 5 menit)");
+  if (hasExpired) {
+    throw new Error("Token SSO sudah kedaluwarsa (masa berlaku 5 menit). Silakan klik tombol 'Masuk dengan Kredensia SSO' kembali untuk login baru.");
   }
+
   throw new Error(
     "Tanda tangan JWT tidak valid. Isi SSO_JWT_SECRET di apps/api/.env dengan JWT_SECRET server Kredensia (bukan selalu client_secret aplikasi).",
   );
