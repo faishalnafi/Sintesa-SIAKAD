@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Swal from "sweetalert2";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
@@ -9,7 +9,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
 import { useAuthStore } from "@/store/auth";
-import { downloadGradeTemplate } from "@/lib/gradeTemplateExport";
+import { downloadGradeTemplate, parseAndValidateGradeTemplate } from "@/lib/gradeTemplateExport";
 
 type Klass = { id: string; name: string };
 type Subject = { id: string; name: string };
@@ -55,6 +55,8 @@ export function GuruNilaiPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubjectLocked, setIsSubjectLocked] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const pager = usePagination(rows, { resetKey: `${classId}|${subjectId}` });
 
   const { user } = useAuthStore();
@@ -347,6 +349,114 @@ export function GuruNilaiPage() {
     }
   };
 
+  const handleUploadTemplate = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!user) {
+      Swal.fire({
+        icon: "warning",
+        title: "Sesi Tidak Ditemukan",
+        text: "Silakan login kembali untuk mengunggah template nilai.",
+        confirmButtonColor: "#3b82f6",
+      });
+      return;
+    }
+
+    if (!classId || !subjectId || rows.length === 0) {
+      Swal.fire({
+        icon: "info",
+        title: "Tabel Belum Siap",
+        text: "Pilih kelas dan mata pelajaran yang memiliki daftar siswa terlebih dahulu.",
+        confirmButtonColor: "#3b82f6",
+      });
+      return;
+    }
+
+    setImporting(true);
+    setMessage(null);
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const clsName = selectedClass?.name || "Kelas";
+      const subName = selectedSubject?.name || "Mapel";
+
+      const result = parseAndValidateGradeTemplate(arrayBuffer, {
+        user,
+        classId,
+        className: clsName,
+        subjectId,
+        subjectName: subName,
+        currentRows: rows,
+        components: assessmentComponents,
+      });
+
+      if (!result.success) {
+        Swal.fire({
+          icon: "error",
+          title: "Validasi Template Gagal",
+          html: result.error || "Gagal memproses file template.",
+          confirmButtonColor: "#ef4444",
+        });
+        return;
+      }
+
+      if (!result.updatedRows || result.updatedRows.length === 0) {
+        Swal.fire({
+          icon: "warning",
+          title: "Tidak Ada Data",
+          text: "Tidak ada baris nilai yang dapat diperbarui dari berkas tersebut.",
+          confirmButtonColor: "#f59e0b",
+        });
+        return;
+      }
+
+      // 1. Perbarui state tabel seketika agar terlihat langsung oleh guru
+      setRows(result.updatedRows);
+
+      // 2. Simpan otomatis ke draft server
+      try {
+        await api("/teacher/grades/draft", {
+          method: "PATCH",
+          body: JSON.stringify({
+            classId,
+            subjectId,
+            items: result.updatedRows.map((r) => ({
+              studentId: r.studentId,
+              uh1: r.uh1,
+              t1: r.t1,
+              sts: r.sts,
+              uh2: r.uh2,
+              t2: r.t2,
+            })),
+          }),
+        });
+      } catch (err) {
+        console.warn("Auto save draft after import warning:", err);
+      }
+
+      Swal.fire({
+        icon: "success",
+        title: "Nilai Berhasil Diimpor & Disimpan!",
+        html: `Berhasil mengisi nilai untuk <b>${result.summary?.updatedCount ?? 0} siswa</b> ke tabel.<br/><br/><div class="text-xs text-left bg-emerald-50 dark:bg-emerald-950/40 p-3 rounded-xl text-emerald-800 dark:text-emerald-300 border border-emerald-500/20 space-y-1"><div>✅ <b>Siswa Cocok:</b> ${result.summary?.matchedCount} siswa</div><div>🔒 <b>Terotentikasi untuk:</b> ${user.name} (${clsName} - ${subName})</div><div>💾 <b>Status:</b> Otomatis tersimpan sebagai draft di server</div></div>`,
+        confirmButtonColor: "#10b981",
+      });
+
+      setMessage(`Impor Excel berhasil: ${result.summary?.updatedCount ?? 0} nilai siswa diperbarui`);
+      await loadGrades(true);
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal Mengimpor File",
+        text: err instanceof Error ? err.message : "Terjadi kesalahan saat membaca file Excel.",
+        confirmButtonColor: "#ef4444",
+      });
+    } finally {
+      setImporting(false);
+      if (e.target) e.target.value = "";
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -408,17 +518,35 @@ export function GuruNilaiPage() {
           <div className="text-sm text-on-surface-variant">
             {rows.length} siswa · {Math.min(10, rows.length)} ditampilkan/halaman · draft di server
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={handleUploadTemplate}
+            />
             <Button
               variant="secondary"
               size="sm"
               onClick={handleDownloadTemplate}
               disabled={loading || rows.length === 0}
-              className="text-xs h-9 px-3.5 gap-1.5 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 font-medium transition-all shadow-xs cursor-pointer"
+              className="text-xs h-9 px-3 gap-1.5 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 font-medium transition-all shadow-xs cursor-pointer"
               title="Unduh format Excel resmi terkunci khusus untuk kelas dan mata pelajaran ini"
             >
               <span className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-400">download</span>
               Unduh Template
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading || importing || rows.length === 0 || locked}
+              className="text-xs h-9 px-3 gap-1.5 border-blue-600/30 text-blue-700 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30 font-medium transition-all shadow-xs cursor-pointer"
+              title="Unggah template Excel nilai yang telah diisi untuk kelas dan mapel ini"
+            >
+              <span className="material-symbols-outlined text-[18px] text-blue-600 dark:text-blue-400">upload_file</span>
+              {importing ? "Mengimpor..." : "Unggah Nilai"}
             </Button>
             <Badge status={locked ? "submitted" : "draft"}>{locked ? "Terkunci/Submitted" : "Draft"}</Badge>
           </div>
