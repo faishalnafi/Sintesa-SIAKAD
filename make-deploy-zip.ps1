@@ -2,7 +2,7 @@ param(
     [string]$OutputPath = ".\deploy.zip"
 )
 
-$root = "D:\Server\WebApp\sintesa"
+$root = $PSScriptRoot
 
 Write-Host "=== SIAKAD Deploy ZIP Builder ===" -ForegroundColor Cyan
 
