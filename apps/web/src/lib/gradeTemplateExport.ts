@@ -51,7 +51,7 @@ export type GradeImportResult = {
  * Menghasilkan file Excel (.xlsx) template input nilai yang dikunci secara digital
  * khusus untuk Guru, Kelas, dan Mata Pelajaran yang sedang aktif.
  */
-export function downloadGradeTemplate(params: GradeTemplateExportParams): void {
+export function downloadGradeTemplate(params: GradeTemplateExportParams): string {
   const { user, classId, className, subjectId, subjectName, rows, components } = params;
 
   const wb = XLSX.utils.book_new();
@@ -86,12 +86,12 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): void {
 
   const sheetData: (string | number | null | undefined)[][] = [
     ["SISTEM INFORMASI AKADEMIK (SIAKAD) — SMAN 3 MOJOKERTO"],
-    ["TEMPLATE RESMI PENGISIAN NILAI AKADEMIK (TERKUNCI & TEROTENTIKASI)"],
+    ["TEMPLATE RESMI PENGISIAN NILAI AKADEMIK (DAPAT DIEDIT BEBAS DI EXCEL)"],
     [],
     ["Mata Pelajaran", subjectName, "UUID Mapel", subjectId],
     ["Kelas", className, "UUID Kelas", classId],
     ["Guru Pengampu", `${user.name}${user.username ? ` (${user.username})` : ""}`, "UUID Guru (KUNCI)", user.id],
-    ["Status Keamanan", "TERKUNCI KHUSUS GURU PENGAMPU INI", "Waktu Generate", dateFormatted],
+    ["Status Keamanan", "TEROTENTIKASI DIGITAL (SEL NILAI DAPAT DIISI)", "Waktu Generate", dateFormatted],
     ["Token Keamanan", securityToken, "Jumlah Siswa", `${rows.length} Siswa Terdaftar`],
     [],
     [
@@ -172,11 +172,13 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): void {
     XLSX.utils.book_set_sheet_visibility(wb, 1, 1);
   }
 
-  // Nama file rapi, mencerminkan kelas, mapel, guru, dan tanggal
+  // Nama file unik dengan timestamp agar tidak tertukar dengan berkas lama di Downloads
   const cleanName = (str: string) => str.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const fileName = `Template_Nilai_${cleanName(className)}_${cleanName(subjectName)}_${cleanName(user.name)}.xlsx`;
+  const timeStr = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  const fileName = `Template_Nilai_${cleanName(className)}_${cleanName(subjectName)}_${cleanName(user.name)}_${timeStr}.xlsx`;
 
   XLSX.writeFile(wb, fileName);
+  return fileName;
 }
 
 /**

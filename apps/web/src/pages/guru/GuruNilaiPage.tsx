@@ -322,7 +322,7 @@ export function GuruNilaiPage() {
       const clsName = selectedClass?.name || "Kelas";
       const subName = selectedSubject?.name || "Mapel";
 
-      downloadGradeTemplate({
+      const downloadedFile = downloadGradeTemplate({
         user,
         classId,
         className: clsName,
@@ -335,9 +335,8 @@ export function GuruNilaiPage() {
       Swal.fire({
         icon: "success",
         title: "Template Nilai Berhasil Diunduh",
-        html: `Template Excel untuk kelas <b>${clsName}</b> (${subName}) telah diterbitkan.<br/><br/><div class="text-xs text-left bg-slate-100 dark:bg-slate-800 p-3 rounded-xl text-slate-700 dark:text-slate-300 space-y-1 border border-outline-variant/30"><div>🔒 <b>Terkunci Khusus:</b> ${user.name}</div><div>🔑 <b>UUID Guru:</b> <code class="text-[11px] font-mono select-all bg-white dark:bg-black/40 px-1 py-0.5 rounded border border-outline-variant/40">${user.id}</code></div><div class="text-[10px] text-on-surface-variant pt-1">File tidak dapat digunakan oleh akun guru lain untuk menjaga integritas data.</div></div>`,
+        html: `File template baru telah diunduh:<br/><code class="text-xs bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-primary font-semibold block my-2 select-all">${downloadedFile}</code><div class="text-xs text-left bg-slate-100 dark:bg-slate-800 p-3 rounded-xl text-slate-700 dark:text-slate-300 space-y-1.5 border border-outline-variant/30"><div><b>PENTING:</b> Tutup jendela Excel lama jika masih terbuka, lalu buka file baru di atas (ada akhiran jam unduh).</div><div class="pt-1 text-emerald-600 dark:text-emerald-400 font-medium">Sel nilai pada file baru ini 100% bebas diedit tanpa sandi.</div></div>`,
         confirmButtonColor: "#10b981",
-        timer: 4500,
       });
     } catch (err) {
       Swal.fire({
