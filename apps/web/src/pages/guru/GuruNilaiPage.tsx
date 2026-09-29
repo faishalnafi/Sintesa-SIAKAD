@@ -8,6 +8,8 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { useAuthStore } from "@/store/auth";
+import { downloadGradeTemplate } from "@/lib/gradeTemplateExport";
 
 type Klass = { id: string; name: string };
 type Subject = { id: string; name: string };
@@ -54,6 +56,10 @@ export function GuruNilaiPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [isSubjectLocked, setIsSubjectLocked] = useState(false);
   const pager = usePagination(rows, { resetKey: `${classId}|${subjectId}` });
+
+  const { user } = useAuthStore();
+  const selectedClass = useMemo(() => classes.find((c) => c.id === classId), [classes, classId]);
+  const selectedSubject = useMemo(() => subjects.find((s) => s.id === subjectId), [subjects, subjectId]);
 
   useEffect(() => {
     api<AssessmentComponent[]>("/teacher/assessment-components")
@@ -289,6 +295,58 @@ export function GuruNilaiPage() {
     }
   };
 
+  const handleDownloadTemplate = () => {
+    if (!user) {
+      Swal.fire({
+        icon: "warning",
+        title: "Sesi Tidak Ditemukan",
+        text: "Silakan muat ulang halaman atau login kembali untuk mengunduh template resmi.",
+        confirmButtonColor: "#3b82f6",
+      });
+      return;
+    }
+
+    if (!classId || !subjectId || rows.length === 0) {
+      Swal.fire({
+        icon: "info",
+        title: "Data Belum Siap",
+        text: "Pilih kelas dan mata pelajaran yang memiliki daftar siswa terlebih dahulu.",
+        confirmButtonColor: "#3b82f6",
+      });
+      return;
+    }
+
+    try {
+      const clsName = selectedClass?.name || "Kelas";
+      const subName = selectedSubject?.name || "Mapel";
+
+      downloadGradeTemplate({
+        user,
+        classId,
+        className: clsName,
+        subjectId,
+        subjectName: subName,
+        rows,
+        components: assessmentComponents,
+      });
+
+      Swal.fire({
+        icon: "success",
+        title: "Template Nilai Berhasil Diunduh",
+        html: `Template Excel untuk kelas <b>${clsName}</b> (${subName}) telah diterbitkan.<br/><br/><div class="text-xs text-left bg-slate-100 dark:bg-slate-800 p-3 rounded-xl text-slate-700 dark:text-slate-300 space-y-1 border border-outline-variant/30"><div>🔒 <b>Terkunci Khusus:</b> ${user.name}</div><div>🔑 <b>UUID Guru:</b> <code class="text-[11px] font-mono select-all bg-white dark:bg-black/40 px-1 py-0.5 rounded border border-outline-variant/40">${user.id}</code></div><div class="text-[10px] text-on-surface-variant pt-1">File tidak dapat digunakan oleh akun guru lain untuk menjaga integritas data.</div></div>`,
+        confirmButtonColor: "#10b981",
+        timer: 4500,
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal Mengunduh Template",
+        text: err instanceof Error ? err.message : "Terjadi kesalahan saat memproses file Excel.",
+        confirmButtonColor: "#ef4444",
+      });
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -346,11 +404,24 @@ export function GuruNilaiPage() {
       )}
 
       <Card className="overflow-hidden">
-        <div className="px-4 py-3 border-b border-outline-variant/20 flex items-center justify-between gap-2">
+        <div className="px-4 py-3 border-b border-outline-variant/20 flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm text-on-surface-variant">
             {rows.length} siswa · {Math.min(10, rows.length)} ditampilkan/halaman · draft di server
           </div>
-          <Badge status={locked ? "submitted" : "draft"}>{locked ? "Terkunci/Submitted" : "Draft"}</Badge>
+          <div className="flex items-center gap-2.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleDownloadTemplate}
+              disabled={loading || rows.length === 0}
+              className="text-xs h-9 px-3.5 gap-1.5 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 font-medium transition-all shadow-xs cursor-pointer"
+              title="Unduh format Excel resmi terkunci khusus untuk kelas dan mata pelajaran ini"
+            >
+              <span className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-400">download</span>
+              Unduh Template
+            </Button>
+            <Badge status={locked ? "submitted" : "draft"}>{locked ? "Terkunci/Submitted" : "Draft"}</Badge>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm table-sticky-name min-w-[720px]">
