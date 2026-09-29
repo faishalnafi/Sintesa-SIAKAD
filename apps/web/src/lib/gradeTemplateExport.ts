@@ -81,7 +81,6 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): string
     "NISN",
     "Nama Lengkap Siswa",
     ...activeComponents.map((c) => `${c.name.toUpperCase()} (0-100)`),
-    "Status Nilai",
   ];
 
   const sheetData: (string | number | null | undefined)[][] = [
@@ -95,7 +94,7 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): string
     ["Token Keamanan", securityToken, "Jumlah Siswa", `${rows.length} Siswa Terdaftar`],
     [],
     [
-      `PERHATIAN: Template nilai ini diterbitkan secara otomatis dan terikat khusus (terkunci) pada Guru: ${user.name} (UUID: ${user.id}) untuk Kelas: ${className} dan Mata Pelajaran: ${subjectName}. File ini TIDAK VALID jika diunggah oleh guru lain atau pada kelas/mapel berbeda. Jangan mengubah kolom UUID Siswa demi integritas sinkronisasi database.`,
+      `PERHATIAN: Template nilai ini diterbitkan secara otomatis dan terikat khusus (terkunci) pada Guru: ${user.name} (UUID: ${user.id}) untuk Kelas: ${className} dan Mata Pelajaran: ${subjectName}. File ini TIDAK VALID jika diunggah oleh guru lain atau pada kelas/mapel berbeda. Jangan mengubah kolom ID/NISN/Nama demi integritas sinkronisasi database.`,
     ],
     [],
     tableHeaders,
@@ -121,7 +120,6 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): string
       }
     });
 
-    rowValues.push(r.status || "draft");
     sheetData.push(rowValues);
   });
 
@@ -142,7 +140,6 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): string
     { wch: 18 }, // NISN
     { wch: 36 }, // Nama Siswa
     ...activeComponents.map(() => ({ wch: 16 })), // Kolom Nilai
-    { wch: 14 }, // Status
   ];
 
 
@@ -289,13 +286,16 @@ export function parseAndValidateGradeTemplate(
     };
   }
 
-  // 3. Temukan Baris Header Tabel Siswa
+  // 3. Temukan Baris Header Tabel Siswa Sebenarnya
+  // Header tabel siswa memiliki minimal 3 kolom terpisah yang berisi 'UUID Siswa'/'NISN' dan 'Nama'
   let headerRowIdx = -1;
   for (let i = 0; i < allRows.length; i++) {
     const r = allRows[i];
-    if (!r) continue;
-    const lineStr = r.map((c) => String(c || "").toLowerCase()).join(" ");
-    if (lineStr.includes("uuid siswa") || (lineStr.includes("nisn") && lineStr.includes("nama"))) {
+    if (!r || !Array.isArray(r) || r.length < 3) continue;
+    const cells = r.map((c) => String(c || "").toLowerCase().trim());
+    const hasUuidOrNisn = cells.some((c) => c === "uuid siswa" || c === "nisn" || c.startsWith("uuid"));
+    const hasName = cells.some((c) => c.includes("nama"));
+    if (hasUuidOrNisn && hasName) {
       headerRowIdx = i;
       break;
     }
@@ -311,15 +311,22 @@ export function parseAndValidateGradeTemplate(
   const headers = allRows[headerRowIdx] as (string | undefined)[];
 
   // Identifikasi letak index masing-masing kolom komponen nilai
+  const validScoreCodes = ["uh1", "t1", "sts", "uh2", "t2"];
   const colMappings: { colIdx: number; code: string }[] = [];
   headers.forEach((h, idx) => {
     if (!h) return;
     const lower = String(h).toLowerCase().trim();
-    if (lower.startsWith("uuid") || lower === "no" || lower.startsWith("nisn") || lower.startsWith("nama") || lower.startsWith("status")) {
+    if (
+      lower.startsWith("uuid") ||
+      lower === "no" ||
+      lower.startsWith("nisn") ||
+      lower.startsWith("nama") ||
+      lower.startsWith("status")
+    ) {
       return;
     }
     const cleanCode = lower.split(" ")[0].split("(")[0].replace(/[^a-z0-9]/g, "");
-    if (cleanCode) {
+    if (cleanCode && validScoreCodes.includes(cleanCode)) {
       colMappings.push({ colIdx: idx, code: cleanCode });
     }
   });

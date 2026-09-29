@@ -192,8 +192,43 @@ export function GuruNilaiPage() {
   };
 
   const saveDraft = async () => {
+    if (!classId || !subjectId) {
+      Swal.fire({
+        icon: "warning",
+        title: "Pilih Kelas & Mapel",
+        text: "Silakan pilih kelas dan mata pelajaran terlebih dahulu.",
+        confirmButtonColor: "#f59e0b",
+      });
+      return;
+    }
+    if (rows.length === 0) {
+      Swal.fire({
+        icon: "warning",
+        title: "Tidak Ada Siswa",
+        text: "Tidak ada data siswa di kelas ini untuk disimpan.",
+        confirmButtonColor: "#f59e0b",
+      });
+      return;
+    }
+
     setSaving(true);
     setMessage(null);
+
+    Swal.fire({
+      title: "Menyimpan Draft Nilai...",
+      html: `
+        <div class="flex flex-col items-center justify-center p-3 space-y-3">
+          <div class="w-12 h-12 rounded-full border-4 border-blue-200 dark:border-blue-900 border-t-blue-600 animate-spin"></div>
+          <div class="text-sm text-slate-600 dark:text-slate-300">
+            Menyimpan nilai ${rows.length} siswa ke server...
+          </div>
+        </div>
+      `,
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      showConfirmButton: false,
+    });
+
     try {
       await api("/teacher/grades/draft", {
         method: "PATCH",
@@ -202,18 +237,31 @@ export function GuruNilaiPage() {
           subjectId,
           items: rows.map((r) => ({
             studentId: r.studentId,
-            uh1: r.uh1,
-            t1: r.t1,
-            sts: r.sts,
-            uh2: r.uh2,
-            t2: r.t2,
+            uh1: r.uh1 === "" ? null : r.uh1,
+            t1: r.t1 === "" ? null : r.t1,
+            sts: r.sts === "" ? null : r.sts,
+            uh2: r.uh2 === "" ? null : r.uh2,
+            t2: r.t2 === "" ? null : r.t2,
           })),
         }),
       });
-      setMessage("Draft tersimpan");
-      await loadGrades();
+      setMessage("Draft nilai berhasil disimpan ke server.");
+      await loadGrades(true);
+      Swal.fire({
+        icon: "success",
+        title: "Draft Berhasil Disimpan!",
+        html: `Seluruh nilai untuk <b>${rows.length} siswa</b> di kelas <b>${selectedClass?.name || ""}</b> (${selectedSubject?.name || ""}) berhasil disimpan ke database server.`,
+        confirmButtonColor: "#10b981",
+      });
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Gagal simpan");
+      const errMsg = e instanceof Error ? e.message : "Gagal menyimpan draft ke server.";
+      setMessage(errMsg);
+      Swal.fire({
+        icon: "error",
+        title: "Gagal Menyimpan Draft",
+        html: `<div class="text-sm text-red-600">${errMsg}</div>`,
+        confirmButtonColor: "#ef4444",
+      });
     } finally {
       setSaving(false);
     }
@@ -375,7 +423,32 @@ export function GuruNilaiPage() {
     setImporting(true);
     setMessage(null);
 
+    // Tampilkan animasi proses unggah & validasi file Excel
+    Swal.fire({
+      title: "Memproses Berkas Excel...",
+      html: `
+        <div class="flex flex-col items-center justify-center p-3 space-y-3">
+          <div class="relative w-16 h-16 flex items-center justify-center">
+            <div class="w-16 h-16 rounded-full border-4 border-blue-200 dark:border-blue-900 border-t-blue-600 animate-spin"></div>
+            <div class="absolute text-xl">📄</div>
+          </div>
+          <div class="text-sm font-medium text-slate-700 dark:text-slate-300">
+            Membaca dan memvalidasi berkas nilai...
+          </div>
+          <div class="text-xs text-slate-500">
+            Memverifikasi token otentikasi & mencocokkan data kelas
+          </div>
+        </div>
+      `,
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      showConfirmButton: false,
+    });
+
     try {
+      // Berikan jeda sejenak agar animasi terbaca halus oleh pengguna
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
       const arrayBuffer = await file.arrayBuffer();
       const clsName = selectedClass?.name || "Kelas";
       const subName = selectedSubject?.name || "Mapel";
@@ -410,39 +483,47 @@ export function GuruNilaiPage() {
         return;
       }
 
-      // 1. Perbarui state tabel seketika agar terlihat langsung oleh guru
+      // Perbarui tampilan tabel lokal dengan nilai yang diimpor
       setRows(result.updatedRows);
 
-      // 2. Simpan otomatis ke draft server
-      try {
-        await api("/teacher/grades/draft", {
-          method: "PATCH",
-          body: JSON.stringify({
-            classId,
-            subjectId,
-            items: result.updatedRows.map((r) => ({
-              studentId: r.studentId,
-              uh1: r.uh1,
-              t1: r.t1,
-              sts: r.sts,
-              uh2: r.uh2,
-              t2: r.t2,
-            })),
-          }),
-        });
-      } catch (err) {
-        console.warn("Auto save draft after import warning:", err);
-      }
+      const totalStudents = rows.length;
+      const updatedCount = result.summary?.updatedCount ?? 0;
 
+      // Jendela konfirmasi hasil impor & penegasan WAJIB simpan draft secara manual
       Swal.fire({
         icon: "success",
-        title: "Nilai Berhasil Diimpor & Disimpan!",
-        html: `Berhasil mengisi nilai untuk <b>${result.summary?.updatedCount ?? 0} siswa</b> ke tabel.<br/><br/><div class="text-xs text-left bg-emerald-50 dark:bg-emerald-950/40 p-3 rounded-xl text-emerald-800 dark:text-emerald-300 border border-emerald-500/20 space-y-1"><div>✅ <b>Siswa Cocok:</b> ${result.summary?.matchedCount} siswa</div><div>🔒 <b>Terotentikasi untuk:</b> ${user.name} (${clsName} - ${subName})</div><div>💾 <b>Status:</b> Otomatis tersimpan sebagai draft di server</div></div>`,
-        confirmButtonColor: "#10b981",
+        title: "Nilai Berhasil Diimpor!",
+        html: `
+          <div class="space-y-4 text-left text-sm">
+            <div class="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/20 rounded-xl text-emerald-900 dark:text-emerald-200 space-y-1.5">
+              <div class="text-base font-bold flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
+                <span>✅</span> Nilai Berhasil Masuk ke Tabel
+              </div>
+              <div class="text-xs leading-relaxed">
+                Sebanyak <b>${updatedCount} dari total ${totalStudents} siswa</b> di kelas <b>${clsName}</b> (${subName}) berhasil diisi nilainya ke tabel.
+              </div>
+            </div>
+
+            <div class="p-4 bg-amber-50 dark:bg-amber-950/50 border-2 border-amber-400 dark:border-amber-600 rounded-xl space-y-2 text-amber-950 dark:text-amber-100">
+              <div class="flex items-center gap-2 font-bold text-amber-800 dark:text-amber-300 text-sm">
+                <span class="text-lg">⚠️</span> PERHATIAN PENTING:
+              </div>
+              <div class="text-xs leading-relaxed text-amber-900 dark:text-amber-200">
+                Proses impor ini <b>TIDAK tersimpan otomatis (no auto-save)</b>. Nilai saat ini baru berada di <b>tampilan tabel sementara</b>.
+              </div>
+              <div class="text-xs font-semibold p-2.5 bg-amber-100/90 dark:bg-amber-900/60 rounded-lg text-amber-950 dark:text-amber-100 border border-amber-300 dark:border-amber-700">
+                👉 Anda <u>WAJIB</u> menekan tombol <b>"Simpan Draft"</b> agar nilai tersimpan secara permanen ke server database!
+              </div>
+            </div>
+          </div>
+        `,
+        confirmButtonText: "Tinjau Nilai & Simpan Draft",
+        confirmButtonColor: "#3b82f6",
       });
 
-      setMessage(`Impor Excel berhasil: ${result.summary?.updatedCount ?? 0} nilai siswa diperbarui`);
-      await loadGrades(true);
+      setMessage(
+        `Nilai berhasil diimpor (${updatedCount} dari ${totalStudents} siswa). Harap tekan tombol "Simpan Draft" untuk menyimpan ke server.`
+      );
     } catch (err) {
       Swal.fire({
         icon: "error",
@@ -632,10 +713,20 @@ export function GuruNilaiPage() {
       </Card>
 
       <div className="flex flex-col sm:flex-row gap-3 mt-6 pb-6">
-        <Button variant="secondary" className="flex-1" onClick={saveDraft} disabled={saving}>
-          Simpan Draft
+        <Button
+          variant="secondary"
+          className="flex-1 font-semibold"
+          onClick={saveDraft}
+          disabled={saving || loading || rows.length === 0}
+        >
+          <span className="material-symbols-outlined text-[18px]">save</span>
+          {saving ? "Menyimpan Draft..." : "Simpan Draft"}
         </Button>
-        <Button className="flex-1" onClick={submit} disabled={saving}>
+        <Button
+          className="flex-1"
+          onClick={submit}
+          disabled={saving || loading || rows.length === 0}
+        >
           <span className="material-symbols-outlined text-[18px]">send</span>
           Kirim ke Walikelas
         </Button>

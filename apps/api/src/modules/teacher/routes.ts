@@ -528,13 +528,18 @@ teacherRoutes.patch("/grades/draft", async (c) => {
       continue;
     }
 
+    const sanitizeScore = (val: unknown, fallback: string | null) => {
+      if (val === undefined) return fallback;
+      if (val === null || val === "" || String(val).trim() === "") return null;
+      return String(val).trim();
+    };
+
     const values = {
-      uh1: item.uh1 === undefined ? existing?.uh1 ?? null : item.uh1 === null ? null : String(item.uh1),
-      t1: item.t1 === undefined ? existing?.t1 ?? null : item.t1 === null ? null : String(item.t1),
-      sts:
-        item.sts === undefined ? existing?.sts ?? null : item.sts === null ? null : String(item.sts),
-      uh2: item.uh2 === undefined ? existing?.uh2 ?? null : item.uh2 === null ? null : String(item.uh2),
-      t2: item.t2 === undefined ? existing?.t2 ?? null : item.t2 === null ? null : String(item.t2),
+      uh1: sanitizeScore(item.uh1, existing?.uh1 ?? null),
+      t1: sanitizeScore(item.t1, existing?.t1 ?? null),
+      sts: sanitizeScore(item.sts, existing?.sts ?? null),
+      uh2: sanitizeScore(item.uh2, existing?.uh2 ?? null),
+      t2: sanitizeScore(item.t2, existing?.t2 ?? null),
       status: "draft" as const,
       updatedAt: new Date(),
     };
@@ -559,6 +564,19 @@ teacherRoutes.patch("/grades/draft", async (c) => {
           academicYear: body.academicYear,
           semester: body.semester,
           ...values,
+        })
+        .onConflictDoUpdate({
+          target: [
+            grades.studentId,
+            grades.subjectId,
+            grades.classId,
+            grades.academicYear,
+            grades.semester,
+          ],
+          set: {
+            ...values,
+            deletedAt: null,
+          },
         })
         .returning();
       await db.insert(gradeAuditLogs).values({
