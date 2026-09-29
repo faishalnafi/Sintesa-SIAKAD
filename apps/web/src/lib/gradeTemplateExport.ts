@@ -145,13 +145,7 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): void {
     { wch: 14 }, // Status
   ];
 
-  // Password proteksi worksheet terikat pada UUID Guru
-  const lockPassword = `siakad_${user.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8)}`;
-  ws["!protect"] = {
-    password: lockPassword,
-    selectLockedCells: true,
-    selectUnlockedCells: true,
-  };
+
 
   XLSX.utils.book_append_sheet(wb, ws, "INPUT_NILAI");
 
