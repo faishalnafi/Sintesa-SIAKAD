@@ -541,7 +541,7 @@ export function GuruNilaiPage() {
               variant="secondary"
               size="sm"
               onClick={() => fileInputRef.current?.click()}
-              disabled={loading || importing || rows.length === 0 || locked}
+              disabled={loading || importing || rows.length === 0}
               className="text-xs h-9 px-3 gap-1.5 border-blue-600/30 text-blue-700 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30 font-medium transition-all shadow-xs cursor-pointer"
               title="Unggah template Excel nilai yang telah diisi untuk kelas dan mapel ini"
             >
