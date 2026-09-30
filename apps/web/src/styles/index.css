@@ -291,12 +291,13 @@ html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:first-child {
 html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:first-child {
   display: none;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button {
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child button {
   font-size: 0;
+  gap: 0;
   padding-left: 0;
   padding-right: 0;
 }
-html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button .material-symbols-outlined {
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child button .material-symbols-outlined {
   font-size: 20px;
 }
 

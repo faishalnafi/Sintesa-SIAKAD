@@ -142,6 +142,7 @@ function SidebarBody({
                   to={item.to}
                   end={item.to.split("/").length <= 2}
                   onClick={onNavigate}
+                  title={item.label}
                   className={({ isActive }) =>
                     cn(
                       "flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors duration-200 min-h-[42px]",
@@ -164,6 +165,8 @@ function SidebarBody({
         <button
           type="button"
           onClick={onLogout}
+          title="Keluar"
+          aria-label="Keluar"
           className="w-full flex items-center justify-center gap-2 rounded-xl py-3 px-4 text-[13px] font-bold bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors min-h-[44px]"
         >
           <span className="material-symbols-outlined text-[20px]">logout</span>
