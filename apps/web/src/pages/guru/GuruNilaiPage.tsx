@@ -147,10 +147,10 @@ export function GuruNilaiPage() {
     loadGrades();
   }, [loadGrades]);
 
-  // Realtime: refresh tabel nilai saat walikelas approve/reject
+  // Realtime: refresh tabel nilai saat walikelas approve/reject atau AI menyimpan draft
   // Hanya aktif jika guru sedang melihat kelas & mapel tertentu
   useRealtimeEvent(
-    ["grade_approved", "grade_rejected", "grade_deleted"],
+    ["grade_approved", "grade_rejected", "grade_deleted", "grade_submitted"],
     () => { loadGrades(true); },
     Boolean(classId && subjectId)
   );

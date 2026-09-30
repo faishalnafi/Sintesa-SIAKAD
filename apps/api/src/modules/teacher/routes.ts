@@ -7,6 +7,7 @@ import {
   classSubjects,
   gradeAuditLogs,
   grades,
+  homeroomAssignments,
   students,
   subjects,
   teachers,
@@ -504,6 +505,32 @@ const draftSchema = z.object({
 teacherRoutes.patch("/grades/draft", async (c) => {
   const body = draftSchema.parse(await c.req.json());
   const user = c.get("user");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+
+  if (!isAdmin) {
+    const mySubjects = await db
+      .select({ subjectId: teacherSubjects.subjectId, subjectName: subjects.name })
+      .from(teacherSubjects)
+      .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+      .where(eq(teacherSubjects.userId, user.id));
+
+    if (mySubjects.length > 0 && !mySubjects.some((ms) => ms.subjectId === body.subjectId)) {
+      const otherTeachers = await db
+        .select({ name: users.name })
+        .from(teacherSubjects)
+        .innerJoin(users, eq(teacherSubjects.userId, users.id))
+        .where(eq(teacherSubjects.subjectId, body.subjectId));
+      const otherNames = otherTeachers.map((t) => t.name).join(", ") || "Guru Mapel Lain";
+      return c.json(
+        {
+          success: false,
+          message: `Mata pelajaran ini diampu oleh ${otherNames}. Anda hanya dapat mengubah nilai pada mata pelajaran yang Anda ampu (${mySubjects.map((m) => m.subjectName).join(", ")}).`,
+        },
+        403
+      );
+    }
+  }
+
   const targetClassId = await ensureTargetClassExists(body.classId);
   const saved = [];
 
@@ -593,6 +620,13 @@ teacherRoutes.patch("/grades/draft", async (c) => {
     }
     saved.push(row);
   }
+
+  broadcastRealtimeEvent({
+    type: "grade_submitted",
+    classId: targetClassId,
+    subjectId: body.subjectId,
+    actorId: user.id,
+  });
 
   return c.json({ success: true, data: { saved: saved.length } });
 });
@@ -735,6 +769,43 @@ teacherRoutes.get("/teaching-hours", async (c) => {
 teacherRoutes.get("/journals", async (c) => {
   const user = c.get("user");
   try {
+    const nowWib = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
+    const todayIso = `${nowWib.getFullYear()}-${String(nowWib.getMonth() + 1).padStart(2, "0")}-${String(nowWib.getDate()).padStart(2, "0")}`;
+
+    // 1. Perbaiki otomatis draft jurnal yang sempat tercatat di tahun 2024/2025 akibat halusinasi tanggal AI sebelumnya
+    await db
+      .update(teacherJournals)
+      .set({ date: todayIso, updatedAt: new Date() })
+      .where(
+        and(
+          eq(teacherJournals.teacherUserId, user.id),
+          eq(teacherJournals.status, "draft"),
+          isNull(teacherJournals.deletedAt),
+          sql`(${teacherJournals.date} LIKE '2024-%' OR ${teacherJournals.date} LIKE '2025-%')`
+        )
+      );
+
+    // 2. Bersihkan otomatis jika ada baris duplikat pada (teacher_user_id, date, teaching_hour_id)
+    //    maupun (date, class_id, teaching_hour_id), pertahankan yang berstatus 'sent' atau paling baru
+    await db.execute(sql`
+      DELETE FROM teacher_journals
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY teacher_user_id, date, teaching_hour_id
+                   ORDER BY CASE WHEN status = 'sent' THEN 0 ELSE 1 END ASC,
+                            created_at DESC,
+                            id DESC
+                 ) AS rn
+          FROM teacher_journals
+          WHERE deleted_at IS NULL
+            AND teacher_user_id = ${user.id}
+        ) t
+        WHERE t.rn > 1
+      )
+    `);
+
     const list = await db
       .select()
       .from(teacherJournals)
@@ -787,7 +858,9 @@ teacherRoutes.post("/journals", async (c) => {
     // Tentukan groupId
     let activeGroupId = body.groupId;
 
-    // Cek bentrokan kebenaran absolut 3-dimensi: [date, (classId OR className), teachingHourId]
+    // Cek bentrokan kebenaran absolut:
+    // A. Pada kelas yang sama [date, (classId OR className), teachingHourId]
+    // B. Pada guru yang sama [date, teacherUserId = user.id, teachingHourId]
     const classCondition = body.classId
       ? or(
           eq(teacherJournals.classId, body.classId),
@@ -806,6 +879,8 @@ teacherRoutes.post("/journals", async (c) => {
         teachingHourId: teacherJournals.teachingHourId,
         teachingHourLabel: teacherJournals.teachingHourLabel,
         subjectName: teacherJournals.subjectName,
+        materi: teacherJournals.materi,
+        presenceInfo: teacherJournals.presenceInfo,
         status: teacherJournals.status,
         groupId: teacherJournals.groupId,
       })
@@ -814,14 +889,14 @@ teacherRoutes.post("/journals", async (c) => {
       .where(
         and(
           eq(teacherJournals.date, body.date),
-          classCondition,
+          or(classCondition, eq(teacherJournals.teacherUserId, user.id)),
           inArray(teacherJournals.teachingHourId, targetHourIds),
           isNull(teacherJournals.deletedAt)
         )
       );
 
     // Cari bentrokan:
-    // 1. Diisi oleh guru lain (teacherUserId !== user.id) -> BENTROK (baik draft maupun sent)
+    // 1. Diisi oleh guru lain di kelas tersebut (teacherUserId !== user.id) -> BENTROK (baik draft maupun sent)
     // 2. Diisi oleh guru sendiri & status sent -> BENTROK (jika bukan mengedit grup yang sama)
     const conflict = existing3DJournals.find((j) => {
       if (j.teacherUserId !== user.id) return true;
@@ -830,16 +905,17 @@ teacherRoutes.post("/journals", async (c) => {
     });
 
     if (conflict) {
-      const guruName = conflict.teacherName || "Guru Lain";
+      const guruName = conflict.teacherUserId === user.id ? "Anda sendiri (Sudah Terkirim)" : (conflict.teacherName || "Guru Lain");
       const hourLabel = conflict.teachingHourLabel || "Jam Terpilih";
       const mapelName = conflict.subjectName || "Mata Pelajaran";
       const klsName = conflict.className || body.className || "Kelas";
+      const prevMateri = conflict.materi ? `, Materi: "${conflict.materi}"` : "";
 
       return c.json(
         {
           success: false,
           conflict: true,
-          message: `Jam mengajar (${hourLabel}) di kelas ${klsName} pada tanggal ${body.date} SUDAH TERISI oleh ${guruName} (Mata Pelajaran: ${mapelName}). Spesifik 1 kelas & 1 jam mengajar pada tanggal tersebut hanya dapat diisi oleh 1 guru.`,
+          message: `Jam mengajar (${hourLabel}) di kelas ${klsName} pada tanggal ${body.date} SUDAH TERISI oleh ${guruName} (Mata Pelajaran: ${mapelName}${prevMateri}). Data milik guru lain / yang sudah terkirim tidak dapat diubah.`,
         },
         409
       );
@@ -859,20 +935,41 @@ teacherRoutes.post("/journals", async (c) => {
         .delete(teacherJournals)
         .where(eq(teacherJournals.groupId, activeGroupId));
     } else {
-      // Buat groupId baru
       activeGroupId = crypto.randomUUID();
-      // Bersihkan bentrokan draft jam terpilih jika ada
+    }
+
+    // Bersihkan seluruh draft milik guru ini yang beririsan pada tanggal & jam terpilih (termasuk grup draft lama yang tertimpa)
+    const overlappingDrafts = existing3DJournals.filter(
+      (j) => j.teacherUserId === user.id && j.status === "draft"
+    );
+    let replacedInfo = "";
+    if (overlappingDrafts.length > 0) {
+      const prevSample = overlappingDrafts[0];
+      const prevHours = [...new Set(overlappingDrafts.map((d) => d.teachingHourLabel).filter(Boolean))].join(", ");
+      replacedInfo = ` (Menggantikan data draft sebelumnya pada jam ${prevHours}: Mapel ${prevSample.subjectName || "-"}, Materi "${prevSample.materi || "-"}", Presensi "${prevSample.presenceInfo || "-"}" → Diganti menjadi: Mapel ${body.subjectName}, Materi "${body.materi || "-"}", Presensi "${body.presenceInfo || "-"}")`;
+    }
+    const overlappingGroupIds = [...new Set(overlappingDrafts.map((j) => j.groupId).filter(Boolean))] as string[];
+    if (overlappingGroupIds.length > 0) {
       await db
         .delete(teacherJournals)
         .where(
           and(
             eq(teacherJournals.teacherUserId, user.id),
-            eq(teacherJournals.date, body.date),
             eq(teacherJournals.status, "draft"),
-            inArray(teacherJournals.teachingHourId, targetHourIds)
+            inArray(teacherJournals.groupId, overlappingGroupIds)
           )
         );
     }
+    await db
+      .delete(teacherJournals)
+      .where(
+        and(
+          eq(teacherJournals.teacherUserId, user.id),
+          eq(teacherJournals.date, body.date),
+          eq(teacherJournals.status, "draft"),
+          inArray(teacherJournals.teachingHourId, targetHourIds)
+        )
+      );
 
     // Insert semua jam mengajar dalam rentang
     const inserts = targetHours.map((h) => ({
@@ -899,8 +996,8 @@ teacherRoutes.post("/journals", async (c) => {
       actorId: user.id,
     });
 
-    const message = body.status === "sent" ? "Jurnal berhasil dikirim" : "Jurnal disimpan sebagai draft";
-    return c.json({ success: true, data: { groupId: activeGroupId }, message });
+    const baseMsg = body.status === "sent" ? "Jurnal berhasil dikirim" : "Jurnal disimpan sebagai draft";
+    return c.json({ success: true, data: { groupId: activeGroupId }, message: `${baseMsg}${replacedInfo}` });
   } catch (e) {
     return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 400);
   }
@@ -1022,7 +1119,7 @@ async function getTeacherAiContext(userId: string, userName: string) {
   // 1. Ambil data guru
   const [teacher] = await db.select().from(teachers).where(eq(teachers.userId, userId)).limit(1);
 
-  // 2. Ambil mapel yang diampu
+  // 2. Ambil mapel yang diampu guru ini
   const assignedSubjects = await db
     .select({
       id: subjects.id,
@@ -1034,6 +1131,33 @@ async function getTeacherAiContext(userId: string, userName: string) {
     .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
     .where(and(eq(teacherSubjects.userId, userId), eq(subjects.isActive, true)))
     .orderBy(subjects.name);
+
+  // 2B. Ambil seluruh pemetaan guru mapel di sekolah (untuk cek kepemilikan mapel guru lain)
+  const allSubjectTeachers = await db
+    .select({
+      userId: teacherSubjects.userId,
+      teacherName: users.name,
+      subjectId: subjects.id,
+      subjectName: subjects.name,
+      subjectCode: subjects.code,
+    })
+    .from(teacherSubjects)
+    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+    .innerJoin(users, eq(teacherSubjects.userId, users.id))
+    .where(and(eq(subjects.isActive, true), eq(users.isActive, true)));
+
+  // 2C. Ambil seluruh pemetaan wali kelas di sekolah (untuk Matrix Persetujuan)
+  const allHomeroomTeachers = await db
+    .select({
+      userId: homeroomAssignments.userId,
+      teacherName: users.name,
+      classId: classes.id,
+      className: classes.name,
+    })
+    .from(homeroomAssignments)
+    .innerJoin(classes, eq(homeroomAssignments.classId, classes.id))
+    .innerJoin(users, eq(homeroomAssignments.userId, users.id))
+    .where(and(eq(classes.isActive, true), eq(users.isActive, true)));
 
   // 3. Ambil kelas aktif + mapel yang diajar guru di kelas tersebut (via classSubjects)
   const taughtClasses = teacher
@@ -1103,15 +1227,17 @@ async function getTeacherAiContext(userId: string, userName: string) {
   const allTeachingHours = await db
     .select({ id: teachingHours.id, label: teachingHours.label, startTime: teachingHours.startTime, endTime: teachingHours.endTime })
     .from(teachingHours)
-    .orderBy(teachingHours.startTime);
+    .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
 
-  // 8. Ambil jurnal terbaru guru (30 hari terakhir) — untuk konteks dan anti-duplikasi
+  // 8. Ambil jurnal terbaru (30 hari terakhir, milik sendiri maupun guru lain) — untuk cek konflik guru lain & data sebelumnya
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0, 10);
   const recentJournals = await db
     .select({
       id: teacherJournals.id,
+      teacherUserId: teacherJournals.teacherUserId,
+      teacherName: users.name,
       date: teacherJournals.date,
       className: teacherJournals.className,
       teachingHourLabel: teacherJournals.teachingHourLabel,
@@ -1122,15 +1248,15 @@ async function getTeacherAiContext(userId: string, userName: string) {
       groupId: teacherJournals.groupId,
     })
     .from(teacherJournals)
+    .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
     .where(
       and(
-        eq(teacherJournals.teacherUserId, userId),
         isNull(teacherJournals.deletedAt),
         sql`${teacherJournals.date} >= ${thirtyDaysAgoStr}`
       )
     )
     .orderBy(desc(teacherJournals.date), desc(teacherJournals.createdAt))
-    .limit(50);
+    .limit(100);
 
   // 9. Tentukan sapaan berdasarkan jenis kelamin
   let honorific = "Bapak/Ibu";
@@ -1154,6 +1280,8 @@ async function getTeacherAiContext(userId: string, userName: string) {
   return {
     teacher,
     assignedSubjects,
+    allSubjectTeachers,
+    allHomeroomTeachers,
     taughtClasses,
     activeClasses,
     studentRoster,
@@ -1512,10 +1640,37 @@ teacherRoutes.post("/ai/chat", async (c) => {
           .join("\n")
       : "- Belum ada penugasan kelas tercatat di sistem.";
 
-  // Buat tabel daftar siswa dari kelas yang diajar (untuk resolusi identifier)
+  // Buat tabel daftar siswa yang relevan dengan konteks obrolan (Smart Filtering agar prompt tidak membengkak 85KB yang membuat AI lupa instruksi tanggal)
+  const combinedChatText = [
+    userPrompt || "",
+    ...(Array.isArray(messages) ? messages.slice(-6).map((m: any) => m.text || m.content || "") : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  // Cari kata-kata potensial nama siswa / NIS / kelas dari percakapan
+  const chatTokens = combinedChatText
+    .replace(/[^a-z0-9\-\s']/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !["simpan", "jurnal", "hari", "ini", "kelas", "mapel", "jam", "pertama", "kedua", "ketiga", "sampai", "materi", "presensi", "hadir", "semua", "ubah", "nilai", "menjadi", "tolong", "pak", "bu", "siswa", "untuk", "yang", "dan", "dari"].includes(w));
+
+  const matchedStudents = ctx.studentRoster.filter((s) => {
+    const sName = s.name.toLowerCase();
+    const sClass = (s.className || "").toLowerCase();
+    const sClassClean = sClass.replace(/[-\s]/g, "");
+    if (combinedChatText.includes(sClass) || (sClassClean && combinedChatText.includes(sClassClean))) {
+      return true;
+    }
+    if (s.nis && combinedChatText.includes(s.nis.toLowerCase())) return true;
+    if (s.nisn && combinedChatText.includes(s.nisn.toLowerCase())) return true;
+    return chatTokens.some((tok) => sName.includes(tok));
+  });
+
+  const rosterToShow = matchedStudents.length > 0 ? matchedStudents.slice(0, 80) : ctx.studentRoster.slice(0, 30);
+
   const studentRosterText =
-    ctx.studentRoster.length > 0
-      ? ctx.studentRoster
+    rosterToShow.length > 0
+      ? rosterToShow
           .map(
             (s) =>
               `| ${s.name} | ${s.nis ?? "-"} | ${s.nisn ?? "-"} | ${s.className} | \`${s.id}\` |`
@@ -1523,29 +1678,156 @@ teacherRoutes.post("/ai/chat", async (c) => {
           .join("\n")
       : "| (Tidak ada data siswa) | - | - | - | - |";
 
-  // Buat tabel jam mengajar (teachingHours) untuk referensi AI
+  // Buat tabel jam mengajar (teachingHours) untuk referensi AI (rapikan label angka & sembunyikan jam dummy yang sama persis)
   const teachingHoursText =
     ctx.allTeachingHours.length > 0
       ? ctx.allTeachingHours
-          .map((h) => `| ${h.label} | ${h.startTime} | ${h.endTime} | \`${h.id}\` |`)
+          .map((h, idx) => {
+            const cleanLbl = /^\d+$/.test(h.label.trim()) ? `Jam ke-${h.label.trim()}` : h.label;
+            const timeValid = h.startTime && h.endTime && h.startTime !== h.endTime;
+            return `| ${cleanLbl} (Urutan ${idx + 1}) | ${timeValid ? h.startTime : "-"} | ${timeValid ? h.endTime : "-"} | \`${h.id}\` |`;
+          })
           .join("\n")
       : "| (Belum ada data jam mengajar) | - | - | - |";
 
-  // Buat ringkasan jurnal terbaru (30 hari) untuk anti-duplikasi
-  // Deduplikasi berdasarkan groupId agar tampil 1 baris per sesi mengajar
-  const journalGroups = new Map<string, typeof ctx.recentJournals[0]>();
+  // Buat ringkasan jurnal terbaru (30 hari) dipisah antara Milik Sendiri vs Milik Guru Lain
+  const myJournalGroups = new Map<string, {
+    date: string;
+    className: string;
+    subjectName: string;
+    hours: string[];
+    materi: string;
+    presenceInfo: string;
+    status: string;
+  }>();
+  const otherJournalGroups = new Map<string, {
+    date: string;
+    className: string;
+    teacherName: string;
+    subjectName: string;
+    hours: string[];
+    materi: string;
+    status: string;
+  }>();
+
   for (const j of ctx.recentJournals) {
     const key = j.groupId || j.id;
-    if (!journalGroups.has(key)) journalGroups.set(key, j);
+    if (j.teacherUserId === user.id) {
+      const existing = myJournalGroups.get(key);
+      if (existing) {
+        if (j.teachingHourLabel && !existing.hours.includes(j.teachingHourLabel)) {
+          existing.hours.push(j.teachingHourLabel);
+        }
+      } else {
+        myJournalGroups.set(key, {
+          date: j.date,
+          className: j.className ?? "-",
+          subjectName: j.subjectName ?? "-",
+          hours: j.teachingHourLabel ? [j.teachingHourLabel] : [],
+          materi: j.materi || "-",
+          presenceInfo: j.presenceInfo || "-",
+          status: j.status,
+        });
+      }
+    } else {
+      const existing = otherJournalGroups.get(key);
+      if (existing) {
+        if (j.teachingHourLabel && !existing.hours.includes(j.teachingHourLabel)) {
+          existing.hours.push(j.teachingHourLabel);
+        }
+      } else {
+        otherJournalGroups.set(key, {
+          date: j.date,
+          className: j.className ?? "-",
+          teacherName: j.teacherName ?? "Guru Lain",
+          subjectName: j.subjectName ?? "-",
+          hours: j.teachingHourLabel ? [j.teachingHourLabel] : [],
+          materi: j.materi || "-",
+          status: j.status,
+        });
+      }
+    }
   }
+
   const recentJournalsText =
-    journalGroups.size > 0
-      ? [...journalGroups.values()]
-          .map((j) => `| ${j.date} | ${j.className ?? "-"} | ${j.subjectName ?? "-"} | ${j.teachingHourLabel ?? "-"} | ${j.status} |`)
+    myJournalGroups.size > 0
+      ? [...myJournalGroups.values()]
+          .map((j) => `| ${j.date} | ${j.className} | ${j.subjectName} | ${j.hours.join(", ") || "-"} | ${j.materi} | ${j.presenceInfo} | ${j.status} |`)
           .join("\n")
-      : "| (Belum ada jurnal dalam 30 hari terakhir) | - | - | - | - |";
+      : "| (Belum ada jurnal milik Anda dalam 30 hari terakhir) | - | - | - | - | - | - |";
+
+  const otherTeachersJournalsText =
+    otherJournalGroups.size > 0
+      ? [...otherJournalGroups.values()]
+          .slice(0, 30)
+          .map((j) => `| ${j.date} | ${j.className} | ${j.hours.join(", ") || "-"} | ${j.teacherName} | ${j.subjectName} | ${j.materi} | ${j.status} |`)
+          .join("\n")
+      : "| (Belum ada slot jurnal yang diisi guru lain) | - | - | - | - | - | - |";
+
+  // Ambil data nilai & status Matrix Persetujuan saat ini untuk siswa yang relevan (rosterToShow)
+  const rosterStudentIds = rosterToShow.map((s) => s.id);
+  const liveGrades = rosterStudentIds.length > 0
+    ? await db
+        .select({
+          id: grades.id,
+          studentId: grades.studentId,
+          studentName: students.name,
+          classId: grades.classId,
+          className: classes.name,
+          subjectId: grades.subjectId,
+          subjectName: subjects.name,
+          uh1: grades.uh1,
+          t1: grades.t1,
+          sts: grades.sts,
+          uh2: grades.uh2,
+          t2: grades.t2,
+          status: grades.status,
+          note: grades.note,
+        })
+        .from(grades)
+        .innerJoin(students, eq(grades.studentId, students.id))
+        .innerJoin(classes, eq(grades.classId, classes.id))
+        .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+        .where(and(inArray(grades.studentId, rosterStudentIds), isNull(grades.deletedAt)))
+        .limit(100)
+    : [];
+
+  const liveGradesText =
+    liveGrades.length > 0
+      ? liveGrades
+          .map((g) => {
+            const subjTeachers = ctx.allSubjectTeachers
+              .filter((st) => st.subjectId === g.subjectId)
+              .map((st) => (st.userId === user.id ? `${st.teacherName} (Anda)` : `${st.teacherName} (Guru Lain)`))
+              .join(", ") || "Umum";
+            return `| ${g.studentName} | ${g.className} | ${g.subjectName} | ${subjTeachers} | ${g.uh1 ?? "-"} | ${g.t1 ?? "-"} | ${g.sts ?? "-"} | ${g.uh2 ?? "-"} | ${g.t2 ?? "-"} | ${g.status} |`;
+          })
+          .join("\n")
+      : "| (Belum ada data nilai yang terinput untuk daftar siswa di atas) | - | - | - | - | - | - | - | - | - |";
+
+  const homeroomInfoText =
+    ctx.allHomeroomTeachers.length > 0
+      ? ctx.allHomeroomTeachers
+          .map((ht) => `- Kelas **${ht.className}** → Wali Kelas: **${ht.teacherName}** ${ht.userId === user.id ? "(Kelas Perwalian Anda)" : "(Wali Kelas Lain)"}`)
+          .join("\n")
+      : "- Belum ada penugasan wali kelas khusus di sistem.";
+
+  // Hitung tanggal & waktu server saat ini dalam zona waktu WIB (Asia/Jakarta)
+  const nowWib = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
+  const todayIso = `${nowWib.getFullYear()}-${String(nowWib.getMonth() + 1).padStart(2, "0")}-${String(nowWib.getDate()).padStart(2, "0")}`;
+  const todayReadable = nowWib.toLocaleDateString("id-ID", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 
   const systemInstruction = `Anda adalah Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA).
+
+## 🗓️ INFORMASI WAKTU SERVER SAAT INI (WAJIB DIGUNAKAN)
+- **Hari & Tanggal Hari Ini:** ${todayReadable}
+- **Format Tanggal ISO Hari Ini (YYYY-MM-DD):** \`${todayIso}\`
+- ⚠️ **PENTING:** Setiap kali pengguna menyebut "hari ini", "sekarang", atau tidak menyebutkan tanggal spesifik saat mencatat jurnal mengajar, Anda **WAJIB** menggunakan tanggal **\`${todayIso}\`** (${todayReadable}). **DILARANG KERAS** menebak atau mengarang tahun 2024/2025 atau tanggal lain!
 
 ## Identitas Pengguna yang Sedang Login
 - Nama Lengkap: ${user.name}
@@ -1557,12 +1839,22 @@ teacherRoutes.post("/ai/chat", async (c) => {
 ## Penugasan Kelas & Mata Pelajaran
 ${taughtClassesText}
 
+## 🏫 Daftar Wali Kelas (Menu Matrix Persetujuan)
+${homeroomInfoText}
+
 ## 📋 Daftar Siswa Aktif Sekolah
 Tabel ini berisi siswa aktif beserta Kelas, NIS, NISN, dan UUID. Gunakan data ini untuk mencocokkan input guru (bisa berupa nama lengkap, nama panggilan/sebagian, NIS, NISN, atau UUID).
 
 | Nama Lengkap | NIS | NISN | Kelas | ID (UUID) |
 |---|---|---|---|---|
 ${studentRosterText}
+
+## 📊 Data Live Saat Ini: Input Nilai & Matrix Persetujuan
+Gunakan tabel ini untuk melihat apakah nilai seorang siswa sudah terisi sebelumnya (beserta angka sebelumnya dan siapa guru pengampunya):
+
+| Siswa | Kelas | Mapel | Pengampu Mapel | UH1 | T1 | STS | UH2 | T2 | Status |
+|---|---|---|---|---|---|---|---|---|---|
+${liveGradesText}
 
 ## ⏰ Daftar Jam Mengajar (Teaching Hours)
 Gunakan tabel ini untuk mencocokkan input guru saat membuat jurnal (misal "jam pertama", "jam 1", "07:00", dll.)
@@ -1571,118 +1863,79 @@ Gunakan tabel ini untuk mencocokkan input guru saat membuat jurnal (misal "jam p
 |---|---|---|---|
 ${teachingHoursText}
 
-## 📓 Riwayat Jurnal Mengajar (30 Hari Terakhir)
-Gunakan data ini untuk menghindari duplikasi jurnal. Jika guru meminta simpan jurnal di tanggal/kelas/jam yang sudah ada, tanyakan konfirmasi apakah ingin mengganti yang lama.
-
-| Tanggal | Kelas | Mapel | Jam Mengajar | Status |
-|---|---|---|---|---|
+## 📓 Riwayat Jurnal Mengajar Milik Anda Sendiri (30 Hari Terakhir)
+| Tanggal | Kelas | Mapel | Jam Mengajar | Materi Sebelumnya | Presensi Sebelumnya | Status |
+|---|---|---|---|---|---|---|
 ${recentJournalsText}
 
-## 🗺️ Menu & Navigasi Aplikasi SIMAK
-Arahkan guru ke menu yang tepat sesuai kebutuhannya:
-- **Asisten AI (halaman ini):** /guru/ai
-- **Input Nilai Siswa:** /guru (halaman utama, pilih kelas & mapel)
-- **Jurnal Mengajar:** /guru/jurnal
-- **Pengiriman Jurnal (Bulk Send):** /guru/jurnal → tombol "Kirim Semua Draft"
-- **Profil & Pengaturan:** /guru/profile
+## 🚫 Slot Jurnal Mengajar yang Sudah Diisi oleh Guru Lain
+| Tanggal | Kelas | Jam Mengajar | Diisi Oleh Guru | Mapel | Materi | Status |
+|---|---|---|---|---|---|---|
+${otherTeachersJournalsText}
 
-## Tugas Utama Anda
-1. Panggil pengguna dengan "${ctx.honorific} ${user.name.split(" ")[0]}" secara ramah dan profesional.
-2. Bantu guru dalam: pembuatan RPP/Modul Ajar Kurikulum Merdeka, bank soal, kisi-kisi, administrasi jurnal mengajar, pengolahan nilai, dan pertanyaan seputar akademik sekolah.
-3. Jawab pertanyaan seputar mapel yang diampu dengan akurat mengacu data di atas.
-4. Format jawaban menggunakan Markdown rapi (bullet, **tebal**, tabel, dsb.).
+## 🗺️ 3 Menu Utama Guru & Wali Kelas di SIMAK
+1. **Matrix Persetujuan** (\`/walikelas\`) — Persetujuan raport & koreksi ulang nilai oleh Wali Kelas.
+2. **Input Nilai** (\`/guru\`) — Pengisian nilai komponen siswa (\`UH1, T1, STS, UH2, T2\`) oleh Guru Mapel.
+3. **Jurnal Guru** (\`/guru/jurnal\`) — Pencatatan jurnal mengajar harian per kelas & jam pelajaran.
 
-## 🔍 ATURAN PENCOCOKAN SISWA & KONFIRMASI (SANGAT PENTING)
-Ketika guru meminta mengubah atau menyimpan nilai siswa (baik lewat teks maupun lewat unggahan file Excel/gambar):
+## ⚠️ ATURAN WAJIB DI SEMUA 3 MENU (MATRIX PERSETUJUAN, INPUT NILAI, JURNAL GURU):
+1. **JIKA SUDAH DIISI OLEH GURU LAIN (BUKAN MILIK SENDIRI):**
+   - **JANGAN DIRUBAH / JANGAN DITIMPA!**
+   - Informasikan secara jelas kepada ${ctx.honorific} ${user.name.split(" ")[0]} bahwa data tersebut sudah diisi/diampu oleh **Guru Lain** (sebutkan nama gurunya, mapelnya, dan isi data yang sudah tercatat).
+2. **JIKA MILIK DIRI SENDIRI & SEBELUMNYA SUDAH ADA ISINYA (STATUS DRAFT):**
+   - **WAJIB AUTO-SAVE DRAFT!** Tetap sertakan blok \`\`\`action ...\`\`\` agar sistem langsung memperbarui draft di database secara otomatis tanpa perlu menunda.
+   - **WAJIB BERIKAN INFORMASI PERBANDINGAN (BEFORE → AFTER):** Jelaskan secara transparan bahwa slot/data tersebut sebelumnya sudah ada isinya, sebutkan **Data Sebelumnya terisi apa**, dan **Diganti Menjadi apa** sesuai permintaan terbaru!
+3. **JIKA MILIK DIRI SENDIRI TETAPI SUDAH TERKUNCI (\`sent\` / \`submitted\` / \`approved\`):**
+   - **JANGAN DIRUBAH!** Informasikan isi data sebelumnya dan jelaskan bahwa statusnya sudah terkunci (arahkan ke Wali Kelas untuk buka kunci ke Draft di Matrix Persetujuan atau hubungi Admin).
+4. **JIKA BELUM ADA ISINYA (DATA BARU):**
+   - **WAJIB AUTO-SAVE DRAFT!** Sertakan blok \`\`\`action ...\`\`\` agar langsung tersimpan sebagai **draft** di database.
 
-1. **JIKA DITEMUKAN LEBIH DARI 1 SISWA (NAMA KEMBAR / AMBIGU):**
-   - ⚠️ **DILARANG MENEBAK DAN DILARANG MEMBUAT ACTION BLOCK!**
-   - Anda **WAJIB** meminta konfirmasi kepada guru dengan menyajikan daftar semua siswa yang cocok beserta Kelas dan NIS/NISN-nya.
+## 🔍 FORMAT ACTION BLOCK UNTUK 3 MENU (AUTO-SAVE DRAFT)
 
-2. **JIKA SISWA TIDAK DITEMUKAN:**
-   - Beritahu bahwa siswa tidak ditemukan di sistem. Minta guru memeriksa kembali penulisan nama, kelas, atau NIS/NISN.
+### A. Menu 2: Input Nilai (\`SAVE_GRADE_DRAFT\`)
+- Jika identitas siswa tunggal & data lengkap, buat ACTION BLOCK:
+  \`\`\`action
+  SAVE_GRADE_DRAFT
+  student_id: <UUID siswa dari tabel Daftar Siswa di atas>
+  siswa: <Nama Lengkap Siswa>
+  kelas: <Nama Kelas, contoh: X-1>
+  mapel: <Nama Mapel, contoh: RPL>
+  field: <uh1 | t1 | sts | uh2 | t2>
+  nilai: <angka 0-100>
+  tahun: 2025/2026
+  semester: 1
+  \`\`\`
+- Jika siswa ambigu (lebih dari 1 nama cocok), tanyakan konfirmasi NIS/Kelas terlebih dahulu.
 
-3. **JIKA DATA BELUM LENGKAP:**
-   - Jika guru belum menyebutkan: mapel, jenis penilaian (UH1, T1, STS, UH2, T2), atau nilai angka (0-100), tanyakan bagian yang kurang terlebih dahulu sebelum membuat action block.
+### B. Menu 3: Jurnal Guru (\`SAVE_JOURNAL_DRAFT\`)
+- Jika kelas, mapel, jam, materi, dan presensi sudah disebutkan (dan slot tidak diisi oleh guru lain), **WAJIB** buat ACTION BLOCK tepat di baris pertama (baik untuk jurnal baru maupun mengganti draft milik sendiri):
+  \`\`\`action
+  SAVE_JOURNAL_DRAFT
+  tanggal: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
+  kelas: <Nama Kelas, contoh: X-1>
+  mapel: <Nama Mapel, contoh: RPL>
+  jam_awal_id: <UUID atau angka urutan jam awal>
+  jam_akhir_id: <UUID atau angka urutan jam akhir>
+  materi: <Deskripsi materi yang diajarkan>
+  presensi: <Informasi kehadiran siswa>
+  \`\`\`
 
-4. **JIKA IDENTITAS PASTI & DATA LENGKAP (SATU ATAU BANYAK SISWA DARI EXCEL/GAMBAR/TEKS):**
-   - Buat format ACTION BLOCK untuk setiap perubahan nilai siswa:
-     \`\`\`action
-     SAVE_GRADE_DRAFT
-     student_id: <UUID siswa dari tabel Daftar Siswa di atas>
-     siswa: <Nama Lengkap Siswa>
-     kelas: <Nama Kelas, contoh: X-1>
-     mapel: <Nama Mapel, contoh: RPL>
-     field: <uh1 | t1 | sts | uh2 | t2>
-     nilai: <angka 0-100>
-     tahun: 2025/2026
-     semester: 1
-     \`\`\`
-   - Jika guru mengunggah file Excel/daftar nilai berisi beberapa siswa atau beberapa kolom nilai (UH1, T1, STS, UH2, T2) dan meminta untuk disimpan/diubah, Anda boleh membuat beberapa blok \`\`\`action SAVE_GRADE_DRAFT ... \`\`\` secara berurutan untuk semua nilai yang valid!
-   - Di bawah action block, tulis penjelasan ramah bahwa nilai disimpan sebagai **draft** di database (bukan dikirim resmi, guru dapat meninjau di halaman Input Nilai).
-
-## 📓 ATURAN JURNAL MENGAJAR — ACTION SAVE_JOURNAL_DRAFT
-Ketika guru meminta menyimpan/mencatat jurnal mengajar:
-
-1. **DATA WAJIB yang harus ada sebelum membuat action block jurnal:**
-   - Tanggal mengajar (format: YYYY-MM-DD, default hari ini jika tidak disebutkan)
-   - Nama kelas (cocokkan dengan daftar kelas aktif)
-   - Mata pelajaran
-   - Jam mengajar awal & akhir (cocokkan dengan tabel Jam Mengajar di atas)
-   - Materi yang diajarkan
-   - Informasi kehadiran/presensi
-
-2. **JIKA DATA BELUM LENGKAP:** tanyakan bagian yang kurang. Jangan mengarang data.
-
-3. **JIKA SUDAH LENGKAP:** buat ACTION BLOCK tepat di baris pertama respons:
-   \`\`\`action
-   SAVE_JOURNAL_DRAFT
-   tanggal: <YYYY-MM-DD>
-   kelas: <Nama Kelas, contoh: X-1>
-   mapel: <Nama Mapel, contoh: RPL>
-   jam_awal_id: <UUID dari tabel Jam Mengajar di atas>
-   jam_akhir_id: <UUID dari tabel Jam Mengajar di atas>
-   materi: <Deskripsi materi yang diajarkan>
-   presensi: <Informasi kehadiran siswa, contoh: Nihil (hadir semua) atau 2 siswa sakit>
-   \`\`\`
-   - Di bawah action block, konfirmasi detail jurnal yang akan disimpan secara ramah.
-   - Jurnal disimpan sebagai **draft**. Guru dapat meninjau di menu **Jurnal Mengajar** (/guru/jurnal) dan mengirimkan secara resmi dari sana.
-
-4. **CEK DUPLIKASI:** Jika kelas + jam + tanggal yang diminta sudah ada di riwayat jurnal (lihat tabel Riwayat Jurnal di atas), informasikan kepada guru dan tanyakan apakah ingin mengganti yang lama.
+### C. Menu 1: Matrix Persetujuan (\`SAVE_MATRIX_DRAFT\`)
+- Ketika pengguna meminta mengubah status nilai siswa/kelas di **Matrix Persetujuan** kembali ke **Draft** (koreksi ulang / revisi catatan matrix):
+  \`\`\`action
+  SAVE_MATRIX_DRAFT
+  kelas: <Nama Kelas, contoh: X-1>
+  siswa: <Nama Siswa atau "SEMUA" jika satu kelas>
+  mapel: <Nama Mapel atau "SEMUA">
+  catatan: <Catatan revisi/koreksi ulang>
+  \`\`\`
 
 ## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE
-- **JANGAN PERNAH** mengklaim bahwa data sudah tersimpan, diperbarui permanen, atau dikunci di sistem TANPA menyertakan format ACTION BLOCK di atas.
-- **JANGAN PERNAH** mengarang alasan teknis seperti "lakukan hard refresh (Ctrl+F5)", "flush memori", atau "kode eksekusi: SIMAK-XXX".
-- Jika dalam riwayat obrolan sebelumnya Anda pernah mengklaim data tersimpan padahal pengguna bilang belum berubah, AKUI dengan jujur bahwa sebelumnya belum tersimpan dan gunakan ACTION BLOCK sekarang untuk menyimpannya ke database.
+- **JANGAN PERNAH** mengklaim data tersimpan tanpa menyertakan blok \`\`\`action ...\`\`\`.
+- **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai atau gambar tabel nilai untuk mapel yang diampunya (${ctx.subjectNames}), **WAJIB proses/simpan nilainya** menggunakan \`SAVE_GRADE_DRAFT\`.
 
-## ⚠️ ATURAN BISNIS APLIKASI YANG WAJIB DITEGAKKAN
-### 🔒 ISOLASI DATA ANTAR PENGGUNA & PEMROSESAN FILE UNGGAHAN
-- **Setiap guru HANYA boleh mengelola data MILIKNYA SENDIRI.**
-- Guru yang sedang login adalah **${user.name} (ID: ${user.id})**.
-- **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai (termasuk file template seperti \`Template_Nilai_..._Super_...\` atau template yang diunduh dari akun Admin/Superadmin) atau gambar tabel nilai untuk kelas/mapel yang diampunya (${ctx.subjectNames}), **JANGAN DITOLAK!** File tersebut sedang dikerjakan oleh ${ctx.honorific} ${user.name} dan **WAJIB Anda bantu proses/simpan nilainya** menggunakan action block \`SAVE_GRADE_DRAFT\`.
-- Hanya tolak apabila pengguna secara eksplisit meminta mengubah jurnal/nilai mata pelajaran milik guru lain yang tidak diampunya.
-
-### Jurnal Mengajar (Teacher Journals)
-- **Status jurnal**: \`draft\` → bisa diedit/dihapus oleh guru PEMILIKNYA sendiri | \`sent\` → sudah dikirim resmi, terkunci.
-- **Setelah jurnal berstatus \`sent\`**: guru TIDAK dapat membatalkan, mengedit, atau menghapus jurnalnya sendiri.
-- **Hanya Admin/Superadmin** yang berwenang membatalkan (cancel) atau mengubah jurnal yang sudah dikirim.
-- Jika guru meminta pembatalan jurnal yang sudah dikirim → tolak dan arahkan ke Admin.
-
-### Nilai Siswa (Grades)
-- **Status nilai**: \`draft\` → dapat diubah oleh guru yang menginputnya | \`submitted\` → sudah diajukan, terkunci.
-- Nilai yang sudah disubmit hanya bisa diubah/dibatalkan oleh **Admin/Superadmin**.
-- Guru tidak dapat mengubah nilai yang diinput oleh guru lain.
-
-### Hak Akses Berdasarkan Role
-- Role **guru**: hanya bisa mengelola data miliknya sendiri (jurnal, nilai kelas yang diajarnya).
-- Role **walikelas**: tambahan akses lihat/rekap data kelas yang diasuhnya, tetapi tidak bisa ubah data guru lain.
-- Role **admin/superadmin**: satu-satunya role yang berwenang atas data lintas pengguna.
-- **Anda TIDAK boleh** menyarankan cara mengakali/bypass aturan aplikasi dalam bentuk apapun.
-
-## 👤 Daftar Admin Aktif SIMAK (yang berwenang menangani permintaan lintas pengguna / pembatalan data)
+## 👤 Daftar Admin Aktif SIMAK
 ${adminList}
-
-Jika guru perlu bantuan yang hanya bisa dilakukan admin, arahkan untuk **menghubungi salah satu admin di atas** secara langsung atau melalui komunikasi resmi sekolah.
 ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
 
@@ -1818,9 +2071,18 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       }
     }
 
+    const geminiMessages = chatMessages.map((m, idx) =>
+      idx === chatMessages.length - 1
+        ? {
+            ...m,
+            text: `${m.text}\n\n[Catatan Sistem: Tanggal hari ini di server adalah ${todayIso} (${todayReadable}). Jika pengguna meminta jurnal/data hari ini, WAJIB gunakan tanggal ${todayIso}, jangan gunakan tahun 2024/2025.]`,
+          }
+        : m
+    );
+
     const rawReply = await askGemini({
       systemInstruction,
-      messages: chatMessages,
+      messages: geminiMessages,
       files,
     });
 
@@ -1839,8 +2101,10 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     //   ```
     // =========================================================
     // =========================================================
-    // HELPER: Eksekusi simpan draft nilai secara aman ke database
+    // HELPER 1 (MENU INPUT NILAI & MATRIX): Simpan draft nilai
     // =========================================================
+    const isAdminUser = user.roles.includes("admin") || user.roles.includes("superadmin");
+
     async function executeSaveGradeDraft(params: {
       studentIdOrName?: string;
       nis?: string;
@@ -1852,7 +2116,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       academicYear?: string;
       semester?: number;
     }): Promise<{ success: boolean; message: string; data?: any }> {
-      const { studentIdOrName, nis, nisn, className, subjectName, field, score } = params;
+      const { studentIdOrName, nis, className, subjectName, field, score } = params;
 
       const validFields = ["uh1", "t1", "sts", "uh2", "t2"] as const;
       type GradeField = (typeof validFields)[number];
@@ -1867,7 +2131,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         return { success: false, message: `Komponen penilaian (${field}) atau nilai (${score}) tidak valid.` };
       }
 
-      // 1. Resolve Class (dukung format: "X-1", "x1", "X 1", UUID)
+      // 1. Resolve Class
       const cleanClass = className.replace(/[-\s]/g, "").toLowerCase();
       const classConds = [
         sql`lower(${classes.name}) = lower(${className})`,
@@ -1887,7 +2151,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
       }
 
-      // 2. Resolve Subject (dukung "RPL", "Rekayasa Perangkat Lunak", UUID)
+      // 2. Resolve Subject
       const subjectConds = [
         sql`lower(${subjects.name}) = lower(${subjectName})`,
         sql`lower(${subjects.code}) = lower(${subjectName})`,
@@ -1907,7 +2171,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         return { success: false, message: `Mata pelajaran "${subjectName}" tidak ditemukan di database.` };
       }
 
-      // 3. Resolve Student (Prioritas: UUID -> NIS/NISN -> Nama di kelas ini -> Nama di sekolah)
+      // 3. Resolve Student
       let resolvedStudent: { id: string; name: string } | undefined;
       if (studentIdOrName && isUuid(studentIdOrName)) {
         const [found] = await db
@@ -1955,7 +2219,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         return { success: false, message: `Siswa "${studentIdOrName || nis}" tidak ditemukan di kelas "${resolvedClass.name}".` };
       }
 
-      // 4. Cek status grade yang sudah ada
+      // 4. Ambil data nilai yang sudah ada di database (jika ada)
       const ay = params.academicYear || "2025/2026";
       const sem = params.semester || 1;
 
@@ -1972,13 +2236,68 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         )
         .limit(1);
 
+      const formatRekap = (g?: typeof grades.$inferSelect | null) =>
+        g
+          ? `UH1: ${g.uh1 ?? "-"}, T1: ${g.t1 ?? "-"}, STS: ${g.sts ?? "-"}, UH2: ${g.uh2 ?? "-"}, T2: ${g.t2 ?? "-"}`
+          : "Belum ada nilai";
+
+      // 5. CEK KEPEMILIKAN MAPEL & PENGISI SEBELUMNYA (JANGAN UBAH MILIK GURU LAIN!)
+      if (!isAdminUser) {
+        const subjectOwners = ctx.allSubjectTeachers.filter((st) => st.subjectId === resolvedSubject.id);
+        const isOwnedByMe = ctx.assignedSubjects.some((s) => s.id === resolvedSubject.id);
+        const otherOwners = subjectOwners.filter((st) => st.userId !== user.id);
+
+        if ((ctx.assignedSubjects.length > 0 && !isOwnedByMe) || (otherOwners.length > 0 && !isOwnedByMe)) {
+          const ownerNames = otherOwners.map((o) => o.teacherName).join(", ") || "Guru Mapel Lain";
+          const currentVal = existing ? ((existing as any)[fieldKey] ?? "Belum diisi") : "Belum diisi";
+          return {
+            success: false,
+            message: `⛔ **Nilai Tidak Dapat Diubah (Mata Pelajaran Diampu oleh Guru Lain)**\n- **Menu:** Input Nilai & Matrix Persetujuan\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**\n- **Guru Pengampu Mapel Ini:** **${ownerNames}** *(Mapel Anda: ${ctx.subjectNames})*\n- **Data Sebelumnya di Database:** ${fieldKey.toUpperCase()} = **${currentVal}** *(${formatRekap(existing)}, Status: ${existing?.status ?? "kosong"})*\n\n> ⚠️ Sesuai aturan SIMAK, data nilai mata pelajaran yang diampu/diisi oleh guru lain tidak dapat langsung diubah.`,
+          };
+        }
+
+        // Cek juga dari log audit jika baris nilai ini sebelumnya diinput oleh guru lain
+        if (existing) {
+          const [lastAudit] = await db
+            .select({
+              actorId: gradeAuditLogs.actorId,
+              actorName: users.name,
+            })
+            .from(gradeAuditLogs)
+            .leftJoin(users, eq(gradeAuditLogs.actorId, users.id))
+            .where(eq(gradeAuditLogs.gradeId, existing.id))
+            .orderBy(desc(gradeAuditLogs.createdAt))
+            .limit(1);
+
+          const isLastActorAdmin = lastAudit?.actorId ? ctx.adminUsers.some((a) => a.id === lastAudit.actorId) : false;
+          if (
+            lastAudit?.actorId &&
+            lastAudit.actorId !== user.id &&
+            !isLastActorAdmin &&
+            !isOwnedByMe
+          ) {
+            const currentVal = (existing as any)[fieldKey] ?? "Belum diisi";
+            return {
+              success: false,
+              message: `⛔ **Nilai Tidak Dapat Diubah (Sudah Diisi oleh Guru Lain)**\n- **Menu:** Input Nilai & Matrix Persetujuan\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**\n- **Diisi Sebelumnya Oleh:** **${lastAudit.actorName || "Guru Lain"}**\n- **Data Sebelumnya:** ${fieldKey.toUpperCase()} = **${currentVal}** *(${formatRekap(existing)}, Status: ${existing.status})*\n\n> ⚠️ Data nilai yang sudah diisi oleh guru lain tidak dapat langsung diubah.`,
+            };
+          }
+        }
+      }
+
+      // 6. CEK STATUS LOCKED (SUBMITTED / APPROVED)
       if (existing && (existing.status === "submitted" || existing.status === "approved")) {
+        const prevVal = (existing as any)[fieldKey] ?? "Kosong";
         return {
           success: false,
-          message: `Nilai siswa "${resolvedStudent.name}" sudah berstatus "${existing.status}" dan terkunci. Hanya Admin yang dapat mengubahnya.`,
+          message: `⛔ **Nilai Sudah Terkunci (${existing.status.toUpperCase()})**\n- **Menu:** Input Nilai & Matrix Persetujuan\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**\n- **Data Sebelumnya:** ${fieldKey.toUpperCase()} = **${prevVal}** *(${formatRekap(existing)})*\n- **Status Saat Ini:** **${existing.status}** (Terkunci)\n\n> ⚠️ Nilai yang sudah berstatus **${existing.status}** tidak dapat langsung diubah. Wali Kelas dapat membuka kunci ke Draft melalui menu **Matrix Persetujuan** (\`/walikelas\`) atau hubungi Admin.`,
         };
       }
 
+      // 7. AUTO-SAVE DRAFT & LAPORKAN DATA SEBELUMNYA VS DATA BARU
+      const prevFieldVal = existing ? (existing as any)[fieldKey] : null;
+      const hadPreviousValue = prevFieldVal !== null && prevFieldVal !== undefined && String(prevFieldVal).trim() !== "";
+      const oldRekapText = formatRekap(existing);
       const fieldValue = String(score);
       let savedRow: typeof grades.$inferSelect | undefined;
 
@@ -2017,17 +2336,32 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         savedRow = created;
       }
 
-      broadcastRealtimeEvent({ type: "journal_saved", actorId: user.id });
+      const newRekapText = formatRekap(savedRow);
+
+      broadcastRealtimeEvent({
+        type: "grade_submitted",
+        classId: resolvedClass.id,
+        subjectId: resolvedSubject.id,
+        actorId: user.id,
+      });
+
+      if (hadPreviousValue) {
+        return {
+          success: true,
+          message: `✅ **Draft Nilai Berhasil Diperbarui (Auto-Save Draft)**\n- **Menu Terkait:** Input Nilai (\`/guru\`) & Matrix Persetujuan (\`/walikelas\`)\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**\n- **Komponen Penilaian:** **${fieldKey.toUpperCase()}**\n- 🔄 **Data Sebelumnya:** Nilai ${fieldKey.toUpperCase()} = **${prevFieldVal}** *(Rekap lama: ${oldRekapText})*\n- ✨ **Diganti Menjadi:** Nilai ${fieldKey.toUpperCase()} = **${fieldValue}** *(Rekap baru: ${newRekapText})*\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
+          data: savedRow,
+        };
+      }
 
       return {
         success: true,
-        message: `✅ Nilai **${fieldKey.toUpperCase()}** siswa **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**, Mapel **${resolvedSubject.name}**) berhasil disimpan sebagai **draft** di database (Nilai: **${score}**).`,
+        message: `✅ **Draft Nilai Baru Berhasil Disimpan (Auto-Save Draft)**\n- **Menu Terkait:** Input Nilai (\`/guru\`) & Matrix Persetujuan (\`/walikelas\`)\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**\n- **Komponen Penilaian:** **${fieldKey.toUpperCase()}**\n- **Data Sebelumnya:** *(Belum terisi / Kosong — Rekap lama: ${oldRekapText})*\n- ✨ **Diisi Menjadi:** Nilai ${fieldKey.toUpperCase()} = **${fieldValue}** *(Rekap baru: ${newRekapText})*\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
         data: savedRow,
       };
     }
 
     // =========================================================
-    // HELPER: Eksekusi simpan draft jurnal mengajar ke database
+    // HELPER 2 (MENU JURNAL GURU): Simpan draft jurnal mengajar
     // =========================================================
     async function executeSaveJournalDraft(params: {
       tanggal: string;
@@ -2038,11 +2372,22 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       materi: string;
       presenceInfo: string;
     }): Promise<{ success: boolean; message: string; data?: any }> {
-      const { tanggal, className, subjectName, startHourIdOrLabel, endHourIdOrLabel, materi, presenceInfo } = params;
+      const { className, subjectName, startHourIdOrLabel, endHourIdOrLabel, materi, presenceInfo } = params;
+      let tanggal = (params.tanggal || "").trim();
 
-      // 1. Validasi tanggal
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
-        return { success: false, message: `Format tanggal tidak valid: "${tanggal}". Gunakan format YYYY-MM-DD.` };
+      const lastUserText = (userPrompt || (chatMessages[chatMessages.length - 1]?.text) || "").toLowerCase();
+      const userAskedToday = lastUserText.includes("hari ini") || lastUserText.includes("sekarang");
+
+      // 1. Normalisasi & Validasi tanggal (paksa ke todayIso jika user minta "hari ini" atau AI halusinasi tahun lama)
+      const isoMatch = tanggal.match(/(\d{4}-\d{2}-\d{2})/);
+      if (userAskedToday || tanggal.toLowerCase().includes("hari ini") || !isoMatch) {
+        tanggal = todayIso;
+      } else {
+        tanggal = isoMatch[1];
+        const currentYearPrefix = String(nowWib.getFullYear());
+        if (!tanggal.startsWith(currentYearPrefix) && !lastUserText.includes(tanggal.slice(0, 4))) {
+          tanggal = todayIso;
+        }
       }
 
       // 2. Resolve kelas
@@ -2091,24 +2436,22 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         return { success: false, message: "Data jam mengajar belum tersedia di sistem." };
       }
 
-      // Fungsi resolusi: UUID → cari by UUID, angka → jam ke-N, label → cocokkan label, waktu → cocokkan startTime
       function resolveHour(input: string): (typeof hours)[0] | undefined {
         const clean = input.trim().toLowerCase();
-        // Coba UUID
-        if (isUuid(input)) return hours.find(h => h.id === input);
-        // Coba angka (jam ke-N)
+        if (isUuid(input)) return hours.find((h) => h.id === input);
         const numMatch = clean.match(/^(\d+)$/);
         if (numMatch) {
           const idx = parseInt(numMatch[1], 10) - 1;
           return hours[idx];
         }
-        // Coba label (jam ke-1, jam pertama, dll)
-        const found = hours.find(h =>
-          h.label.toLowerCase().includes(clean) ||
-          clean.includes(h.label.toLowerCase()) ||
-          h.startTime === clean ||
-          // Kata urutan Indonesia
-          ["pertama","kedua","ketiga","keempat","kelima","keenam","ketujuh","kedelapan","kesembilan","kesepuluh"].some((w, i) => clean.includes(w) && hours[i]?.id === h.id)
+        const found = hours.find(
+          (h) =>
+            h.label.toLowerCase().includes(clean) ||
+            clean.includes(h.label.toLowerCase()) ||
+            h.startTime === clean ||
+            ["pertama", "kedua", "ketiga", "keempat", "kelima", "keenam", "ketujuh", "kedelapan", "kesembilan", "kesepuluh"].some(
+              (w, i) => clean.includes(w) && hours[i]?.id === h.id
+            )
         );
         return found;
       }
@@ -2123,63 +2466,133 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         return { success: false, message: `Jam mengajar akhir "${endHourIdOrLabel}" tidak ditemukan. Gunakan UUID atau label seperti "Jam ke-3" atau angka "3".` };
       }
 
-      let startIdx = hours.findIndex(h => h.id === startHour.id);
-      let endIdx = hours.findIndex(h => h.id === endHour.id);
-      if (startIdx > endIdx) { const tmp = startIdx; startIdx = endIdx; endIdx = tmp; }
+      let startIdx = hours.findIndex((h) => h.id === startHour.id);
+      let endIdx = hours.findIndex((h) => h.id === endHour.id);
+      if (startIdx > endIdx) {
+        const tmp = startIdx;
+        startIdx = endIdx;
+        endIdx = tmp;
+      }
       const targetHours = hours.slice(startIdx, endIdx + 1);
-      const targetHourIds = targetHours.map(h => h.id);
+      const targetHourIds = targetHours.map((h) => h.id);
 
-      // 5. Cek bentrok dengan guru lain (sent/draft) atau guru sendiri (sent)
-      const classCondJournal = eq(teacherJournals.classId, resolvedClass.id);
+      // 5. Cek bentrok dengan guru lain di kelas tersebut (sent/draft) atau guru sendiri di kelas manapun (sent/draft)
+      const classCondJournal = or(
+        eq(teacherJournals.classId, resolvedClass.id),
+        sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${resolvedClass.name}))`
+      );
       const existing3D = await db
         .select({
           id: teacherJournals.id,
           teacherUserId: teacherJournals.teacherUserId,
+          teacherName: users.name,
+          className: teacherJournals.className,
+          subjectName: teacherJournals.subjectName,
+          teachingHourLabel: teacherJournals.teachingHourLabel,
+          materi: teacherJournals.materi,
+          presenceInfo: teacherJournals.presenceInfo,
           status: teacherJournals.status,
           groupId: teacherJournals.groupId,
         })
         .from(teacherJournals)
+        .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
         .where(
           and(
             eq(teacherJournals.date, tanggal),
-            classCondJournal,
+            or(classCondJournal, eq(teacherJournals.teacherUserId, user.id)),
             inArray(teacherJournals.teachingHourId, targetHourIds),
             isNull(teacherJournals.deletedAt)
           )
         );
 
-      const conflictOther = existing3D.find(j => j.teacherUserId !== user.id);
-      if (conflictOther) {
+      // 5A. JIKA SUDAH DIISI OLEH GURU LAIN -> JANGAN UBAH, BERIKAN INFO LENGKAP!
+      const conflictsOther = existing3D.filter((j) => j.teacherUserId !== user.id);
+      if (conflictsOther.length > 0) {
+        const sampleOther = conflictsOther[0];
+        const otherHours = [...new Set(conflictsOther.map((j) => j.teachingHourLabel).filter(Boolean))].join(", ") || `${startHour.label}–${endHour.label}`;
         return {
           success: false,
-          message: `⚠️ Jam mengajar di kelas **${resolvedClass.name}** pada **${tanggal}** (${startHour.label}–${endHour.label}) sudah terisi oleh guru lain. Tidak dapat menyimpan jurnal yang bertabrakan.`,
+          message: `⛔ **Jurnal Mengajar Tidak Dapat Diubah (Sudah Diisi oleh Guru Lain)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- **Kelas:** **${resolvedClass.name}**\n- **Jam Mengajar:** **${otherHours}**\n- **Sudah Diisi Oleh:** **${sampleOther.teacherName || "Guru Lain"}**\n- **Mata Pelajaran Terisi:** **${sampleOther.subjectName || "-"}**\n- **Materi Terisi:** *"${sampleOther.materi || "-"}"*\n- **Presensi Terisi:** *"${sampleOther.presenceInfo || "-"}"*\n- **Status:** **${sampleOther.status === "sent" ? "Terkirim (Sent)" : "Draft"}**\n\n> ⚠️ Sesuai aturan SIMAK, jadwal kelas & jam mengajar yang sudah diisi oleh guru lain tidak dapat langsung diubah atau ditimpa.`,
         };
       }
 
-      const conflictSentSelf = existing3D.find(j => j.teacherUserId === user.id && j.status === "sent");
-      if (conflictSentSelf) {
+      // 5B. JIKA DIISI OLEH DIRI SENDIRI TETAPI SUDAH TERKIRIM (SENT) -> JANGAN UBAH!
+      const conflictsSentSelf = existing3D.filter((j) => j.teacherUserId === user.id && j.status === "sent");
+      if (conflictsSentSelf.length > 0) {
+        const sampleSent = conflictsSentSelf[0];
+        const sentHours = [...new Set(conflictsSentSelf.map((j) => j.teachingHourLabel).filter(Boolean))].join(", ") || `${startHour.label}–${endHour.label}`;
         return {
           success: false,
-          message: `⚠️ Jurnal pada slot ini (${tanggal}, kelas ${resolvedClass.name}, ${startHour.label}–${endHour.label}) sudah berstatus **sent** dan terkunci. Hubungi Admin untuk membatalkannya.`,
+          message: `⛔ **Jurnal Anda Sudah Terkirim & Terkunci (SENT)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- **Data Sebelumnya:** Kelas **${sampleSent.className || resolvedClass.name}** | Mapel **${sampleSent.subjectName || "-"}** | Jam **${sentHours}**\n- **Materi Sebelumnya:** *"${sampleSent.materi || "-"}"*\n- **Presensi Sebelumnya:** *"${sampleSent.presenceInfo || "-"}"*\n- **Status:** **Terkirim (sent)**\n\n> ⚠️ Jurnal yang sudah dikirim resmi tidak dapat diubah kembali oleh Guru. Silakan hubungi Admin jika memerlukan pembatalan.`,
         };
       }
 
-      // 6. Hapus draft guru sendiri yang bentrok, lalu buat groupId baru
-      const myDraftConflict = existing3D.filter(j => j.teacherUserId === user.id && j.status === "draft");
+      // 6. JIKA SEBELUMNYA SUDAH ADA DRAFT MILIK SENDIRI -> SIMPAN INFO LAMA, TIMPA BERSIH, DAN LAPORKAN BEFORE -> AFTER!
+      const myDraftConflict = existing3D.filter((j) => j.teacherUserId === user.id && j.status === "draft");
+      let previousDraftInfo: {
+        className: string;
+        subjectName: string;
+        hoursText: string;
+        materi: string;
+        presenceInfo: string;
+      } | null = null;
+
       if (myDraftConflict.length > 0) {
-        const conflictGroupIds = [...new Set(myDraftConflict.map(j => j.groupId).filter(Boolean))] as string[];
+        const conflictGroupIds = [...new Set(myDraftConflict.map((j) => j.groupId).filter(Boolean))] as string[];
+        // Ambil seluruh baris dalam grup lama agar rentang jam sebelumnya tampil utuh
+        const allOldGroupRows = conflictGroupIds.length > 0
+          ? await db
+              .select()
+              .from(teacherJournals)
+              .where(
+                and(
+                  eq(teacherJournals.teacherUserId, user.id),
+                  eq(teacherJournals.status, "draft"),
+                  inArray(teacherJournals.groupId, conflictGroupIds)
+                )
+              )
+          : myDraftConflict;
+
+        const sampleOld = allOldGroupRows[0] || myDraftConflict[0];
+        const oldHoursList = [...new Set(allOldGroupRows.map((r) => r.teachingHourLabel).filter(Boolean))];
+        previousDraftInfo = {
+          className: sampleOld.className || resolvedClass.name,
+          subjectName: sampleOld.subjectName || resolvedSubject.name,
+          hoursText: oldHoursList.length > 0 ? `Jam ke-${oldHoursList.join(", ")}` : `${startHour.label}–${endHour.label}`,
+          materi: sampleOld.materi || "-",
+          presenceInfo: sampleOld.presenceInfo || "-",
+        };
+
         if (conflictGroupIds.length > 0) {
-          for (const gid of conflictGroupIds) {
-            await db.delete(teacherJournals).where(eq(teacherJournals.groupId, gid));
-          }
-        } else {
-          const conflictIds = myDraftConflict.map(j => j.id);
+          await db
+            .delete(teacherJournals)
+            .where(
+              and(
+                eq(teacherJournals.teacherUserId, user.id),
+                eq(teacherJournals.status, "draft"),
+                inArray(teacherJournals.groupId, conflictGroupIds)
+              )
+            );
+        }
+        const conflictIds = myDraftConflict.map((j) => j.id);
+        if (conflictIds.length > 0) {
           await db.delete(teacherJournals).where(inArray(teacherJournals.id, conflictIds));
         }
       }
 
+      await db
+        .delete(teacherJournals)
+        .where(
+          and(
+            eq(teacherJournals.teacherUserId, user.id),
+            eq(teacherJournals.date, tanggal),
+            eq(teacherJournals.status, "draft"),
+            inArray(teacherJournals.teachingHourId, targetHourIds)
+          )
+        );
+
       const newGroupId = crypto.randomUUID();
-      const inserts = targetHours.map(h => ({
+      const inserts = targetHours.map((h) => ({
         teacherUserId: user.id,
         date: tanggal,
         classId: resolvedClass.id,
@@ -2197,10 +2610,160 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       await db.insert(teacherJournals).values(inserts);
       broadcastRealtimeEvent({ type: "journal_saved", classId: resolvedClass.id, actorId: user.id });
 
+      if (previousDraftInfo) {
+        return {
+          success: true,
+          message: `✅ **Draft Jurnal Guru Berhasil Diperbarui (Auto-Save Draft)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- 🔄 **Data Sebelumnya (Milik Anda):**\n  - Kelas: **${previousDraftInfo.className}** | Mapel: **${previousDraftInfo.subjectName}** | Jam: **${previousDraftInfo.hoursText}**\n  - Materi Sebelumnya: *"${previousDraftInfo.materi}"*\n  - Presensi Sebelumnya: *"${previousDraftInfo.presenceInfo}"*\n- ✨ **Diganti Menjadi (Draft Baru Tersimpan):**\n  - Kelas: **${resolvedClass.name}** | Mapel: **${resolvedSubject.name}** | Jam: **Jam ke-${startHour.label} s.d. ${endHour.label}** (${targetHours.length} jam pelajaran)\n  - Materi Baru: **"${materi}"**\n  - Presensi Baru: **"${presenceInfo}"**\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
+          data: { groupId: newGroupId, count: inserts.length, replaced: previousDraftInfo },
+        };
+      }
+
       return {
         success: true,
-        message: `✅ Jurnal mengajar berhasil disimpan sebagai **draft** di database!\n- **Tanggal:** ${tanggal}\n- **Kelas:** ${resolvedClass.name}\n- **Mapel:** ${resolvedSubject.name}\n- **Jam:** ${startHour.label} – ${endHour.label} (${targetHours.length} jam pelajaran)\n- **Materi:** ${materi}\n- **Presensi:** ${presenceInfo}\n\n> Tinjau dan kirim jurnal resmi di menu **Jurnal Mengajar** (/guru/jurnal).`,
+        message: `✅ **Jurnal Guru Baru Berhasil Disimpan sebagai Draft (Auto-Save Draft)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- **Data Sebelumnya:** *(Belum ada jurnal pada tanggal & jam ini)*\n- ✨ **Data Baru Tersimpan:**\n  - **Kelas:** **${resolvedClass.name}**\n  - **Mapel:** **${resolvedSubject.name}**\n  - **Jam:** **Jam ke-${startHour.label} s.d. ${endHour.label}** (${targetHours.length} jam pelajaran)\n  - **Materi:** **"${materi}"**\n  - **Presensi:** **"${presenceInfo}"**\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
         data: { groupId: newGroupId, count: inserts.length },
+      };
+    }
+
+    // =========================================================
+    // HELPER 3 (MENU MATRIX PERSETUJUAN): Kelola / Kembalikan ke Draft
+    // =========================================================
+    async function executeSaveMatrixDraft(params: {
+      className: string;
+      studentIdOrName?: string;
+      subjectName?: string;
+      note?: string;
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      const { className, studentIdOrName, subjectName, note } = params;
+
+      const cleanClass = (className || "").replace(/[-\s]/g, "").toLowerCase();
+      const classConds = [
+        sql`lower(${classes.name}) = lower(${className})`,
+        sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
+      ];
+      if (isUuid(className)) classConds.push(eq(classes.id, className));
+
+      const [resolvedClass] = await db
+        .select({ id: classes.id, name: classes.name })
+        .from(classes)
+        .where(or(...classConds))
+        .limit(1);
+
+      if (!resolvedClass) {
+        return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
+      }
+
+      // Cek kepemilikan Wali Kelas untuk Matrix Persetujuan
+      const classWalas = ctx.allHomeroomTeachers.filter((ht) => ht.classId === resolvedClass.id);
+      const isMyHomeroom = classWalas.some((ht) => ht.userId === user.id);
+
+      if (!isAdminUser && !isMyHomeroom) {
+        const otherWalasNames = classWalas.map((ht) => ht.teacherName).join(", ") || "Wali Kelas Lain";
+        const myHomeroomNames = ctx.allHomeroomTeachers
+          .filter((ht) => ht.userId === user.id)
+          .map((ht) => ht.className)
+          .join(", ") || "Tidak ada";
+        return {
+          success: false,
+          message: `⛔ **Matrix Persetujuan Tidak Dapat Diubah (Kelas Perwalian Guru Lain)**\n- **Menu:** Matrix Persetujuan (\`/walikelas\`)\n- **Kelas:** **${resolvedClass.name}**\n- **Wali Kelas Pengampu:** **${otherWalasNames}** *(Kelas Perwalian Anda: ${myHomeroomNames})*\n\n> ⚠️ Sesuai aturan SIMAK, Anda tidak dapat mengubah status Matrix Persetujuan kelas yang diampu oleh Wali Kelas lain.`,
+        };
+      }
+
+      // Filter siswa jika disebutkan spesifik
+      let targetStudentId: string | undefined;
+      let targetStudentName = "Seluruh Siswa";
+      if (studentIdOrName && studentIdOrName.toUpperCase() !== "SEMUA" && studentIdOrName.toUpperCase() !== "ALL") {
+        const [st] = await db
+          .select({ id: students.id, name: students.name })
+          .from(students)
+          .where(
+            and(
+              eq(students.classId, resolvedClass.id),
+              or(
+                isUuid(studentIdOrName) ? eq(students.id, studentIdOrName) : sql`1=0`,
+                sql`lower(${students.name}) like lower(${'%' + studentIdOrName.trim() + '%'})`
+              )
+            )
+          )
+          .limit(1);
+        if (!st) {
+          return { success: false, message: `Siswa "${studentIdOrName}" tidak ditemukan di kelas ${resolvedClass.name}.` };
+        }
+        targetStudentId = st.id;
+        targetStudentName = st.name;
+      }
+
+      // Filter mapel jika disebutkan spesifik
+      let targetSubjectId: string | undefined;
+      let targetSubjectName = "Semua Mata Pelajaran";
+      if (subjectName && subjectName.toUpperCase() !== "SEMUA" && subjectName.toUpperCase() !== "ALL") {
+        const [subj] = await db
+          .select({ id: subjects.id, name: subjects.name })
+          .from(subjects)
+          .where(
+            or(
+              sql`lower(${subjects.name}) = lower(${subjectName})`,
+              sql`lower(${subjects.code}) = lower(${subjectName})`,
+              sql`lower(${subjects.name}) like lower(${'%' + subjectName + '%'})`
+            )
+          )
+          .limit(1);
+        if (subj) {
+          targetSubjectId = subj.id;
+          targetSubjectName = subj.name;
+        }
+      }
+
+      const conds = [eq(grades.classId, resolvedClass.id), isNull(grades.deletedAt)];
+      if (targetStudentId) conds.push(eq(grades.studentId, targetStudentId));
+      if (targetSubjectId) conds.push(eq(grades.subjectId, targetSubjectId));
+
+      const existingRows = await db.select().from(grades).where(and(...conds));
+      if (existingRows.length === 0) {
+        return {
+          success: false,
+          message: `⚠️ Belum ada data nilai pada **Matrix Persetujuan** untuk **${targetStudentName}** di kelas **${resolvedClass.name}** (${targetSubjectName}).`,
+        };
+      }
+
+      const prevStatuses = [...new Set(existingRows.map((r) => r.status))].join(", ");
+      const prevNotes = [...new Set(existingRows.map((r) => r.note).filter(Boolean))].join("; ") || "-";
+      const newNote = note || "Koreksi ulang / dikembalikan ke Draft melalui Asisten AI";
+
+      for (const g of existingRows) {
+        const [updated] = await db
+          .update(grades)
+          .set({
+            status: "draft",
+            note: newNote,
+            submittedBy: null,
+            submittedAt: null,
+            approvedBy: null,
+            approvedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(grades.id, g.id))
+          .returning();
+
+        await db.insert(gradeAuditLogs).values({
+          gradeId: g.id,
+          actorId: user.id,
+          action: "ai_matrix_draft",
+          before: g as unknown as Record<string, unknown>,
+          after: updated as unknown as Record<string, unknown>,
+        });
+      }
+
+      broadcastRealtimeEvent({
+        type: "grade_rejected",
+        classId: resolvedClass.id,
+        actorId: user.id,
+      });
+
+      return {
+        success: true,
+        message: `✅ **Matrix Persetujuan Berhasil Disimpan ke Draft (Auto-Save Draft)**\n- **Menu:** Matrix Persetujuan (\`/walikelas\`) & Input Nilai (\`/guru\`)\n- **Kelas:** **${resolvedClass.name}**\n- **Cakupan Siswa:** **${targetStudentName}** (${existingRows.length} data mapel)\n- **Mata Pelajaran:** **${targetSubjectName}**\n- 🔄 **Data Sebelumnya:** Status = **${prevStatuses}** | Catatan Sebelumnya = *"${prevNotes}"*\n- ✨ **Diganti Menjadi:** Status = **Draft (Koreksi Ulang)** | Catatan Baru = **"${newNote}"**`,
+        data: { updatedCount: existingRows.length },
       };
     }
 
@@ -2215,6 +2778,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // =========================================================
     const actionBlockRegex = /```action\s*([\s\S]*?)```/gi;
     let actionMatch: RegExpExecArray | null;
+    const executedActionKeys = new Set<string>();
 
     while ((actionMatch = actionBlockRegex.exec(rawReply)) !== null) {
       const blockText = actionMatch[1].trim();
@@ -2239,7 +2803,9 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         const ay              = params["tahun"] || params["tahun_ajaran"] || "2025/2026";
         const sem             = parseInt(params["semester"] || "1", 10);
 
-        if (studentIdOrName && className && subjectName && fieldRaw && !isNaN(nilaiRaw)) {
+        const dedupKey = `GRADE|${studentIdOrName}|${className}|${subjectName}|${fieldRaw}`.toLowerCase();
+        if (studentIdOrName && className && subjectName && fieldRaw && !isNaN(nilaiRaw) && !executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
           const res = await executeSaveGradeDraft({
             studentIdOrName,
             className,
@@ -2263,7 +2829,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           params[key] = val;
         }
 
-        const tanggal       = params["tanggal"] || params["date"] || new Date().toISOString().slice(0, 10);
+        const tanggal       = params["tanggal"] || params["date"] || todayIso;
         const className     = params["kelas"] || params["class"] || "";
         const subjectName   = params["mapel"] || params["subject"] || "";
         const startHourId   = params["jam_awal_id"] || params["jam_awal"] || params["start_hour_id"] || params["start"] || "";
@@ -2271,7 +2837,9 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         const materi        = params["materi"] || params["material"] || "";
         const presenceInfo  = params["presensi"] || params["presence"] || params["presence_info"] || "";
 
-        if (className && subjectName && startHourId) {
+        const dedupKey = `JOURNAL|${tanggal}|${className}|${startHourId}|${endHourId}`.toLowerCase();
+        if (className && subjectName && startHourId && !executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
           const res = await executeSaveJournalDraft({
             tanggal,
             className,
@@ -2280,6 +2848,34 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
             endHourIdOrLabel: endHourId || startHourId,
             materi,
             presenceInfo,
+          });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "SAVE_MATRIX_DRAFT") {
+        const params: Record<string, string> = {};
+        for (const line of lines.slice(1)) {
+          const colonIdx = line.indexOf(":");
+          if (colonIdx === -1) continue;
+          const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_");
+          const val = line.slice(colonIdx + 1).trim();
+          params[key] = val;
+        }
+
+        const className       = params["kelas"] || params["class"] || "";
+        const studentIdOrName = params["siswa"] || params["student"] || params["student_id"] || "SEMUA";
+        const subjectName     = params["mapel"] || params["subject"] || "SEMUA";
+        const note            = params["catatan"] || params["note"] || "";
+
+        const dedupKey = `MATRIX|${className}|${studentIdOrName}|${subjectName}`.toLowerCase();
+        if (className && !executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeSaveMatrixDraft({
+            className,
+            studentIdOrName,
+            subjectName,
+            note,
           });
           aiActions.push({ type: actionType, payload: params, result: res });
         }
@@ -2321,6 +2917,39 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     }
 
     // =========================================================
+    // LAYER 2B: Fallback jika AI menjawab rincian jurnal dengan poin-poin
+    // =========================================================
+    if (aiActions.length === 0) {
+      const jClassMatch = rawReply.match(/(?:Kelas|kelas)\s*:\s*([^\n\r*]+)/i);
+      const jSubjectMatch = rawReply.match(/(?:Mata\s*Pelajaran|mapel)\s*:\s*([^\n\r*(]+)/i);
+      const jHourMatch = rawReply.match(/(?:Jam\s*Mengajar|Jam)\s*:\s*([^\n\r*]+)/i);
+      const jMateriMatch = rawReply.match(/(?:Materi(?:\s*Pembelajaran)?)\s*:\s*([^\n\r*]+)/i);
+      const jPresensiMatch = rawReply.match(/(?:Presensi|Kehadiran)\s*:\s*([^\n\r*]+)/i);
+
+      if (jClassMatch && jSubjectMatch && jHourMatch && jMateriMatch) {
+        const hourRaw = jHourMatch[1].replace(/\(.*?\)/g, "").trim();
+        const hourParts = hourRaw.split(/\s*(?:sampai|hingga|s\.?d\.?|s\/d|–|-)\s*/i).filter(Boolean);
+        const startH = hourParts[0] || "1";
+        const endH = hourParts[1] || startH;
+
+        const res = await executeSaveJournalDraft({
+          tanggal: todayIso,
+          className: jClassMatch[1].trim(),
+          subjectName: jSubjectMatch[1].trim(),
+          startHourIdOrLabel: startH,
+          endHourIdOrLabel: endH,
+          materi: jMateriMatch[1].trim(),
+          presenceInfo: jPresensiMatch ? jPresensiMatch[1].trim() : "Nihil (hadir semua)",
+        });
+        aiActions.push({
+          type: "SAVE_JOURNAL_DRAFT",
+          payload: { from: "reply_journal_summary", className: jClassMatch[1].trim() },
+          result: res,
+        });
+      }
+    }
+
+    // =========================================================
     // LAYER 3: Fallback jika userPrompt langsung memerintahkan ubah nilai
     // =========================================================
     const promptToCheck = (userPrompt || (chatMessages[chatMessages.length - 1]?.text) || "").toLowerCase();
@@ -2349,29 +2978,25 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
     // =========================================================
     // LAYER 3B: Fallback jika userPrompt memerintahkan simpan jurnal
-    // Diperlukan karena AI Gemini Flash sering tidak menyertakan action block
     // =========================================================
+    const historyCombined = chatMessages.map((m) => m.text).join("\n").toLowerCase();
     if (aiActions.length === 0 && (
       promptToCheck.includes("jurnal") ||
       promptToCheck.includes("simpan jurnal") ||
       promptToCheck.includes("catat jurnal") ||
       promptToCheck.includes("input jurnal") ||
-      promptToCheck.includes("tambah jurnal")
+      promptToCheck.includes("tambah jurnal") ||
+      (promptToCheck.includes("hari ini") && historyCombined.includes("jurnal"))
     )) {
-      // Ekstrak kelas dari prompt
-      const journalClassMatch = promptToCheck.match(/kelas\s+([xXiI0-9\-\s]+?)(?:\s*,|\s+mapel|\s+jam|\s+materi|$)/i);
-      // Ekstrak mapel dari prompt
-      const journalSubjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk|dasar|pemrog\w*)\b/i) ||
-        promptToCheck.match(/mapel\s+(\w[\w\s]*?)(?:\s*,|\s+jam|\s+materi|$)/i);
-      // Ekstrak jam awal
-      const journalStartHourMatch = promptToCheck.match(/jam\s+(pertama|kedua|ketiga|keempat|kelima|keenam|[\d]+)\s*(?:sampai|hingga|ke|s\/d|–|-)?/i);
-      // Ekstrak jam akhir
-      const journalEndHourMatch = promptToCheck.match(/(?:sampai|hingga|ke|s\/d|–|-)\s*(?:jam\s+)?(pertama|kedua|ketiga|keempat|kelima|keenam|[\d]+)/i);
-      // Ekstrak materi
-      const journalMateriMatch = promptToCheck.match(/materi[:\s]+([^,]+?)(?:\s*,|\s+presensi|\s+kehadiran|$)/i);
-      // Ekstrak presensi
-      const journalPresensiMatch = promptToCheck.match(/(?:presensi|kehadiran|hadir)[:\s]+([^,]+?)(?:\s*,|$)/i) ||
-        promptToCheck.match(/\b(nihil|hadir semua|hadir seluruhnya)\b/i);
+      const sourceText = promptToCheck.includes("kelas") ? promptToCheck : historyCombined;
+      const journalClassMatch = sourceText.match(/kelas\s+([xXiI0-9\-\s]+?)(?:\s*,|\s+mapel|\s+jam|\s+materi|\n|$)/i);
+      const journalSubjectMatch = sourceText.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk|dasar|pemrog\w*)\b/i) ||
+        sourceText.match(/mapel\s+(\w[\w\s]*?)(?:\s*,|\s+jam|\s+materi|\n|$)/i);
+      const journalStartHourMatch = sourceText.match(/jam\s+(pertama|kedua|ketiga|keempat|kelima|keenam|[\d]+)\s*(?:sampai|hingga|ke|s\/d|–|-)?/i);
+      const journalEndHourMatch = sourceText.match(/(?:sampai|hingga|ke|s\/d|–|-)\s*(?:jam\s+)?(pertama|kedua|ketiga|keempat|kelima|keenam|[\d]+)/i);
+      const journalMateriMatch = sourceText.match(/materi[:\s]+([^,\n]+?)(?:\s*,|\s+presensi|\s+kehadiran|\n|$)/i);
+      const journalPresensiMatch = sourceText.match(/(?:presensi|kehadiran|hadir)[:\s]+([^,"\n]+?)(?:\s*,|"|\n|$)/i) ||
+        sourceText.match(/\b(nihil|hadir semua|hadir seluruhnya)\b/i);
 
       const journalClass = journalClassMatch?.[1]?.trim();
       const journalSubject = journalSubjectMatch?.[1]?.trim() || journalSubjectMatch?.[2]?.trim();
@@ -2382,7 +3007,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
       if (journalClass && journalSubject && journalStartHour) {
         const res = await executeSaveJournalDraft({
-          tanggal: new Date().toISOString().slice(0, 10),
+          tanggal: todayIso,
           className: journalClass,
           subjectName: journalSubject,
           startHourIdOrLabel: journalStartHour,
@@ -2399,16 +3024,27 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     }
 
     // Bersihkan blok action dari teks reply yang ditampilkan ke pengguna
-    const cleanReply = rawReply.replace(actionBlockRegex, "").trim();
+    // Serta koreksi tanggal halusinasi 2023/2024/2025 di teks narasi AI menjadi tanggal server hari ini
+    let cleanReply = rawReply
+      .replace(actionBlockRegex, "")
+      .replace(/\b202[345]-\d{2}-\d{2}\b/g, todayIso)
+      .replace(/\b\d{1,2}\s+(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+202[345]\b/gi, todayReadable)
+      .replace(/\s*\(pukul\s+(\d{2}:\d{2})\s*-\s*\1\)/gi, "")
+      .trim();
 
-    // SANGAT PENTING: Lampirkan konfirmasi aksi database langsung ke teks balasan chat
+    // SANGAT PENTING: Lampirkan konfirmasi aksi database langsung ke teks balasan chat.
+    // Jika ada aksi yang DITOLAK (misal karena milik guru lain atau sudah terkunci), pastikan narasi AI tidak mengklaim "berhasil disimpan".
     let finalReply = cleanReply;
     if (aiActions.length > 0) {
       const actionSummaries = aiActions
         .map((a) => a.result.message)
         .filter(Boolean)
         .join("\n\n");
-      if (actionSummaries) {
+      const anyBlocked = aiActions.some((a) => !a.result.success);
+
+      if (anyBlocked && aiActions.every((a) => !a.result.success)) {
+        finalReply = `Mohon perhatian ${ctx.honorific} ${user.name.split(" ")[0]}, permintaan perubahan data tidak dapat langsung dilakukan karena ketentuan sistem berikut:\n\n${actionSummaries}`;
+      } else if (actionSummaries) {
         finalReply = `${finalReply}\n\n---\n${actionSummaries}`.trim();
       }
     }

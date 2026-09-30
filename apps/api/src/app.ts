@@ -138,6 +138,45 @@ import {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
       );
       CREATE INDEX IF NOT EXISTS ai_chat_files_session_idx ON ai_chat_files (session_id);
+
+      UPDATE teacher_journals
+      SET date = TO_CHAR(NOW() AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD'),
+          updated_at = NOW()
+      WHERE status = 'draft'
+        AND deleted_at IS NULL
+        AND (date LIKE '2024-%' OR date LIKE '2025-%');
+
+      DELETE FROM teacher_journals
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY teacher_user_id, date, teaching_hour_id
+                   ORDER BY CASE WHEN status = 'sent' THEN 0 ELSE 1 END ASC,
+                            created_at DESC,
+                            id DESC
+                 ) AS rn
+          FROM teacher_journals
+          WHERE deleted_at IS NULL
+        ) t
+        WHERE t.rn > 1
+      );
+
+      DELETE FROM teacher_journals
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY date, class_id, teaching_hour_id
+                   ORDER BY CASE WHEN status = 'sent' THEN 0 ELSE 1 END ASC,
+                            created_at DESC,
+                            id DESC
+                 ) AS rn
+          FROM teacher_journals
+          WHERE deleted_at IS NULL AND class_id IS NOT NULL
+        ) t
+        WHERE t.rn > 1
+      );
     `);
 
     await initSystemVersionState();
