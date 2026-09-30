@@ -1,14 +1,16 @@
 {
-  "version": "1.5.0",
-  "version_code": 150,
+  "version": "1.6.0",
+  "version_code": 160,
   "db_version": "1.0.0",
-  "title": "SIMAK v1.5.0 — Redesain Halaman Login Split-Screen & Responsif",
-  "release_date": "2026-08-28",
+  "title": "SIMAK v1.6.0 — Asisten AI Guru (Multimodal & Drag-Drop) + Cloud Object Storage",
+  "release_date": "2026-09-30",
   "force_update": false,
   "changelog": [
-    "Redesain Halaman Login (Split-Screen): Tampilan masuk kini menyerupai Cloudflare dengan panel form di kiri dan panel hero branding biru akademis premium di kanan",
-    "Responsivitas Penuh: Tampilan adaptif di semua ukuran layar (Mobile, Tablet, Desktop) dengan auto-collapsing panel hero di perangkat mobile/tablet",
-    "UI Glassmorphism: Ditambahkan ornamen visual grid futuristik, ambient glow, serta panel mockup real-time status Poin GDS dan Presensi BK"
+    "Fitur Baru: Room Chat Asisten AI Guru (/guru/ai) dengan desain Dual-Sidebar (Sidebar Utama SIMAK + Sidebar Riwayat Obrolan ala Gemini) dan pengalihan otomatis ke Asisten AI saat login",
+    "Dukungan Multimodal & Drag-and-Drop: Unggah gambar, video, PDF, Excel nilai, atau dokumen langsung via Drag & Drop maupun Paste (Ctrl+V) di kolom chat hingga 50 MB/file (maks. 25 file) dengan integrasi Gemini 3.1 Flash",
+    "Fitur Baru: Konfigurasi Cloud Object Storage terpadu di halaman Integrasi Admin (mendukung Google Cloud Storage, Amazon S3, Cloudflare R2, dan Generic S3-Compatible seperti MinIO/Wasabi/DO Spaces)",
+    "Otomasi Penyimpanan Cloud: Saat toggle Object Storage aktif, seluruh file unggahan otomatis tersimpan ke Cloud Object Storage dan beralih ke penyimpanan lokal jika dinonaktifkan",
+    "PENTING: Rilis ini menambahkan dependency @aws-sdk/client-s3 di apps/api — jalankan `pnpm install` di server produksi jika mengaktifkan Object Storage"
   ],
   "min_supported_version": "1.0.0",
   "schema_changes": [

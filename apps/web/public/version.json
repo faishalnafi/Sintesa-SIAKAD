@@ -1,19 +1,20 @@
 {
-  "version": "1.1.0",
-  "version_code": 110,
+  "version": "1.6.0",
+  "version_code": 160,
   "db_version": "1.0.0",
-  "title": "SIMAK v1.1.0 — Penyempurnaan UX & Keamanan Login",
-  "release_date": "2026-08-04",
+  "title": "SIMAK v1.6.0 — Asisten AI Guru (Multimodal & Drag-Drop) + Cloud Object Storage",
+  "release_date": "2026-09-30",
   "force_update": false,
   "changelog": [
-    "Halaman login utama kini hanya tampilkan 2 tombol: SSO Kredensia & Google (disabled)",
-    "Login manual email/password dipindahkan ke halaman khusus /office",
-    "Perbaikan SSO: setelah login via Kredensia, redirect kembali ke SINTESA (bukan ke portal SSO)",
-    "Sinkronisasi role otomatis dari Kredensia SSO saat setiap login — perubahan role di Kredensia langsung terupdate",
-    "Popup sapaan selamat pagi/siang/sore/malam dengan pesan pengingat kesehatan saat pertama login",
-    "Label jam mengajar kini hanya tampilkan 'Jam ke-X' tanpa rentang pukul di seluruh form & tabel",
-    "Perbaikan ikon Material Symbols: tidak lagi tampil teks mentah saat koneksi internet lambat"
+    "Fitur Baru: Room Chat Asisten AI Guru (/guru/ai) dengan desain Dual-Sidebar (Sidebar Utama SIMAK + Sidebar Riwayat Obrolan ala Gemini) dan pengalihan otomatis ke Asisten AI saat login",
+    "Dukungan Multimodal & Drag-and-Drop: Unggah gambar, video, PDF, Excel nilai, atau dokumen langsung via Drag & Drop maupun Paste (Ctrl+V) di kolom chat hingga 50 MB/file (maks. 25 file) dengan integrasi Gemini 3.1 Flash",
+    "Fitur Baru: Konfigurasi Cloud Object Storage terpadu di halaman Integrasi Admin (mendukung Google Cloud Storage, Amazon S3, Cloudflare R2, dan Generic S3-Compatible seperti MinIO/Wasabi/DO Spaces)",
+    "Otomasi Penyimpanan Cloud: Saat toggle Object Storage aktif, seluruh file unggahan otomatis tersimpan ke Cloud Object Storage dan beralih ke penyimpanan lokal jika dinonaktifkan",
+    "PENTING: Rilis ini menambahkan dependency @aws-sdk/client-s3 di apps/api — jalankan `pnpm install` di server produksi jika mengaktifkan Object Storage"
   ],
   "min_supported_version": "1.0.0",
-  "schema_changes": []
+  "schema_changes": [
+    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
+    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
+  ]
 }
