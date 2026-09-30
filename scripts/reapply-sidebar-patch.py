@@ -7,21 +7,21 @@ each Update Aplikasi zip ships fresh hashed asset filenames that don't carry
 these customizations.
 
 Usage: sudo python3 reapply_sidebar_patch.py [APP_ROOT]
-Default APP_ROOT: /www/wwwroot/partitionb/siakad.sman3mjk.sch.id
+Default APP_ROOT: /www/wwwroot/partitionb/simak.sman3mjk.sch.id
 """
 import os
 import re
 import sys
 
-APP_ROOT = sys.argv[1] if len(sys.argv) > 1 else "/www/wwwroot/partitionb/siakad.sman3mjk.sch.id"
+APP_ROOT = sys.argv[1] if len(sys.argv) > 1 else "/www/wwwroot/partitionb/simak.sman3mjk.sch.id"
 DIST = os.path.join(APP_ROOT, "apps/web/dist")
 INDEX_HTML = os.path.join(DIST, "index.html")
 
 CSS_MARKER = "sidebar-toggle-btn"
 CSS_ADDITION = (
-".app-sidebar{--sidebar:#0f91fc;--fg:#f0f9ff;--muted:rgba(255,255,255,.85);--divider:rgba(255,255,255,.18);"
-"--card-border:rgba(255,255,255,.18);--hover:rgba(255,255,255,.12);--accent:#f0f9ff;"
-"--accent-soft:rgba(255,255,255,.18);background:#0f91fc;color:#f0f9ff}"
+".app-sidebar{--sidebar:#EA4335;--fg:#fff5f5;--muted:rgba(255,255,255,.85);--divider:rgba(255,255,255,.18);"
+"--card-border:rgba(255,255,255,.18);--hover:rgba(255,255,255,.15);--accent:#fff5f5;"
+"--accent-soft:rgba(255,255,255,.20);background:#EA4335;color:#fff5f5}"
 ".app-sidebar nav{scrollbar-width:thin;scrollbar-color:transparent transparent}"
 ".app-sidebar nav:hover{scrollbar-color:rgba(255,255,255,.35) transparent}"
 ".app-sidebar nav::-webkit-scrollbar{width:6px}"
@@ -41,8 +41,8 @@ CSS_ADDITION = (
 "html.sidebar-collapsed .app-sidebar.w-\\[260px\\]>div:last-child>div:first-child{display:none}"
 "html.sidebar-collapsed .app-sidebar.w-\\[260px\\]>div:last-child>div:last-child button{font-size:0;padding-left:0;padding-right:0}"
 "html.sidebar-collapsed .app-sidebar.w-\\[260px\\]>div:last-child>div:last-child button .material-symbols-outlined{font-size:20px}"
-"#sidebar-toggle-btn{position:fixed;top:22px;left:244px;z-index:35;width:26px;height:26px;border-radius:9999px;background:#fff;color:#0f91fc;border:none;box-shadow:0 2px 8px rgba(0,0,0,.25);display:none;align-items:center;justify-content:center;cursor:pointer;font-size:13px;line-height:1;transition:left .25s ease,transform .25s ease;padding:0}"
-"#sidebar-toggle-btn:hover{background:#f0f9ff}"
+"#sidebar-toggle-btn{position:fixed;top:22px;left:244px;z-index:35;width:26px;height:26px;border-radius:9999px;background:#fff;color:#EA4335;border:none;box-shadow:0 2px 8px rgba(0,0,0,.25);display:none;align-items:center;justify-content:center;cursor:pointer;font-size:13px;line-height:1;transition:left .25s ease,transform .25s ease;padding:0}"
+"#sidebar-toggle-btn:hover{background:#fff5f5}"
 "@media(min-width:1024px){#sidebar-toggle-btn{display:flex}}"
 "html.sidebar-collapsed #sidebar-toggle-btn{left:60px;transform:rotate(180deg)}"
 )

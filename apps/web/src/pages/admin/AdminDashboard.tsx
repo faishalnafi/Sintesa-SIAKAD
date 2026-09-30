@@ -126,7 +126,7 @@ export function AdminDashboard() {
       <PageHeader
         eyebrow="Administrasi"
         title="Dashboard"
-        description="Ringkasan operasional akademik. Autentikasi dan master identitas melalui Kredensia; pengelolaan nilai, tahun ajar, dan rekap di SIAKAD."
+        description="Ringkasan operasional akademik. Autentikasi dan master identitas melalui Kredensia; pengelolaan nilai, tahun ajar, dan rekap di SIMAK."
         action={
           <div className="flex flex-wrap gap-2">
             <Link to="/admin/students">
@@ -273,7 +273,7 @@ export function AdminDashboard() {
             <div>
               <h2 className="font-display font-bold text-base md:text-lg">Pemetaan peran</h2>
               <p className="text-sm app-muted mt-0.5">
-                Kode RBAC SIAKAD yang dipetakan dari peran Kredensia.
+                Kode RBAC SIMAK yang dipetakan dari peran Kredensia.
               </p>
             </div>
           </div>

@@ -34,15 +34,15 @@ const STAR_ORBIT_RADIUS = 90; // Capture threshold for star clusters
 const CURSOR_ORBIT_RADIUS = 115; // Capture threshold around cursor
 const BOUNDARY_MARGIN = 90; // Allow particles to travel outside canvas before wrapping
 
-// SSO Vibrant Blue: rgb(15, 145, 252) / #0F91FC
+// SIMAK Vibrant Red: rgb(234, 67, 53) / #EA4335
 // Pure White: rgb(255, 255, 255) / #FFFFFF
 function getParticleRGB(x: number, splitX: number): { r: number; g: number; b: number } {
   const transitionWidth = 60;
   const t = Math.max(0, Math.min(1, (x - (splitX - transitionWidth / 2)) / transitionWidth));
 
-  const r = Math.round(15 + (255 - 15) * t);
-  const g = Math.round(145 + (255 - 145) * t);
-  const b = Math.round(252 + (255 - 252) * t);
+  const r = Math.round(234 + (255 - 234) * t);
+  const g = Math.round(67 + (255 - 67) * t);
+  const b = Math.round(53 + (255 - 53) * t);
 
   return { r, g, b };
 }

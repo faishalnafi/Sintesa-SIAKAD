@@ -15,6 +15,8 @@ import {
   teacherJournals,
   users,
   assessmentComponents,
+  userRoles,
+  roles,
 } from "../../db/schema/index.js";
 import { requireAuth, type AuthVariables } from "../../middlewares/auth.js";
 import { requireRoles } from "../../middlewares/rbac.js";
@@ -22,6 +24,8 @@ import { computeAverage, isValidScore } from "../../utils/grades.js";
 import { env } from "../../env.js";
 import { ssoListKelas } from "../../services/sso-api-client.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
+import { askGemini } from "../../services/gemini.js";
+import { uploadFile } from "../../services/storage/storage.service.js";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -35,7 +39,7 @@ teacherRoutes.get("/debug-sso", async (c) => {
     const res = await fetch(testUrl, {
       headers: {
         "X-API-Key": env.SSO_API_KEY || "",
-        Origin: env.FRONTEND_URL || "https://siakad.sman3mjk.sch.id",
+        Origin: env.FRONTEND_URL || "https://simak.sman3mjk.sch.id",
       },
     });
     const status = res.status;
@@ -348,8 +352,8 @@ teacherRoutes.get("/grades", async (c) => {
       const ssoRes = await fetch(url, {
         headers: {
           "X-API-Key": env.SSO_API_KEY,
-          Origin: env.FRONTEND_URL || "https://siakad.sman3mjk.sch.id",
-          Referer: env.FRONTEND_URL ? `${env.FRONTEND_URL}/` : "https://siakad.sman3mjk.sch.id/",
+          Origin: env.FRONTEND_URL || "https://simak.sman3mjk.sch.id",
+          Referer: env.FRONTEND_URL ? `${env.FRONTEND_URL}/` : "https://simak.sman3mjk.sch.id/",
         },
       });
       const json = (await ssoRes.json()) as any;
@@ -1007,6 +1011,726 @@ teacherRoutes.post("/journals/bulk-send", async (c) => {
     });
   } catch (e) {
     return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 500);
+  }
+});
+
+/**
+ * Helper untuk menyusun konteks lengkap profil guru, mapel, dan kelas
+ */
+async function getTeacherAiContext(userId: string, userName: string) {
+  // 1. Ambil data guru
+  const [teacher] = await db.select().from(teachers).where(eq(teachers.userId, userId)).limit(1);
+
+  // 2. Ambil mapel yang diampu
+  const assignedSubjects = await db
+    .select({
+      id: subjects.id,
+      name: subjects.name,
+      code: subjects.code,
+      type: subjects.type,
+    })
+    .from(teacherSubjects)
+    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+    .where(and(eq(teacherSubjects.userId, userId), eq(subjects.isActive, true)))
+    .orderBy(subjects.name);
+
+  // 3. Ambil kelas aktif + mapel yang diajar guru di kelas tersebut (via classSubjects)
+  const taughtClasses = teacher
+    ? await db
+        .selectDistinct({
+          classId: classSubjects.classId,
+          className: classes.name,
+          subjectId: classSubjects.subjectId,
+          subjectName: subjects.name,
+        })
+        .from(classSubjects)
+        .innerJoin(classes, eq(classSubjects.classId, classes.id))
+        .innerJoin(subjects, eq(classSubjects.subjectId, subjects.id))
+        .where(and(eq(classSubjects.teacherId, teacher.id), eq(classes.isActive, true)))
+        .orderBy(classes.name, subjects.name)
+    : [];
+
+  // 4. Ambil daftar kelas aktif (umum, untuk referensi)
+  const activeClasses = await db
+    .select({ id: classes.id, name: classes.name, gradeLevel: classes.gradeLevel })
+    .from(classes)
+    .where(eq(classes.isActive, true))
+    .orderBy(classes.name);
+
+  // 5. Ambil daftar siswa (utamakan kelas yang diajar jika ada relasi spesifik, atau seluruh siswa aktif di sekolah)
+  const taughtClassIds = [...new Set(taughtClasses.map((tc) => tc.classId))];
+  const studentRoster = await db
+    .select({
+      id: students.id,
+      name: students.name,
+      nis: students.nis,
+      nisn: students.nisn,
+      classId: students.classId,
+      className: classes.name,
+    })
+    .from(students)
+    .innerJoin(classes, eq(students.classId, classes.id))
+    .where(
+      and(
+        eq(students.isActive, true),
+        taughtClassIds.length > 0 ? inArray(students.classId, taughtClassIds) : sql`1=1`
+      )
+    )
+    .orderBy(classes.name, students.name);
+
+  // 6. Ambil daftar admin aktif dari DB (role code: admin | superadmin)
+  const adminUsers = await db
+    .selectDistinct({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      roleCode: roles.code,
+      roleName: roles.name,
+    })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.userId, users.id))
+    .innerJoin(roles, eq(roles.id, userRoles.roleId))
+    .where(
+      and(
+        eq(users.isActive, true),
+        or(eq(roles.code, "admin"), eq(roles.code, "superadmin"))
+      )
+    )
+    .orderBy(roles.code, users.name);
+
+  // 7. Tentukan sapaan berdasarkan jenis kelamin
+  let honorific = "Bapak/Ibu";
+  let genderLabel = "Tidak Diketahui";
+  const jk = teacher?.jenisKelamin?.toUpperCase();
+  if (jk === "L" || jk === "LAKI-LAKI" || jk === "M") {
+    honorific = "Pak";
+    genderLabel = "Laki-laki";
+  } else if (jk === "P" || jk === "PEREMPUAN" || jk === "F") {
+    honorific = "Bu";
+    genderLabel = "Perempuan";
+  }
+
+  const subjectNames =
+    assignedSubjects.length > 0
+      ? assignedSubjects.map((s) => s.name).join(", ")
+      : "Belum ada mapel khusus yang dikunci di sistem (Mengajar umum/admin)";
+
+  const classNames = activeClasses.map((c) => c.name).join(", ");
+
+  return {
+    teacher,
+    assignedSubjects,
+    taughtClasses,
+    activeClasses,
+    studentRoster,
+    honorific,
+    genderLabel,
+    subjectNames,
+    classNames,
+    adminUsers,
+  };
+}
+
+/**
+ * GET /api/teacher/ai/context
+ * Mengambil konteks profil guru untuk inisialisasi AI di frontend
+ */
+teacherRoutes.get("/ai/context", async (c) => {
+  const user = c.get("user");
+  const ctx = await getTeacherAiContext(user.id, user.name);
+
+  return c.json({
+    success: true,
+    data: {
+      name: user.name,
+      nip: ctx.teacher?.nip || null,
+      honorific: ctx.honorific,
+      gender: ctx.genderLabel,
+      subjects: ctx.assignedSubjects,
+      subjectNames: ctx.subjectNames,
+    },
+  });
+});
+
+/**
+ * POST /api/teacher/ai/chat
+ * Endpoint chat interaktif dengan Google Gemini API
+ */
+teacherRoutes.post("/ai/chat", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json();
+  const { messages = [], userPrompt, systemPromptExtra, files = [] } = body;
+
+  const ctx = await getTeacherAiContext(user.id, user.name);
+
+  // Buat daftar admin berformat teks dari DB
+  const adminList = ctx.adminUsers.length > 0
+    ? ctx.adminUsers.map((a) => `- **${a.name}** (${a.roleName}${a.email ? `, email: ${a.email}` : ""})`).join("\n")
+    : "- Data admin tidak tersedia, silakan hubungi pengelola sekolah.";
+
+  // Buat tabel daftar kelas yang diajar guru beserta mapelnya
+  const taughtClassesText =
+    ctx.taughtClasses.length > 0
+      ? [...new Map(ctx.taughtClasses.map((tc) => [`${tc.className}|${tc.subjectName}`, tc])).values()]
+          .map((tc) => `- Kelas **${tc.className}** → Mapel **${tc.subjectName}** (classId: \`${tc.classId}\`, subjectId: \`${tc.subjectId}\`)`)
+          .join("\n")
+      : ctx.assignedSubjects.length > 0
+      ? ctx.assignedSubjects
+          .map((s) => `- Guru mengampu Mata Pelajaran **${s.name}** (${s.code}) untuk semua kelas aktif: ${ctx.classNames}`)
+          .join("\n")
+      : "- Belum ada penugasan kelas tercatat di sistem.";
+
+  // Buat tabel daftar siswa dari kelas yang diajar (untuk resolusi identifier)
+  const studentRosterText =
+    ctx.studentRoster.length > 0
+      ? ctx.studentRoster
+          .map(
+            (s) =>
+              `| ${s.name} | ${s.nis ?? "-"} | ${s.nisn ?? "-"} | ${s.className} | \`${s.id}\` |`
+          )
+          .join("\n")
+      : "| (Tidak ada data siswa) | - | - | - | - |";
+
+  const systemInstruction = `Anda adalah Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA).
+
+## Identitas Pengguna yang Sedang Login
+- Nama Lengkap: ${user.name}
+- User ID: ${user.id}
+- Sapaan: ${ctx.honorific} ${user.name} (jenis kelamin: ${ctx.genderLabel}) — WAJIB konsisten menggunakan "${ctx.honorific}"
+- NIP: ${ctx.teacher?.nip || "Tidak tercatat"}
+- Mata Pelajaran Resmi yang Diampu: ${ctx.subjectNames}
+
+## Penugasan Kelas & Mata Pelajaran
+${taughtClassesText}
+
+## 📋 Daftar Siswa Aktif Sekolah
+Tabel ini berisi siswa aktif beserta Kelas, NIS, NISN, dan UUID. Gunakan data ini untuk mencocokkan input guru (bisa berupa nama lengkap, nama panggilan/sebagian, NIS, NISN, atau UUID).
+
+| Nama Lengkap | NIS | NISN | Kelas | ID (UUID) |
+|---|---|---|---|---|
+${studentRosterText}
+
+## Tugas Utama Anda
+1. Panggil pengguna dengan "${ctx.honorific} ${user.name.split(" ")[0]}" secara ramah dan profesional.
+2. Bantu guru dalam: pembuatan RPP/Modul Ajar Kurikulum Merdeka, bank soal, kisi-kisi, administrasi jurnal mengajar, pengolahan nilai, dan pertanyaan seputar akademik sekolah.
+3. Jawab pertanyaan seputar mapel yang diampu dengan akurat mengacu data di atas.
+4. Format jawaban menggunakan Markdown rapi (bullet, **tebal**, tabel, dsb.).
+
+## 🔍 ATURAN PENCOCOKAN SISWA & KONFIRMASI (SANGAT PENTING)
+Ketika guru meminta mengubah atau menyimpan nilai siswa:
+
+1. **JIKA DITEMUKAN LEBIH DARI 1 SISWA (NAMA KEMBAR / AMBIGU):**
+   - ⚠️ **DILARANG MENEBAK DAN DILARANG MEMBUAT ACTION BLOCK!**
+   - Anda **WAJIB** meminta konfirmasi kepada guru dengan menyajikan daftar semua siswa yang cocok beserta Kelas dan NIS/NISN-nya:
+     *Contoh respons jika guru hanya mengetik "Angelica":*
+     "Ditemukan 2 siswa yang cocok dengan nama tersebut:
+      1. **ANGELICA PUTRI SAVIRA** (Kelas **X-1**, NIS: 0102112563)
+      2. **AIZYAH ANGELICA PUTERI** (Kelas **XI-9**, NIS: 0107617534)
+      
+      Mohon konfirmasi, siswa mana dan di kelas mana yang dimaksud, ${ctx.honorific} ${user.name.split(" ")[0]}?"
+
+2. **JIKA SISWA TIDAK DITEMUKAN:**
+   - Beritahu bahwa siswa tidak ditemukan di sistem. Minta guru memeriksa kembali penulisan nama, kelas, atau NIS/NISN.
+
+3. **JIKA DATA BELUM LENGKAP:**
+   - Jika guru belum menyebutkan: mapel, jenis penilaian (UH1, T1, STS, UH2, T2), atau nilai angka (0-100), tanyakan bagian yang kurang terlebih dahulu sebelum membuat action block.
+
+4. **JIKA IDENTITAS PASTI & DATA LENGKAP (TEPAT 1 SISWA):**
+   - Buat format ACTION BLOCK tepat di baris pertama respon Anda:
+     \`\`\`action
+     SAVE_GRADE_DRAFT
+     student_id: <UUID siswa dari tabel Daftar Siswa di atas>
+     siswa: <Nama Lengkap Siswa>
+     kelas: <Nama Kelas, contoh: X-1>
+     mapel: <Nama Mapel, contoh: RPL>
+     field: <uh1 | t1 | sts | uh2 | t2>
+     nilai: <angka 0-100>
+     tahun: 2025/2026
+     semester: 1
+     \`\`\`
+   - Di bawah action block, tulis penjelasan ramah bahwa nilai disimpan sebagai **draft** di database (bukan dikirim resmi, guru dapat meninjau di halaman Input Nilai).
+
+## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE
+- **JANGAN PERNAH** mengklaim bahwa data sudah tersimpan, diperbarui permanen, atau dikunci di sistem TANPA menyertakan format ACTION BLOCK di atas.
+- **JANGAN PERNAH** mengarang alasan teknis seperti "lakukan hard refresh (Ctrl+F5)", "flush memori", atau "kode eksekusi: SIMAK-XXX".
+- Jika dalam riwayat obrolan sebelumnya Anda pernah mengklaim data tersimpan padahal pengguna bilang belum berubah, AKUI dengan jujur bahwa sebelumnya belum tersimpan dan gunakan ACTION BLOCK sekarang untuk menyimpannya ke database.
+
+## ⚠️ ATURAN BISNIS APLIKASI YANG WAJIB DITEGAKKAN
+### 🔒 ISOLASI DATA ANTAR PENGGUNA (PRIORITAS TERTINGGI)
+- **Setiap guru HANYA boleh mengelola data MILIKNYA SENDIRI.**
+- Guru yang sedang login adalah **${user.name} (ID: ${user.id})**.
+- **DILARANG KERAS** membantu, memfasilitasi, atau memberikan instruksi untuk mengubah, membatalkan, menghapus, atau memanipulasi data milik guru lain — meskipun keduanya memiliki role yang sama (sesama guru).
+- Contoh yang HARUS DITOLAK:
+  - "Tolong ubah jurnal mengajar Pak/Bu [nama guru lain]..."
+  - "Batalkan nilai yang diinput oleh guru lain..."
+  - "Edit data [nama guru lain] di sistem..."
+- Jika ada permintaan seperti ini → **Tolak tegas**, jelaskan bahwa data guru lain adalah privasi yang dilindungi sistem dan hanya Admin yang berwenang mengelola data lintas pengguna.
+
+### Jurnal Mengajar (Teacher Journals)
+- **Status jurnal**: \`draft\` → bisa diedit/dihapus oleh guru PEMILIKNYA sendiri | \`sent\` → sudah dikirim resmi, terkunci.
+- **Setelah jurnal berstatus \`sent\`**: guru TIDAK dapat membatalkan, mengedit, atau menghapus jurnalnya sendiri.
+- **Hanya Admin/Superadmin** yang berwenang membatalkan (cancel) atau mengubah jurnal yang sudah dikirim.
+- Jika guru meminta pembatalan jurnal yang sudah dikirim → tolak dan arahkan ke Admin.
+
+### Nilai Siswa (Grades)
+- **Status nilai**: \`draft\` → dapat diubah oleh guru yang menginputnya | \`submitted\` → sudah diajukan, terkunci.
+- Nilai yang sudah disubmit hanya bisa diubah/dibatalkan oleh **Admin/Superadmin**.
+- Guru tidak dapat mengubah nilai yang diinput oleh guru lain.
+
+### Hak Akses Berdasarkan Role
+- Role **guru**: hanya bisa mengelola data miliknya sendiri (jurnal, nilai kelas yang diajarnya).
+- Role **walikelas**: tambahan akses lihat/rekap data kelas yang diasuhnya, tetapi tidak bisa ubah data guru lain.
+- Role **admin/superadmin**: satu-satunya role yang berwenang atas data lintas pengguna.
+- **Anda TIDAK boleh** menyarankan cara mengakali/bypass aturan aplikasi dalam bentuk apapun.
+
+## 👤 Daftar Admin Aktif SIMAK (yang berwenang menangani permintaan lintas pengguna / pembatalan data)
+${adminList}
+
+Jika guru perlu bantuan yang hanya bisa dilakukan admin, arahkan untuk **menghubungi salah satu admin di atas** secara langsung atau melalui komunikasi resmi sekolah.
+${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
+
+
+  // Format riwayat pesan untuk Gemini (dengan sanitasi error & alternasi user-model yang ketat)
+  const rawList: Array<{ role: "user" | "model"; text: string }> = [];
+  if (Array.isArray(messages)) {
+    for (const msg of messages) {
+      if (!msg.text && !msg.content) continue;
+      const text = (msg.text || msg.content || "").trim();
+      if (!text) continue;
+      // Abaikan pesan error frontend sebelumnya agar tidak merusak konteks prompt
+      if (text.startsWith("⚠️")) continue;
+
+      if (msg.sender === "user" || msg.role === "user") {
+        rawList.push({ role: "user", text });
+      } else if (msg.sender === "assistant" || msg.role === "model") {
+        rawList.push({ role: "model", text });
+      }
+    }
+  }
+
+  // Jika ada userPrompt yang belum masuk di ujung messages
+  if (userPrompt) {
+    const promptText = userPrompt.trim();
+    if (promptText && (!rawList.length || rawList[rawList.length - 1].text !== promptText)) {
+      rawList.push({ role: "user", text: promptText });
+    }
+  }
+
+  // Normalisasi urutan: Gemini mewajibkan giliran bergantian (user -> model -> user -> model -> user)
+  const chatMessages: Array<{ role: "user" | "model"; text: string }> = [];
+  for (const item of rawList) {
+    if (chatMessages.length === 0) {
+      if (item.role === "user") {
+        chatMessages.push(item);
+      }
+    } else {
+      const prev = chatMessages[chatMessages.length - 1];
+      if (prev.role === item.role) {
+        // Gabungkan pesan berurutan dengan role sama
+        prev.text = `${prev.text}\n\n${item.text}`;
+      } else {
+        chatMessages.push(item);
+      }
+    }
+  }
+
+  // Pastikan pesan terakhir adalah user
+  if (chatMessages.length === 0 || chatMessages[chatMessages.length - 1].role !== "user") {
+    if (userPrompt && userPrompt.trim()) {
+      chatMessages.push({ role: "user", text: userPrompt.trim() });
+    } else if (Array.isArray(files) && files.length > 0) {
+      chatMessages.push({
+        role: "user",
+        text: "Mohon analisis dan jelaskan isi dari berkas yang saya lampirkan ini.",
+      });
+    }
+  }
+
+  if (chatMessages.length === 0) {
+    return c.json({ success: false, message: "Pesan tidak boleh kosong" }, 400);
+  }
+
+  try {
+    // Store uploaded files into Object Storage (if active) or Local Storage
+    const storedFiles: Array<{ name: string; url: string; provider: string }> = [];
+    if (Array.isArray(files) && files.length > 0) {
+      for (const f of files) {
+        if (f.base64) {
+          try {
+            const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
+            const buf = Buffer.from(cleanB64, "base64");
+            const uploaded = await uploadFile({
+              buffer: buf,
+              filename: f.name || `file-${Date.now()}`,
+              mimeType: f.type || "application/octet-stream",
+              folder: "ai-chat",
+            });
+            storedFiles.push({
+              name: f.name,
+              url: uploaded.url,
+              provider: uploaded.provider,
+            });
+          } catch (uploadErr: any) {
+            console.warn("[Teacher AI Chat] File storage warning:", uploadErr.message);
+          }
+        }
+      }
+    }
+
+    const rawReply = await askGemini({
+      systemInstruction,
+      messages: chatMessages,
+      files,
+    });
+
+    // =========================================================
+    // ACTION PARSER: Ekstrak blok action dari reply AI
+    // Format yang diharapkan dari AI:
+    //   ```action
+    //   SAVE_GRADE_DRAFT
+    //   siswa: Angelica Putri Savira
+    //   kelas: X-1
+    //   mapel: RPL
+    //   field: sts
+    //   nilai: 100
+    //   tahun: 2025/2026
+    //   semester: 1
+    //   ```
+    // =========================================================
+    // =========================================================
+    // HELPER: Eksekusi simpan draft nilai secara aman ke database
+    // =========================================================
+    async function executeSaveGradeDraft(params: {
+      studentIdOrName?: string;
+      nis?: string;
+      nisn?: string;
+      className: string;
+      subjectName: string;
+      field: string;
+      score: number;
+      academicYear?: string;
+      semester?: number;
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      const { studentIdOrName, nis, nisn, className, subjectName, field, score } = params;
+
+      const validFields = ["uh1", "t1", "sts", "uh2", "t2"] as const;
+      type GradeField = (typeof validFields)[number];
+      let fieldKey = (field || "").toLowerCase().replace(/\s/g, "");
+      if (fieldKey.includes("sts")) fieldKey = "sts";
+      else if (fieldKey.includes("uh1")) fieldKey = "uh1";
+      else if (fieldKey.includes("t1")) fieldKey = "t1";
+      else if (fieldKey.includes("uh2")) fieldKey = "uh2";
+      else if (fieldKey.includes("t2")) fieldKey = "t2";
+
+      if (!validFields.includes(fieldKey as GradeField) || isNaN(score) || score < 0 || score > 100) {
+        return { success: false, message: `Komponen penilaian (${field}) atau nilai (${score}) tidak valid.` };
+      }
+
+      // 1. Resolve Class (dukung format: "X-1", "x1", "X 1", UUID)
+      const cleanClass = className.replace(/[-\s]/g, "").toLowerCase();
+      const classConds = [
+        sql`lower(${classes.name}) = lower(${className})`,
+        sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
+      ];
+      if (isUuid(className)) {
+        classConds.push(eq(classes.id, className));
+      }
+
+      const [resolvedClass] = await db
+        .select({ id: classes.id, name: classes.name })
+        .from(classes)
+        .where(or(...classConds))
+        .limit(1);
+
+      if (!resolvedClass) {
+        return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
+      }
+
+      // 2. Resolve Subject (dukung "RPL", "Rekayasa Perangkat Lunak", UUID)
+      const subjectConds = [
+        sql`lower(${subjects.name}) = lower(${subjectName})`,
+        sql`lower(${subjects.code}) = lower(${subjectName})`,
+        sql`lower(${subjects.name}) like lower(${'%' + subjectName + '%'})`,
+      ];
+      if (isUuid(subjectName)) {
+        subjectConds.push(eq(subjects.id, subjectName));
+      }
+
+      const [resolvedSubject] = await db
+        .select({ id: subjects.id, name: subjects.name })
+        .from(subjects)
+        .where(or(...subjectConds))
+        .limit(1);
+
+      if (!resolvedSubject) {
+        return { success: false, message: `Mata pelajaran "${subjectName}" tidak ditemukan di database.` };
+      }
+
+      // 3. Resolve Student (Prioritas: UUID -> NIS/NISN -> Nama di kelas ini -> Nama di sekolah)
+      let resolvedStudent: { id: string; name: string } | undefined;
+      if (studentIdOrName && isUuid(studentIdOrName)) {
+        const [found] = await db
+          .select({ id: students.id, name: students.name })
+          .from(students)
+          .where(eq(students.id, studentIdOrName))
+          .limit(1);
+        resolvedStudent = found;
+      }
+
+      if (!resolvedStudent && (nis || studentIdOrName)) {
+        const nisSearch = nis || studentIdOrName!;
+        const [found] = await db
+          .select({ id: students.id, name: students.name })
+          .from(students)
+          .where(and(or(eq(students.nis, nisSearch), eq(students.nisn, nisSearch)), eq(students.classId, resolvedClass.id)))
+          .limit(1);
+        resolvedStudent = found;
+      }
+
+      if (!resolvedStudent && studentIdOrName) {
+        const [found] = await db
+          .select({ id: students.id, name: students.name })
+          .from(students)
+          .where(
+            and(
+              sql`lower(${students.name}) like lower(${'%' + studentIdOrName.trim() + '%'})`,
+              eq(students.classId, resolvedClass.id)
+            )
+          )
+          .limit(1);
+        resolvedStudent = found;
+      }
+
+      if (!resolvedStudent && studentIdOrName) {
+        const [found] = await db
+          .select({ id: students.id, name: students.name })
+          .from(students)
+          .where(sql`lower(${students.name}) like lower(${'%' + studentIdOrName.trim() + '%'})`)
+          .limit(1);
+        resolvedStudent = found;
+      }
+
+      if (!resolvedStudent) {
+        return { success: false, message: `Siswa "${studentIdOrName || nis}" tidak ditemukan di kelas "${resolvedClass.name}".` };
+      }
+
+      // 4. Cek status grade yang sudah ada
+      const ay = params.academicYear || "2025/2026";
+      const sem = params.semester || 1;
+
+      const [existing] = await db
+        .select()
+        .from(grades)
+        .where(
+          and(
+            eq(grades.studentId, resolvedStudent.id),
+            eq(grades.subjectId, resolvedSubject.id),
+            eq(grades.classId, resolvedClass.id),
+            isNull(grades.deletedAt)
+          )
+        )
+        .limit(1);
+
+      if (existing && (existing.status === "submitted" || existing.status === "approved")) {
+        return {
+          success: false,
+          message: `Nilai siswa "${resolvedStudent.name}" sudah berstatus "${existing.status}" dan terkunci. Hanya Admin yang dapat mengubahnya.`,
+        };
+      }
+
+      const fieldValue = String(score);
+      let savedRow: typeof grades.$inferSelect | undefined;
+
+      if (existing) {
+        const [updated] = await db
+          .update(grades)
+          .set({ [fieldKey]: fieldValue, status: "draft", updatedAt: new Date() })
+          .where(eq(grades.id, existing.id))
+          .returning();
+        await db.insert(gradeAuditLogs).values({
+          gradeId: updated.id,
+          actorId: user.id,
+          action: "ai_draft_update",
+          before: existing as unknown as Record<string, unknown>,
+          after: updated as unknown as Record<string, unknown>,
+        });
+        savedRow = updated;
+      } else {
+        const insertValues: Record<string, unknown> = {
+          studentId: resolvedStudent.id,
+          subjectId: resolvedSubject.id,
+          classId: resolvedClass.id,
+          academicYear: ay,
+          semester: sem,
+          status: "draft",
+          updatedAt: new Date(),
+        };
+        insertValues[fieldKey] = fieldValue;
+        const [created] = await db.insert(grades).values(insertValues as any).returning();
+        await db.insert(gradeAuditLogs).values({
+          gradeId: created.id,
+          actorId: user.id,
+          action: "ai_draft_create",
+          after: created as unknown as Record<string, unknown>,
+        });
+        savedRow = created;
+      }
+
+      broadcastRealtimeEvent({ type: "journal_saved", actorId: user.id });
+
+      return {
+        success: true,
+        message: `✅ Nilai **${fieldKey.toUpperCase()}** siswa **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**, Mapel **${resolvedSubject.name}**) berhasil disimpan sebagai **draft** di database (Nilai: **${score}**).`,
+        data: savedRow,
+      };
+    }
+
+    const aiActions: Array<{
+      type: string;
+      payload: Record<string, unknown>;
+      result: { success: boolean; message: string; data?: unknown };
+    }> = [];
+
+    // =========================================================
+    // LAYER 1: Ekstrak blok action ```action ... ``` jika ada
+    // =========================================================
+    const actionBlockRegex = /```action\s*([\s\S]*?)```/gi;
+    let actionMatch: RegExpExecArray | null;
+
+    while ((actionMatch = actionBlockRegex.exec(rawReply)) !== null) {
+      const blockText = actionMatch[1].trim();
+      const lines = blockText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const actionType = lines[0]?.toUpperCase();
+
+      if (actionType === "SAVE_GRADE_DRAFT") {
+        const params: Record<string, string> = {};
+        for (const line of lines.slice(1)) {
+          const colonIdx = line.indexOf(":");
+          if (colonIdx === -1) continue;
+          const key = line.slice(0, colonIdx).trim().toLowerCase();
+          const val = line.slice(colonIdx + 1).trim();
+          params[key] = val;
+        }
+
+        const studentIdOrName = params["student_id"] || params["studentid"] || params["id"] || params["siswa"] || params["student"];
+        const className       = params["kelas"] || params["class"];
+        const subjectName     = params["mapel"] || params["subject"];
+        const fieldRaw        = params["field"] || "";
+        const nilaiRaw        = parseFloat(params["nilai"] || params["value"] || "");
+        const ay              = params["tahun"] || params["tahun_ajaran"] || "2025/2026";
+        const sem             = parseInt(params["semester"] || "1", 10);
+
+        if (studentIdOrName && className && subjectName && fieldRaw && !isNaN(nilaiRaw)) {
+          const res = await executeSaveGradeDraft({
+            studentIdOrName,
+            className,
+            subjectName,
+            field: fieldRaw,
+            score: nilaiRaw,
+            academicYear: ay,
+            semester: sem,
+          });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+    }
+
+    // =========================================================
+    // LAYER 2: Fallback jika AI menjawab dengan rincian poin-poin
+    // =========================================================
+    if (aiActions.length === 0) {
+      const studentMatch = rawReply.match(/(?:Nama\s*Siswa|siswa)\s*:\s*([^\n\r*]+)/i);
+      const classMatch = rawReply.match(/(?:Kelas|kelas)\s*:\s*([^\n\r*]+)/i);
+      const subjectMatch = rawReply.match(/(?:Mata\s*Pelajaran|mapel)\s*:\s*([^\n\r*(]+)/i);
+      const fieldMatch = rawReply.match(/(?:Jenis\s*Penilaian|penilaian|field)\s*:\s*([^\n\r*(]+)/i);
+      const scoreMatch = rawReply.match(/(?:Nilai\s*Baru|Nilai|skor)\s*:\s*(\d+(?:\.\d+)?)/i);
+
+      if (studentMatch && classMatch && subjectMatch && fieldMatch && scoreMatch) {
+        const studentRaw = studentMatch[1].trim();
+        const classRaw = classMatch[1].trim();
+        const subjectRaw = subjectMatch[1].trim();
+        const fieldRaw = fieldMatch[1].trim();
+        const scoreRaw = parseFloat(scoreMatch[1]);
+
+        if (!isNaN(scoreRaw)) {
+          const res = await executeSaveGradeDraft({
+            studentIdOrName: studentRaw,
+            className: classRaw,
+            subjectName: subjectRaw,
+            field: fieldRaw,
+            score: scoreRaw,
+          });
+          aiActions.push({
+            type: "SAVE_GRADE_DRAFT",
+            payload: { from: "reply_summary", studentRaw, classRaw, scoreRaw },
+            result: res,
+          });
+        }
+      }
+    }
+
+    // =========================================================
+    // LAYER 3: Fallback jika userPrompt langsung memerintahkan ubah nilai
+    // =========================================================
+    const promptToCheck = (userPrompt || (chatMessages[chatMessages.length - 1]?.text) || "").toLowerCase();
+    if (aiActions.length === 0 && (promptToCheck.includes("ubah") || promptToCheck.includes("nilai") || promptToCheck.includes("ganti"))) {
+      const promptScoreMatch = promptToCheck.match(/(?:menjadi|jadi|ke|=)\s*(\d{1,3})/i) || promptToCheck.match(/(\d{1,3})/);
+      const promptFieldMatch = promptToCheck.match(/\b(uh1|t1|sts|uh2|t2)\b/i);
+      const promptClassMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+      const promptSubjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv)\b/i);
+      const promptStudentMatch = promptToCheck.match(/nilai\s+([A-Za-z' ]+?)(?:,|\s+ubah|\s+mapel|\s+di|\s+menjadi|\s+kelas|$)/i);
+
+      if (promptScoreMatch && promptFieldMatch && promptClassMatch && promptSubjectMatch && promptStudentMatch) {
+        const res = await executeSaveGradeDraft({
+          studentIdOrName: promptStudentMatch[1].trim(),
+          className: promptClassMatch[1].trim(),
+          subjectName: promptSubjectMatch[1].trim(),
+          field: promptFieldMatch[1].trim(),
+          score: parseFloat(promptScoreMatch[1]),
+        });
+        aiActions.push({
+          type: "SAVE_GRADE_DRAFT",
+          payload: { from: "prompt_fallback", student: promptStudentMatch[1] },
+          result: res,
+        });
+      }
+    }
+
+    // Bersihkan blok action dari teks reply yang ditampilkan ke pengguna
+    const cleanReply = rawReply.replace(actionBlockRegex, "").trim();
+
+    // SANGAT PENTING: Lampirkan konfirmasi aksi database langsung ke teks balasan chat
+    let finalReply = cleanReply;
+    if (aiActions.length > 0) {
+      const actionSummaries = aiActions
+        .map((a) => a.result.message)
+        .filter(Boolean)
+        .join("\n\n");
+      if (actionSummaries) {
+        finalReply = `${finalReply}\n\n---\n${actionSummaries}`.trim();
+      }
+    }
+
+    return c.json({
+      success: true,
+      data: {
+        reply: finalReply,
+        aiActions,
+        honorific: ctx.honorific,
+        gender: ctx.genderLabel,
+        teacherName: user.name,
+        storedFiles,
+      },
+    });
+  } catch (err: any) {
+    console.error("[Teacher AI Chat] Error:", err);
+    return c.json(
+      {
+        success: false,
+        message: err.message || "Gagal mendapatkan respon dari AI",
+      },
+      500
+    );
   }
 });
 

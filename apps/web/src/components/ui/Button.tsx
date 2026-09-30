@@ -21,7 +21,7 @@ export function Button({
         size === "md" && "px-4 py-2.5 text-sm rounded-lg min-h-[44px]",
         size === "lg" && "px-5 py-3.5 text-base rounded-2xl min-h-[52px]",
         variant === "primary" &&
-          "bg-[var(--accent)] text-white shadow-[0_8px_20px_rgba(14,165,233,0.28)] hover:brightness-105",
+          "bg-[var(--accent)] text-white shadow-[0_8px_20px_rgba(234,67,53,0.28)] hover:brightness-105",
         variant === "secondary" &&
           "border border-[var(--accent)]/25 text-[var(--accent)] bg-transparent hover:bg-[var(--accent-soft)]",
         variant === "ghost" &&

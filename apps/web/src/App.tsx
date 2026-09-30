@@ -22,6 +22,7 @@ import { AlumniPage } from "@/pages/admin/AlumniPage";
 import { KeluarPage } from "@/pages/admin/KeluarPage";
 import { GuruNilaiPage } from "@/pages/guru/GuruNilaiPage";
 import { GuruJurnalPage } from "@/pages/guru/GuruJurnalPage";
+import { GuruAiChatPage } from "@/pages/guru/GuruAiChatPage";
 import { WalikelasMatrixPage } from "@/pages/walikelas/WalikelasMatrixPage";
 import { SiswaDashboard } from "@/pages/siswa/SiswaDashboard";
 import { SiswaRaportPage } from "@/pages/siswa/SiswaRaportPage";
@@ -94,6 +95,7 @@ export default function App() {
 
 
             <Route element={<ProtectedRoute roles={["guru", "walikelas", "admin", "superadmin"]} />}>
+              <Route path="/guru/ai" element={<GuruAiChatPage />} />
               <Route path="/guru" element={<GuruNilaiPage />} />
               <Route path="/guru/jurnal" element={<GuruJurnalPage />} />
             </Route>

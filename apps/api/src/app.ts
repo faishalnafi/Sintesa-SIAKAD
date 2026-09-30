@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const _appFilename = fileURLToPath(import.meta.url);
+const _appDirname = path.dirname(_appFilename);
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -184,7 +187,7 @@ app.use("*", async (c, next) => {
   await next();
 });
 
-app.get("/health", (c) => c.json({ ok: true, service: "sintesa-api" }));
+app.get("/health", (c) => c.json({ ok: true, service: "simak-api" }));
 async function validateApiKeyMiddleware(c: any, next: any) {
   const authorization = c.req.header("Authorization") || "";
   let keyString = c.req.header("X-API-Key") || "";
@@ -459,14 +462,50 @@ app.get("/api/public/profile/:uuid", async (c) => {
 });
 
 import { realtimeRoutes } from "./modules/realtime/routes.js";
+import { adminStorageRoutes, publicStorageRoutes } from "./modules/admin/storage.routes.js";
 
 app.route("/api/auth", authRoutes);
+app.route("/api/admin/storage", adminStorageRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/api/teacher", teacherRoutes);
 app.route("/api/homeroom", homeroomRoutes);
 app.route("/api/student", studentRoutes);
 app.route("/api/realtime", realtimeRoutes);
+app.route("/api/storage", publicStorageRoutes);
 app.route("/api", appUpdateRoutes);
+
+// Static file serving for local uploads directory
+const uploadsDir = path.resolve(_appDirname, "../uploads");
+app.get("/api/uploads/*", async (c) => {
+  const relPath = c.req.path.replace(/^\/api\/uploads\//, "");
+  const safePath = path.normalize(relPath).replace(/^(\.\.[\/\\])+/, "");
+  const fullPath = path.join(uploadsDir, safePath);
+
+  if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+    return c.notFound();
+  }
+
+  const buffer = await fs.promises.readFile(fullPath);
+  const ext = path.extname(fullPath).toLowerCase();
+
+  const mimeTypes: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".csv": "text/csv",
+    ".txt": "text/plain",
+  };
+
+  c.header("Content-Type", mimeTypes[ext] || "application/octet-stream");
+  c.header("Cache-Control", "public, max-age=86400");
+  return c.body(buffer);
+});
 
 
 // Intercept Google OAuth login without /api
@@ -502,9 +541,7 @@ app.get("/auth/callback", async (c, next) => {
 });
 
 // Static file serving for React Frontend
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const webDistPath = path.resolve(__dirname, "../../web/dist");
+const webDistPath = path.resolve(_appDirname, "../../web/dist");
 
 if (fs.existsSync(webDistPath)) {
   // Prevent browser caching of index.html & HTML pages so updates are detected immediately

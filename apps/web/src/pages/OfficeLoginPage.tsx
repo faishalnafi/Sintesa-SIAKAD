@@ -60,7 +60,7 @@ export function OfficeLoginPage() {
               <span className="material-symbols-outlined text-primary text-[40px] fill">badge</span>
             </div>
             <h1 className="font-display text-3xl font-bold text-primary dark:text-primary-fixed mb-1 tracking-tight">
-              SIAKAD Office
+              SIMAK Office
             </h1>
             <p className="text-base app-muted">Akses Portal Internal & Admin Sekolah</p>
           </div>
@@ -128,7 +128,7 @@ export function OfficeLoginPage() {
 
       <footer className="py-4 px-margin-mobile relative z-10">
         <div className="max-w-[440px] mx-auto flex justify-center text-outline text-xs">
-          <div>© {new Date().getFullYear()} SIAKAD — SMAN 3 Mojokerto.</div>
+          <div>© {new Date().getFullYear()} SIMAK — SMAN 3 Mojokerto.</div>
         </div>
       </footer>
     </div>

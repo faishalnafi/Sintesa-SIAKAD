@@ -83,7 +83,7 @@ export function SearchableSelect({
         className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm rounded-xl border transition-all text-left bg-[var(--input-bg,var(--surface))] text-[var(--fg)] border-[var(--input-border,var(--hover))]"
         style={{
           borderColor: isOpen ? "var(--primary)" : "var(--input-border)",
-          boxShadow: isOpen ? "0 0 0 3px rgba(14, 165, 233, 0.15)" : "none",
+          boxShadow: isOpen ? "0 0 0 3px rgba(234, 67, 53, 0.15)" : "none",
         }}
       >
         <span className={`truncate ${!selectedOption ? "text-slate-400" : ""}`}>

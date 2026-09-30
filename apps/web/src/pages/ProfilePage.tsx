@@ -33,7 +33,12 @@ export function ProfilePage() {
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl overflow-hidden bg-primary-container/20 flex items-center justify-center border border-outline-variant/30">
             {avatarSrc ? (
-              <img src={avatarSrc} alt={user?.name} className="w-full h-full object-cover" />
+              <img
+                src={avatarSrc}
+                alt={user?.name}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
             ) : (
               <span className="material-symbols-outlined text-primary-container text-3xl">person</span>
             )}

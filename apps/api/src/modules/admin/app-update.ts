@@ -59,7 +59,7 @@ export async function initSystemVersionState() {
         version: localVersionJson.version || "1.0.0",
         versionCode: Number(localVersionJson.version_code) || 100,
         dbVersion: localVersionJson.db_version || "1.0.0",
-        title: localVersionJson.title || "Rilis Perdana SINTESA v1.0.0",
+        title: localVersionJson.title || "Rilis Perdana SIMAK v1.0.0",
         changelog: Array.isArray(localVersionJson.changelog)
           ? localVersionJson.changelog
           : ["Inisialisasi versi awal sistem"],
@@ -110,7 +110,7 @@ function readLocalVersionJson(): VersionManifest {
     version: "1.0.0",
     version_code: 100,
     db_version: "1.0.0",
-    title: "SINTESA v1.0.0",
+    title: "SIMAK v1.0.0",
     release_date: "2026-08-04",
     force_update: false,
     changelog: ["Inisialisasi sistem"],

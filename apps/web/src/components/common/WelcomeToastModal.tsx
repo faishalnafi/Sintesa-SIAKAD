@@ -116,7 +116,7 @@ export function WelcomeToastModal() {
           </li>
           <li className="flex items-start gap-2 font-medium text-primary dark:text-primary-fixed">
             <span className="text-base leading-none">✅</span>
-            <span>Pastikan semua tanggung jawab pada aplikasi SIAKAD sudah terlaksana dengan benar!</span>
+            <span>Pastikan semua tanggung jawab pada aplikasi SIMAK sudah terlaksana dengan benar!</span>
           </li>
         </ul>
 

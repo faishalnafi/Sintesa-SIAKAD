@@ -123,7 +123,7 @@ adminRoutes.get("/dashboard", async (c) => {
       // Fetch active classes/rombel count from Kredensia SSO
       if (env.SSO_API_KEY && env.SSO_API_BASE_URL) {
         const url = `${env.SSO_API_BASE_URL.replace(/\/$/, "")}/kelas?aktif=true`;
-        const origin = env.FRONTEND_URL && !env.FRONTEND_URL.includes("localhost") ? env.FRONTEND_URL.replace(/\/$/, "") : "https://siakad.sman3mjk.sch.id";
+        const origin = env.FRONTEND_URL && !env.FRONTEND_URL.includes("localhost") ? env.FRONTEND_URL.replace(/\/$/, "") : "https://simak.sman3mjk.sch.id";
         const res = await fetch(url, {
           headers: {
             "X-API-Key": env.SSO_API_KEY,
@@ -3486,7 +3486,7 @@ adminRoutes.get("/backup", requireRoles("superadmin"), async (c) => {
     ]);
 
     const backupPayload = {
-      appName: "SINTESA",
+      appName: "SIMAK",
       version: "1.0",
       timestamp: new Date().toISOString(),
       data: {
@@ -3515,7 +3515,7 @@ adminRoutes.get("/backup", requireRoles("superadmin"), async (c) => {
     };
 
     const dateStr = new Date().toISOString().slice(0, 10);
-    const filename = `sintesa-backup-${dateStr}.json`;
+    const filename = `simak-backup-${dateStr}.json`;
 
     return new Response(JSON.stringify(backupPayload, null, 2), {
       status: 200,

@@ -1,0 +1,1867 @@
+import { useState, useRef, useEffect, useId, useMemo } from "react";
+import { useAuthStore } from "@/store/auth";
+import { cn } from "@/lib/cn";
+import { api } from "@/lib/api";
+import { marked } from "marked";
+import Swal from "sweetalert2";
+import * as XLSX from "xlsx";
+
+// Configure marked parser for AI responses
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+export const MAX_FILES_PER_UPLOAD = 25;
+
+export type FileCategory =
+  | "image"
+  | "video"
+  | "audio"
+  | "pdf"
+  | "spreadsheet"
+  | "document"
+  | "presentation"
+  | "code"
+  | "file";
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  category: FileCategory;
+  dataUrl?: string; // base64 DataURL
+  previewUrl?: string; // Blob object URL for instant UI preview
+  textPreview?: string; // Extracted content for Excel / CSV / txt
+}
+
+export function formatFileSize(bytes: number): string {
+  if (!bytes || bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function getFileCategory(name: string, mime?: string): FileCategory {
+  const n = name.toLowerCase();
+  const m = (mime || "").toLowerCase();
+
+  if (m.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|heic|heif)$/.test(n)) return "image";
+  if (m.startsWith("video/") || /\.(mp4|webm|mkv|mov|avi|wmv|flv|3gp)$/.test(n)) return "video";
+  if (m.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|aac|flac|wma)$/.test(n)) return "audio";
+  if (m === "application/pdf" || n.endsWith(".pdf")) return "pdf";
+  if (m.includes("spreadsheet") || m.includes("excel") || /\.(xlsx|xls|csv)$/.test(n)) return "spreadsheet";
+  if (m.includes("word") || m.includes("document") || /\.(docx|doc|rtf|odt)$/.test(n)) return "document";
+  if (m.includes("presentation") || m.includes("powerpoint") || /\.(pptx|ppt)$/.test(n)) return "presentation";
+  if (m.startsWith("text/") || /\.(txt|json|md|py|js|ts|tsx|jsx|html|css|sql|sh|xml|yaml|yml)$/.test(n)) return "code";
+  return "file";
+}
+
+export function getFileCategoryTheme(category: FileCategory): {
+  icon: string;
+  textClass: string;
+  bgClass: string;
+  borderClass: string;
+} {
+  switch (category) {
+    case "image":
+      return { icon: "image", textClass: "text-blue-500", bgClass: "bg-blue-500/10", borderClass: "border-blue-500/20" };
+    case "video":
+      return { icon: "videocam", textClass: "text-purple-500", bgClass: "bg-purple-500/10", borderClass: "border-purple-500/20" };
+    case "audio":
+      return { icon: "audio_file", textClass: "text-amber-500", bgClass: "bg-amber-500/10", borderClass: "border-amber-500/20" };
+    case "pdf":
+      return { icon: "picture_as_pdf", textClass: "text-red-500", bgClass: "bg-red-500/10", borderClass: "border-red-500/20" };
+    case "spreadsheet":
+      return { icon: "table_chart", textClass: "text-emerald-500", bgClass: "bg-emerald-500/10", borderClass: "border-emerald-500/20" };
+    case "document":
+      return { icon: "description", textClass: "text-sky-500", bgClass: "bg-sky-500/10", borderClass: "border-sky-500/20" };
+    case "presentation":
+      return { icon: "slideshow", textClass: "text-orange-500", bgClass: "bg-orange-500/10", borderClass: "border-orange-500/20" };
+    case "code":
+      return { icon: "code", textClass: "text-indigo-500", bgClass: "bg-indigo-500/10", borderClass: "border-indigo-500/20" };
+    default:
+      return { icon: "attach_file", textClass: "text-slate-500", bgClass: "bg-slate-500/10", borderClass: "border-slate-500/20" };
+  }
+}
+
+export function getHonorific(user?: { jenisKelamin?: string | null; name?: string | null } | null): string {
+  const jk = user?.jenisKelamin?.toUpperCase();
+  if (jk === "L" || jk === "LAKI-LAKI" || jk === "M") return "Pak";
+  if (jk === "P" || jk === "PEREMPUAN" || jk === "F") return "Bu";
+  return "Bapak/Ibu";
+}
+
+/**
+ * Return formatted date time string e.g. "29 Sep 2026, 19:42"
+ */
+export function getFullDateTime(): string {
+  return new Date().toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  const parsedHtml = useMemo(() => {
+    try {
+      return marked.parse(content || "");
+    } catch {
+      return content || "";
+    }
+  }, [content]);
+
+  return (
+    <div
+      className="prose prose-sm dark:prose-invert max-w-none break-words text-xs md:text-[13px] leading-relaxed
+        [&_p]:mb-2 [&_p:last-child]:mb-0
+        [&_strong]:font-bold [&_strong]:text-[var(--fg)]
+        [&_em]:italic [&_em]:opacity-95
+        [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-2 [&_ul]:space-y-1
+        [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-2 [&_ol]:space-y-1
+        [&_li]:my-0.5
+        [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-slate-200/70 [&_code]:dark:bg-slate-800/80 [&_code]:font-mono [&_code]:text-[11.5px] [&_code]:text-pink-600 [&_code]:dark:text-pink-400
+        [&_pre]:p-3 [&_pre]:my-2 [&_pre]:rounded-xl [&_pre]:bg-slate-900 [&_pre]:text-slate-100 [&_pre]:overflow-x-auto [&_pre]:text-xs
+        [&_blockquote]:border-l-4 [&_blockquote]:border-[var(--accent)] [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:my-2
+        [&_table]:w-full [&_table]:my-2 [&_table]:border-collapse [&_table]:border [&_table]:border-[var(--card-border)] [&_table]:text-xs
+        [&_th]:border [&_th]:border-[var(--card-border)] [&_th]:p-2 [&_th]:bg-[var(--hover)] [&_th]:font-semibold
+        [&_td]:border [&_td]:border-[var(--card-border)] [&_td]:p-2
+        [&_h1]:text-base [&_h1]:font-bold [&_h1]:mb-2
+        [&_h2]:text-sm [&_h2]:font-bold [&_h2]:mb-1.5
+        [&_h3]:text-xs [&_h3]:font-bold [&_h3]:mb-1"
+      dangerouslySetInnerHTML={{ __html: parsedHtml as string }}
+    />
+  );
+}
+
+function ChatBubbleItem({
+  message,
+  isUser,
+  user,
+  onEdit,
+  onRetry,
+  onSendMessage,
+  onImagePreview,
+}: {
+  message: Message;
+  isUser: boolean;
+  user: any;
+  onEdit?: (text: string) => void;
+  onRetry?: (msg: Message) => void;
+  onSendMessage?: (text: string) => void;
+  onImagePreview?: (url: string) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (el) {
+      setIsOverflowing(el.scrollHeight > 140);
+    }
+  }, [message.text]);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(message.text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div
+      className={cn(
+        "group flex gap-3 md:gap-4 items-start relative transition-all",
+        isUser ? "flex-row-reverse" : "flex-row"
+      )}
+    >
+      {/* Avatar */}
+      {isUser ? (
+        user?.avatarUrl ? (
+          <img
+            src={user.avatarUrl}
+            alt={user.name || "User"}
+            referrerPolicy="no-referrer"
+            className="w-8 h-8 rounded-full object-cover shrink-0 shadow-sm border border-[var(--card-border)]"
+          />
+        ) : (
+          <div className="w-8 h-8 rounded-full bg-[var(--accent)] text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-sm">
+            {user?.name ? user.name[0].toUpperCase() : "G"}
+          </div>
+        )
+      ) : (
+        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-rose-500 to-red-600 text-white flex items-center justify-center shrink-0 shadow-sm ring-2 ring-red-500/20">
+          <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+        </div>
+      )}
+
+      {/* Content Bubble Container */}
+      <div
+        className={cn(
+          "flex flex-col max-w-[85%] md:max-w-[75%]",
+          isUser ? "items-end" : "items-start"
+        )}
+      >
+        <div
+          className={cn(
+            "px-4 py-3 rounded-2xl text-xs md:text-[13px] leading-relaxed relative transition-all duration-200",
+            isUser
+              ? "bg-[var(--accent)] text-white rounded-tr-xs shadow-sm font-medium"
+              : "bg-[var(--card)] text-[var(--fg)] border rounded-tl-xs shadow-sm"
+          )}
+          style={!isUser ? { borderColor: "var(--card-border)" } : {}}
+        >
+          {/* Attachments rendering inside bubble */}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mb-2.5 flex flex-wrap gap-2">
+              {message.attachments.map((att) => {
+                const theme = getFileCategoryTheme(att.category);
+                const isImg = att.category === "image" && (att.previewUrl || att.dataUrl);
+
+                if (isImg) {
+                  const imgUrl = att.previewUrl || att.dataUrl || "";
+                  return (
+                    <div
+                      key={att.id}
+                      onClick={() => onImagePreview?.(imgUrl)}
+                      className="group/img relative rounded-xl overflow-hidden border border-black/15 dark:border-white/20 cursor-pointer shadow-xs hover:opacity-95 transition-all max-w-[200px]"
+                      title={`Klik untuk memperbesar: ${att.name}`}
+                    >
+                      <img
+                        src={imgUrl}
+                        alt={att.name}
+                        className="max-h-36 w-auto object-cover rounded-xl"
+                      />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center text-white">
+                        <span className="material-symbols-outlined text-[20px]">zoom_in</span>
+                      </div>
+                      <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-[2px] px-1.5 py-0.5 text-[9px] text-white truncate">
+                        {att.name}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={att.id}
+                    className={cn(
+                      "flex items-center gap-2 p-1.5 pr-2.5 rounded-xl border text-xs shadow-2xs max-w-[240px]",
+                      isUser
+                        ? "bg-white/15 border-white/20 text-white"
+                        : cn(theme.bgClass, theme.borderClass, "text-[var(--fg)]")
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+                        isUser ? "bg-white/20 text-white" : theme.textClass
+                      )}
+                    >
+                      <span className="material-symbols-outlined text-[18px]">{theme.icon}</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className={cn(
+                          "font-semibold text-[11px] truncate",
+                          isUser ? "text-white" : "text-[var(--fg)]"
+                        )}
+                        title={att.name}
+                      >
+                        {att.name}
+                      </div>
+                      <div className={cn("text-[9px]", isUser ? "text-white/80" : "app-muted")}>
+                        {formatFileSize(att.size)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Text Content (with auto-collapse limit) */}
+          <div
+            ref={contentRef}
+            className={cn(
+              "relative transition-all duration-300",
+              isOverflowing && !isExpanded ? "max-h-[125px] overflow-hidden" : ""
+            )}
+          >
+            {isUser ? (
+              <div className="whitespace-pre-wrap">{message.text}</div>
+            ) : (
+              <MarkdownContent content={message.text} />
+            )}
+
+            {/* Gradient Fade overlay when collapsed */}
+            {isOverflowing && !isExpanded && (
+              <div
+                className={cn(
+                  "absolute inset-x-0 bottom-0 h-10 pointer-events-none bg-gradient-to-t",
+                  isUser
+                    ? "from-[var(--accent)] to-transparent"
+                    : "from-[var(--card)] to-transparent"
+                )}
+              />
+            )}
+          </div>
+
+          {/* Interactive Action Cards */}
+          {message.actionCard && (
+            <div className="mt-3 pt-3 border-t border-slate-200/60 dark:border-slate-700/60 w-full">
+              {/* Card: Schedule Draft */}
+              {message.actionCard.type === "schedule_draft" && (
+                <div className="rounded-xl p-3 bg-[var(--hover)] border border-[var(--input-border)] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[16px]">event_available</span>
+                      Draf Jurnal Pembelajaran
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 font-bold uppercase">
+                      {message.actionCard.data.status}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] bg-white dark:bg-slate-900/50 p-2.5 rounded-lg border border-slate-200/50 dark:border-slate-800">
+                    <div>
+                      <span className="app-muted block">Kelas & Mapel:</span>
+                      <span className="font-semibold text-[var(--fg)]">
+                        {message.actionCard.data.class} • {message.actionCard.data.subject}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="app-muted block">Waktu:</span>
+                      <span className="font-semibold text-[var(--fg)]">
+                        {message.actionCard.data.hours}
+                      </span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="app-muted block">Materi Pokok:</span>
+                      <span className="font-medium text-[var(--fg)]">
+                        {message.actionCard.data.materi}
+                      </span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="app-muted block">Presensi:</span>
+                      <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                        {message.actionCard.data.presence}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        Swal.fire({
+                          title: "Tersimpan!",
+                          text: "Draf jurnal pembelajaran berhasil disimpan di database.",
+                          icon: "success",
+                          timer: 1800,
+                          showConfirmButton: false,
+                        })
+                      }
+                      className="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 border text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+                    >
+                      Simpan Draft
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        Swal.fire({
+                          title: "Jurnal Terkirim!",
+                          text: "Entri jurnal resmi berhasil dikirim ke sistem akademik.",
+                          icon: "success",
+                        })
+                      }
+                      className="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
+                    >
+                      Kirim Sekarang
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Card: Collision Alert */}
+              {message.actionCard.type === "schedule_collision" && (
+                <div className="rounded-xl p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/40 space-y-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-red-600 dark:text-red-400">
+                    <span className="material-symbols-outlined text-[18px]">warning</span>
+                    Bentrokan Jadwal Terdeteksi!
+                  </div>
+                  <p className="text-[11px] text-red-700 dark:text-red-300 leading-relaxed">
+                    Pada {message.actionCard.data.date}, <strong>{message.actionCard.data.hour}</strong> di kelas{" "}
+                    <strong>{message.actionCard.data.class}</strong> telah dijadwalkan untuk{" "}
+                    <strong>{message.actionCard.data.occupiedBy}</strong> ({message.actionCard.data.subject}).
+                  </p>
+                  <div className="pt-1 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onSendMessage?.(
+                          `Pindahkan jadwal ke ${message.actionCard?.data.suggestedHour}`
+                        )
+                      }
+                      className="py-1 px-3 rounded-lg text-[11px] font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors"
+                    >
+                      Pindahkan ke {message.actionCard.data.suggestedHour}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Card: Excel Smart Import */}
+              {message.actionCard.type === "excel_import_preview" && (
+                <div className="rounded-xl p-3 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[16px]">file_present</span>
+                      {message.actionCard.data.fileName}
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-bold">
+                      {message.actionCard.data.totalRows} Siswa
+                    </span>
+                  </div>
+
+                  <div className="text-[11px] bg-white dark:bg-slate-900/50 p-2.5 rounded-lg border border-emerald-200/50 dark:border-emerald-800 space-y-1.5">
+                    <div className="font-semibold text-slate-700 dark:text-slate-300 text-[10px] uppercase">
+                      Pemetaan Kolom Otomatis (AI):
+                    </div>
+                    <div className="space-y-1">
+                      {message.actionCard.data.matchedColumns.map((col: any, idx: number) => (
+                        <div key={idx} className="flex items-center justify-between text-[11px]">
+                          <span className="text-slate-600 dark:text-slate-400 font-mono">
+                            "{col.original}"
+                          </span>
+                          <span className="material-symbols-outlined text-[14px] text-slate-400">
+                            arrow_forward
+                          </span>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded font-mono">
+                            {col.mappedTo}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="pt-1 border-t border-slate-100 dark:border-slate-800 flex justify-between text-[11px]">
+                      <span className="app-muted">Nilai Rata-rata:</span>
+                      <span className="font-bold text-[var(--fg)]">
+                        {message.actionCard.data.avgScore}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        Swal.fire({
+                          title: "Nilai Disimpan sebagai Draft!",
+                          text: "Data nilai telah masuk ke sistem dan siap direview di menu Input Nilai.",
+                          icon: "success",
+                        })
+                      }
+                      className="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 border text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+                    >
+                      Simpan Draft
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        Swal.fire({
+                          title: "Nilai Berhasil Dikirim!",
+                          text: "Nilai resmi telah diajukan ke Wali Kelas.",
+                          icon: "success",
+                        })
+                      }
+                      className="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                    >
+                      Kirim Nilai
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Expand / Collapse Button */}
+          {isOverflowing && (
+            <div className="flex justify-end mt-1.5 -mb-1 relative z-10">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsExpanded(!isExpanded);
+                }}
+                className={cn(
+                  "w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer shadow-xs",
+                  isUser
+                    ? "bg-black/25 hover:bg-black/40 text-white"
+                    : "bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-[var(--fg)]"
+                )}
+                title={isExpanded ? "Ciutkan teks" : "Tampilkan selengkapnya"}
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  {isExpanded ? "keyboard_arrow_up" : "keyboard_arrow_down"}
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Hover Action Bar: Copy & Edit / Retry */}
+        <div
+          className={cn(
+            "flex items-center gap-1 mt-1 px-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-slate-400",
+            isUser ? "justify-end" : "justify-start"
+          )}
+        >
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="p-1 rounded-md hover:bg-[var(--hover)] hover:text-[var(--fg)] transition-colors"
+            title={copied ? "Tersalin!" : "Salin teks"}
+          >
+            <span className="material-symbols-outlined text-[15px]">
+              {copied ? "check" : "content_copy"}
+            </span>
+          </button>
+
+          {isUser && onEdit && (
+            <button
+              type="button"
+              onClick={() => onEdit(message.text)}
+              className="p-1 rounded-md hover:bg-[var(--hover)] hover:text-[var(--fg)] transition-colors"
+              title="Edit pesan"
+            >
+              <span className="material-symbols-outlined text-[15px]">edit</span>
+            </button>
+          )}
+
+          {!isUser && onRetry && (
+            <button
+              type="button"
+              onClick={() => onRetry(message)}
+              className="p-1 rounded-md hover:bg-[var(--hover)] hover:text-[var(--fg)] transition-colors"
+              title="Kirim ulang prompt ini"
+            >
+              <span className="material-symbols-outlined text-[15px]">refresh</span>
+            </button>
+          )}
+
+          <span className="text-[10px] ml-1.5 opacity-70 font-medium select-none">
+            {message.time}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export interface Message {
+  id: string;
+  sender: "user" | "assistant";
+  text: string;
+  time: string;
+  attachments?: ChatAttachment[];
+  actionCard?: {
+    type: "schedule_draft" | "schedule_collision" | "excel_import_preview";
+    data: any;
+  };
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  updatedAt: string;
+  isPinned?: boolean;
+  messages: Message[];
+}
+
+const INITIAL_SESSIONS: ChatSession[] = [];
+
+export function GuruAiChatPage() {
+  const { user } = useAuthStore();
+  const fileInputId = useId();
+
+  // Sessions state (only keep sessions that have received a valid AI response)
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    try {
+      const saved = localStorage.getItem("simak_ai_sessions");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter(
+            (s: any) =>
+              !["session-1", "session-2", "session-3"].includes(s?.id) &&
+              s?.title !== "Percakapan Baru" &&
+              Array.isArray(s?.messages) &&
+              s.messages.some(
+                (m: any) =>
+                  m?.sender === "assistant" && !String(m?.text || "").startsWith("⚠️")
+              )
+          );
+          return cleaned;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return INITIAL_SESSIONS;
+  });
+
+  // Always open on a fresh "new" chat screen without creating a sidebar room yet
+  const [activeSessionId, setActiveSessionId] = useState<string>("new");
+  // Holds messages for a "new" chat before AI responds and officially creates the room
+  const [pendingMessages, setPendingMessages] = useState<Message[]>([]);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [inputText, setInputText] = useState("");
+  const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDraggingOverInput, setIsDraggingOverInput] = useState(false);
+  const [previewImageModal, setPreviewImageModal] = useState<string | null>(null);
+  const [sessionMenu, setSessionMenu] = useState<{
+    id: string;
+    top: number;
+    left: number;
+  } | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const dragCounterRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (renamingSessionId) {
+      const timer = setTimeout(() => {
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+      }, 30);
+      return () => clearTimeout(timer);
+    }
+  }, [renamingSessionId]);
+
+  // Prevent browser from opening dropped files in a new tab anywhere on the window
+  useEffect(() => {
+    const preventWindowDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes("Files")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("dragover", preventWindowDrop);
+    window.addEventListener("drop", preventWindowDrop);
+    return () => {
+      window.removeEventListener("dragover", preventWindowDrop);
+      window.removeEventListener("drop", preventWindowDrop);
+    };
+  }, []);
+
+  // Sync sessions to localStorage safely (strip heavy base64 dataUrl to avoid QuotaExceededError)
+  useEffect(() => {
+    try {
+      const lightSessions = sessions.map((s) => ({
+        ...s,
+        messages: s.messages.map((m) => ({
+          ...m,
+          attachments: m.attachments?.map((att) => ({
+            ...att,
+            dataUrl: att.dataUrl && att.dataUrl.length < 200_000 ? att.dataUrl : undefined,
+          })),
+        })),
+      }));
+      localStorage.setItem("simak_ai_sessions", JSON.stringify(lightSessions));
+    } catch (e) {
+      console.warn("Gagal menyimpan riwayat chat ke localStorage:", e);
+    }
+  }, [sessions]);
+
+  const activeSession =
+    activeSessionId === "new"
+      ? undefined
+      : sessions.find((s) => s.id === activeSessionId);
+
+  const displayedMessages = activeSession ? activeSession.messages : pendingMessages;
+
+  // Auto-scroll chat to bottom
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [displayedMessages, isGenerating]);
+
+  // Adjust textarea height automatically
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInputText(e.target.value);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+    }
+  };
+
+  // Process a single file into ChatAttachment
+  const processSingleFile = async (file: File): Promise<ChatAttachment> => {
+    const category = getFileCategory(file.name, file.type);
+    const id = `att-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    let previewUrl: string | undefined = undefined;
+    let dataUrl: string | undefined = undefined;
+    let textPreview: string | undefined = undefined;
+
+    // Fast Blob Object URL for UI previews (images, videos, audio)
+    if (category === "image" || category === "video" || category === "audio") {
+      try {
+        previewUrl = URL.createObjectURL(file);
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+
+    // If Excel / Spreadsheet, extract sheet data via XLSX
+    if (category === "spreadsheet") {
+      try {
+        const buffer = await file.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: "array" });
+        let sheetSummary = `[File Spreadsheet: "${file.name}"]\n`;
+        for (const sName of wb.SheetNames.slice(0, 5)) {
+          const sheet = wb.Sheets[sName];
+          const csv = XLSX.utils.sheet_to_csv(sheet);
+          if (csv.trim()) {
+            sheetSummary += `--- Lembar Kerja: ${sName} ---\n${csv.slice(0, 4000)}\n\n`;
+          }
+        }
+        textPreview = sheetSummary;
+      } catch (err) {
+        console.warn("Gagal mengekstrak spreadsheet:", err);
+      }
+    } else if (category === "code" || file.type.startsWith("text/")) {
+      try {
+        textPreview = (await file.text()).slice(0, 15000);
+      } catch (err) {
+        console.warn("Gagal membaca file teks:", err);
+      }
+    }
+
+    // Read as base64 dataUrl (needed for sending to Gemini API)
+    try {
+      dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    } catch (err) {
+      console.warn("Gagal membaca base64 file:", err);
+    }
+
+    return {
+      id,
+      name: file.name,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+      category,
+      previewUrl: previewUrl || dataUrl,
+      dataUrl,
+      textPreview,
+    };
+  };
+
+  // Add multiple files with strict validation (max 50MB per file, max 25 files total)
+  const handleFilesAdded = async (fileList: FileList | File[]) => {
+    const incoming = Array.from(fileList);
+    if (incoming.length === 0) return;
+
+    // Check max 25 files limit
+    const availableSlots = MAX_FILES_PER_UPLOAD - attachedFiles.length;
+    if (availableSlots <= 0) {
+      Swal.fire({
+        title: "Batas Jumlah File Tercapai",
+        text: `Maksimal ${MAX_FILES_PER_UPLOAD} file dalam 1x unggahan chat. Silakan kirim file yang ada saat ini terlebih dahulu.`,
+        icon: "warning",
+        confirmButtonColor: "#EA4335",
+      });
+      return;
+    }
+
+    const filesToProcess: File[] = [];
+    const oversizedFiles: string[] = [];
+    let excessCount = 0;
+
+    for (let i = 0; i < incoming.length; i++) {
+      const file = incoming[i];
+      if (file.size > MAX_FILE_SIZE) {
+        oversizedFiles.push(`${file.name} (${formatFileSize(file.size)})`);
+        continue;
+      }
+      if (filesToProcess.length < availableSlots) {
+        filesToProcess.push(file);
+      } else {
+        excessCount++;
+      }
+    }
+
+    if (oversizedFiles.length > 0) {
+      Swal.fire({
+        title: "Ukuran File Melebihi 50 MB",
+        html: `Setiap file dibatasi maksimal <strong>50 MB</strong>.<br/>File berikut dilewati karena melebihi batas:<br/><br/><div class="text-left text-xs bg-slate-100 dark:bg-slate-800 p-2.5 rounded-lg max-h-36 overflow-y-auto font-mono text-red-600">${oversizedFiles.map((f) => `• ${f}`).join("<br/>")}</div>`,
+        icon: "warning",
+        confirmButtonColor: "#EA4335",
+      });
+    }
+
+    if (excessCount > 0) {
+      Swal.fire({
+        title: "Maksimal 25 File",
+        text: `${excessCount} file tidak dapat ditambahkan karena melebihi batas total 25 file per unggahan chat.`,
+        icon: "info",
+        confirmButtonColor: "#EA4335",
+      });
+    }
+
+    if (filesToProcess.length > 0) {
+      const processed = await Promise.all(filesToProcess.map(processSingleFile));
+      setAttachedFiles((prev) => [...prev, ...processed]);
+    }
+  };
+
+  // Extract files reliably from DataTransfer (files list or items list)
+  const extractFilesFromDataTransfer = (dt: DataTransfer): File[] => {
+    if (dt.files && dt.files.length > 0) {
+      return Array.from(dt.files);
+    }
+    const extracted: File[] = [];
+    if (dt.items && dt.items.length > 0) {
+      for (let i = 0; i < dt.items.length; i++) {
+        const item = dt.items[i];
+        if (item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) extracted.push(f);
+        }
+      }
+    }
+    return extracted;
+  };
+
+  // Clipboard Paste listener (e.g. screenshot or copied file pasting)
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedFiles = extractFilesFromDataTransfer(e.clipboardData);
+    if (pastedFiles.length > 0) {
+      e.preventDefault();
+      handleFilesAdded(pastedFiles);
+    }
+  };
+
+  // Switch to a fresh New Chat screen (room is created only when first prompt is responded to)
+  const handleNewChat = () => {
+    setActiveSessionId("new");
+    setPendingMessages([]);
+    setInputText("");
+    setAttachedFiles([]);
+    setTimeout(() => textareaRef.current?.focus(), 20);
+  };
+
+  // Open 3-dot session menu
+  const handleOpenSessionMenu = (
+    session: ChatSession,
+    e: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    e.stopPropagation();
+    if (sessionMenu?.id === session.id) {
+      setSessionMenu(null);
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const menuHeight = 148;
+    const top =
+      rect.bottom + menuHeight > window.innerHeight
+        ? Math.max(8, rect.top - menuHeight)
+        : rect.bottom + 4;
+    const left = Math.min(rect.left, window.innerWidth - 200);
+    setSessionMenu({ id: session.id, top, left });
+  };
+
+  // Toggle pin / unpin chat session
+  const handleTogglePinSession = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSessionMenu(null);
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, isPinned: !s.isPinned } : s))
+    );
+  };
+
+  // Start renaming chat session inline
+  const handleStartRenameSession = (session: ChatSession, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSessionMenu(null);
+    setRenamingSessionId(session.id);
+    setRenameDraft(session.title);
+  };
+
+  // Commit renamed chat session title
+  const handleCommitRenameSession = (id: string) => {
+    const trimmed = renameDraft.trim();
+    if (trimmed) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, title: trimmed } : s))
+      );
+    }
+    setRenamingSessionId(null);
+  };
+
+  // Delete chat session
+  const handleDeleteSession = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSessionMenu(null);
+    Swal.fire({
+      title: "Hapus percakapan ini?",
+      text: "Riwayat obrolan tidak dapat dikembalikan.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#64748b",
+      confirmButtonText: "Ya, Hapus",
+      cancelButtonText: "Batal",
+    }).then((result) => {
+      if (result.isConfirmed) {
+        setSessions((prev) => {
+          const filtered = prev.filter((s) => s.id !== id);
+          if (activeSessionId === id) {
+            setActiveSessionId("new");
+            setPendingMessages([]);
+          }
+          return filtered;
+        });
+      }
+    });
+  };
+
+  // Send message
+  const handleSendMessage = (customText?: string) => {
+    const textToSend = (customText || inputText).trim();
+    const filesToSend = [...attachedFiles];
+
+    if (!textToSend && filesToSend.length === 0) return;
+
+    const userMessage: Message = {
+      id: `m-u-${Date.now()}`,
+      sender: "user",
+      text: textToSend,
+      attachments: filesToSend.length > 0 ? filesToSend : undefined,
+      time: getFullDateTime(),
+    };
+
+    const newTitle = textToSend
+      ? textToSend.slice(0, 32)
+      : filesToSend.length > 0
+      ? filesToSend[0].name.slice(0, 32)
+      : "Percakapan AI";
+
+    const existingSessionId = activeSession?.id || null;
+    const nextPending = !activeSession
+      ? [...pendingMessages.filter((m) => !m.text.startsWith("⚠️")), userMessage]
+      : [];
+
+    if (!activeSession) {
+      // Do NOT create a room in sidebar yet — wait until AI responds!
+      setPendingMessages(nextPending);
+    } else {
+      const updatedSessionTitle =
+        activeSession.messages.length === 0 && activeSession.title === "Percakapan Baru"
+          ? newTitle
+          : activeSession.title;
+
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id === activeSession.id) {
+            return {
+              ...s,
+              title: updatedSessionTitle,
+              updatedAt: "Baru saja",
+              messages: [...s.messages, userMessage],
+            };
+          }
+          return s;
+        })
+      );
+    }
+
+    setInputText("");
+    setAttachedFiles([]);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+
+    // Real Google Gemini AI API Call
+    setIsGenerating(true);
+
+    // Prepare previous conversation history (strip heavy base64 from history messages)
+    const rawHistory = activeSession
+      ? [...activeSession.messages, userMessage]
+      : nextPending;
+    const historyMessages = rawHistory.map((m) => ({
+      id: m.id,
+      sender: m.sender,
+      text: m.text,
+      time: m.time,
+    }));
+
+    // Payload files for backend AI
+    const payloadFiles = filesToSend.map((f) => ({
+      name: f.name,
+      type: f.type,
+      size: f.size,
+      base64: f.dataUrl ? f.dataUrl.split(",")[1] : undefined,
+      textPreview: f.textPreview,
+    }));
+
+    api<{ reply: string; honorific: string; teacherName: string }>("/teacher/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        messages: historyMessages,
+        userPrompt: textToSend,
+        files: payloadFiles,
+      }),
+    })
+      .then((res) => {
+        const replyText = res.data?.reply || "Tidak ada respon dari asisten AI.";
+        const aiResponse: Message = {
+          id: `m-ai-${Date.now()}`,
+          sender: "assistant",
+          text: replyText,
+          time: getFullDateTime(),
+        };
+
+        if (!existingSessionId) {
+          // Prompt has been successfully responded to! Now create the room in sidebar with automatic title
+          const createdSessionId = `session-${Date.now()}`;
+          const newSession: ChatSession = {
+            id: createdSessionId,
+            title: newTitle,
+            updatedAt: "Baru saja",
+            messages: [...nextPending, aiResponse],
+          };
+          setSessions((prevSessions) => [newSession, ...prevSessions]);
+          setActiveSessionId(createdSessionId);
+          setPendingMessages([]);
+        } else {
+          setSessions((prevSessions) =>
+            prevSessions.map((s) => {
+              if (s.id === existingSessionId) {
+                return {
+                  ...s,
+                  updatedAt: "Baru saja",
+                  messages: [...s.messages, aiResponse],
+                };
+              }
+              return s;
+            })
+          );
+        }
+      })
+      .catch((err) => {
+        console.error("[GuruAiChat] AI request failed:", err);
+        const honorific = getHonorific(user);
+        const errMessage = err?.message || "Terjadi kesalahan saat berkomunikasi dengan server AI.";
+        const aiErrorResponse: Message = {
+          id: `m-ai-${Date.now()}`,
+          sender: "assistant",
+          text: `⚠️ Maaf ${honorific} ${user?.name || ""}, terjadi kendala saat memproses jawaban:\n\n*${errMessage}*\n\nPastikan koneksi internet stabil dan kunci Gemini API aktif di server.`,
+          time: getFullDateTime(),
+        };
+
+        if (!existingSessionId) {
+          setPendingMessages((prev) => [...prev, aiErrorResponse]);
+        } else {
+          setSessions((prevSessions) =>
+            prevSessions.map((s) => {
+              if (s.id === existingSessionId) {
+                return {
+                  ...s,
+                  messages: [...s.messages, aiErrorResponse],
+                };
+              }
+              return s;
+            })
+          );
+        }
+      })
+      .finally(() => {
+        setIsGenerating(false);
+      });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  // Edit message - load text into input and focus
+  const handleEditMessage = (text: string) => {
+    setInputText(text);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+    }
+  };
+
+  // Retry message
+  const handleRetryMessage = (message: Message) => {
+    if (message.sender === "assistant") {
+      const msgIndex = displayedMessages.findIndex((m) => m.id === message.id);
+      if (msgIndex > 0) {
+        const prevUserMsg = displayedMessages[msgIndex - 1];
+        if (prevUserMsg && prevUserMsg.sender === "user") {
+          handleSendMessage(prevUserMsg.text);
+          return;
+        }
+      }
+    }
+    handleSendMessage(message.text);
+  };
+
+  const filteredSessions = [...sessions]
+    .filter((s) => s.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned)));
+
+  const activeMenuSession = sessionMenu
+    ? sessions.find((s) => s.id === sessionMenu.id) || null
+    : null;
+
+  const totalAttachedSize = attachedFiles.reduce((acc, f) => acc + f.size, 0);
+
+  return (
+    <div
+      onDragEnter={(e) => {
+        if (!e.dataTransfer?.types?.includes("Files")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current += 1;
+        setIsDragging(true);
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer?.types?.includes("Files")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "copy";
+        if (!isDragging) setIsDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.dataTransfer?.types?.includes("Files")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+        if (dragCounterRef.current === 0 || !e.currentTarget.contains(e.relatedTarget as Node)) {
+          dragCounterRef.current = 0;
+          setIsDragging(false);
+          setIsDraggingOverInput(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current = 0;
+        setIsDragging(false);
+        setIsDraggingOverInput(false);
+        const dropped = extractFilesFromDataTransfer(e.dataTransfer);
+        if (dropped.length > 0) {
+          handleFilesAdded(dropped);
+        }
+      }}
+      className="flex h-full w-full flex-1 min-h-0 overflow-hidden bg-[var(--bg)] text-[var(--fg)] relative"
+    >
+      {/* Drag & Drop Visual Overlay */}
+      {isDragging && (
+        <div className="absolute inset-0 z-50 bg-[var(--accent)]/10 backdrop-blur-[2px] border-4 border-dashed border-[var(--accent)] flex flex-col items-center justify-center pointer-events-none p-6 text-center animate-fadeIn">
+          <div className="w-16 h-16 rounded-2xl bg-[var(--accent)] text-white flex items-center justify-center shadow-lg mb-3">
+            <span className="material-symbols-outlined text-[36px]">upload_file</span>
+          </div>
+          <div className="font-display font-bold text-lg text-[var(--accent)]">
+            Lepaskan file di sini untuk melampirkan ke Chat AI
+          </div>
+          <div className="text-xs text-[var(--fg)] mt-1 opacity-80">
+            Mendukung gambar, video, PDF, Excel, Word & semua format dokumen (Maks. 50 MB per file, hingga 25 file)
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          SECONDARY SIDEBAR: RIWAYAT CHAT (GEMINI-STYLE SIDEBAR)
+          Tetap berada di sebelah kanan sidebar utama SIMAK
+          ========================================================= */}
+      <aside
+        className={cn(
+          "h-full flex flex-col border-r transition-all duration-300 ease-in-out shrink-0 z-10 min-h-0",
+          isSidebarOpen ? "w-[280px]" : "w-0 overflow-hidden border-r-0"
+        )}
+        style={{
+          background: "color-mix(in srgb, var(--card) 95%, transparent)",
+          borderColor: "var(--divider)",
+        }}
+      >
+        {/* Top Header of Chat History Sidebar */}
+        <div className="p-4 border-b flex items-center justify-between gap-2 shrink-0" style={{ borderColor: "var(--divider)" }}>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-[20px]">auto_awesome</span>
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold font-display tracking-tight truncate text-[var(--fg)]">
+                Riwayat Obrolan
+              </h2>
+              <span className="text-[11px] app-muted block truncate">SIMAK AI Assistant</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(false)}
+            className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)] hover:text-[var(--fg)] transition-colors"
+            title="Sembunyikan sidebar riwayat"
+          >
+            <span className="material-symbols-outlined text-[20px]">dock_to_left</span>
+          </button>
+        </div>
+
+        {/* New Chat Button */}
+        <div className="p-3 shrink-0">
+          <button
+            type="button"
+            onClick={handleNewChat}
+            className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl text-sm font-semibold transition-all duration-200 shadow-sm bg-[var(--accent)] hover:opacity-95 text-white active:scale-[0.98]"
+          >
+            <span className="material-symbols-outlined text-[20px]">edit_square</span>
+            Percakapan Baru
+          </button>
+        </div>
+
+        {/* Search Chat Box */}
+        <div className="px-3 pb-2 shrink-0">
+          <div className="relative flex items-center">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400 pointer-events-none select-none flex items-center justify-center">
+              search
+            </span>
+            <input
+              type="text"
+              placeholder="Telusuri percakapan..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-7 py-2 rounded-xl text-xs bg-[var(--input)] border text-[var(--fg)] placeholder:text-slate-400 focus:outline-none focus:border-[var(--accent)] transition-colors"
+              style={{ borderColor: "var(--input-border)" }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[var(--fg)] p-0.5 rounded transition-colors"
+                title="Hapus pencarian"
+              >
+                <span className="material-symbols-outlined text-[14px]">close</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Chat Sessions List (Scrollable) */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 space-y-1 py-1">
+          <div className="px-2 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            Terbaru
+          </div>
+
+          {filteredSessions.length === 0 ? (
+            <div className="text-center py-8 px-4 text-xs app-muted">
+              Tidak ada percakapan ditemukan.
+            </div>
+          ) : (
+            filteredSessions.map((session) => {
+              const isActive = session.id === activeSessionId;
+              const isMenuOpen = sessionMenu?.id === session.id;
+              const isRenaming = renamingSessionId === session.id;
+
+              return (
+                <div
+                  key={session.id}
+                  onClick={() => {
+                    if (!isRenaming) {
+                      setActiveSessionId(session.id);
+                      setPendingMessages([]);
+                    }
+                  }}
+                  className={cn(
+                    "group flex items-center justify-between gap-1.5 px-3 py-2.5 rounded-xl text-xs cursor-pointer transition-all duration-150 select-none",
+                    isActive
+                      ? "bg-[var(--accent-soft)] text-[var(--accent)] font-semibold shadow-2xs"
+                      : "text-[var(--fg)] hover:bg-[var(--hover)] font-medium"
+                  )}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <span
+                      className={cn(
+                        "material-symbols-outlined text-[18px] shrink-0",
+                        isActive ? "text-[var(--accent)]" : "text-slate-400"
+                      )}
+                    >
+                      chat_bubble
+                    </span>
+
+                    {isRenaming ? (
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={renameDraft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => handleCommitRenameSession(session.id)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleCommitRenameSession(session.id);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setRenamingSessionId(null);
+                          }
+                        }}
+                        className="w-full px-2 py-0.5 rounded-md text-xs bg-[var(--input)] border border-[var(--accent)] text-[var(--fg)] font-medium focus:outline-none"
+                      />
+                    ) : (
+                      <span className="truncate">{session.title}</span>
+                    )}
+                  </div>
+
+                  {isRenaming ? (
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleCommitRenameSession(session.id);
+                        }}
+                        className="w-6 h-6 rounded-lg flex items-center justify-center text-emerald-600 hover:bg-emerald-500/15 transition-colors"
+                        title="Simpan nama"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">check</span>
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setRenamingSessionId(null);
+                        }}
+                        className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-500/15 hover:text-[var(--fg)] transition-colors"
+                        title="Batal"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">close</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center shrink-0">
+                      {/* Pin indicator when session is pinned and not hovered / menu closed */}
+                      {session.isPinned && !isMenuOpen && (
+                        <span
+                          className={cn(
+                            "material-symbols-outlined text-[16px] px-1 group-hover:hidden",
+                            isActive ? "text-[var(--accent)]" : "text-slate-400"
+                          )}
+                          title="Disematkan"
+                        >
+                          push_pin
+                        </span>
+                      )}
+
+                      {/* 3-dot menu trigger button */}
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenSessionMenu(session, e)}
+                        className={cn(
+                          "w-7 h-7 rounded-full items-center justify-center transition-colors",
+                          isMenuOpen
+                            ? "flex bg-black/10 dark:bg-white/10 text-[var(--fg)]"
+                            : "hidden group-hover:flex hover:bg-black/10 dark:hover:bg-white/10",
+                          isActive ? "text-[var(--accent)]" : "text-slate-500 dark:text-slate-400"
+                        )}
+                        title="Opsi percakapan"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">more_vert</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Bottom Profile Info in History Sidebar */}
+        <div className="p-3 border-t app-divider mt-auto shrink-0 flex items-center justify-between text-xs app-muted">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="truncate font-medium">Gemini 2.0 Flash</span>
+          </div>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--hover)] font-mono">
+            Multimodal 50MB
+          </span>
+        </div>
+      </aside>
+
+      {/* Floating 3-Dot Session Context Menu (Gemini-style) */}
+      {sessionMenu && activeMenuSession && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setSessionMenu(null)}
+          />
+          <div
+            className="fixed z-50 min-w-[185px] py-1.5 rounded-2xl border shadow-xl bg-[var(--card)] text-[var(--fg)] animate-fadeIn select-none"
+            style={{
+              top: sessionMenu.top,
+              left: sessionMenu.left,
+              borderColor: "var(--divider)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={(e) => handleTogglePinSession(activeMenuSession.id, e)}
+              className="w-full px-3.5 py-2 text-xs font-medium flex items-center gap-3 hover:bg-[var(--hover)] transition-colors text-left"
+            >
+              <span className="material-symbols-outlined text-[18px] text-slate-500 dark:text-slate-400">
+                push_pin
+              </span>
+              <span>{activeMenuSession.isPinned ? "Lepas sematan" : "Sematkan"}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => handleStartRenameSession(activeMenuSession, e)}
+              className="w-full px-3.5 py-2 text-xs font-medium flex items-center gap-3 hover:bg-[var(--hover)] transition-colors text-left"
+            >
+              <span className="material-symbols-outlined text-[18px] text-slate-500 dark:text-slate-400">
+                edit
+              </span>
+              <span>Ganti nama</span>
+            </button>
+
+            <div
+              className="my-1 border-t"
+              style={{ borderColor: "var(--divider)" }}
+            />
+
+            <button
+              type="button"
+              onClick={(e) => handleDeleteSession(activeMenuSession.id, e)}
+              className="w-full px-3.5 py-2 text-xs font-medium flex items-center gap-3 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors text-left"
+            >
+              <span className="material-symbols-outlined text-[18px]">delete</span>
+              <span>Hapus</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* =========================================================
+          MAIN ROOM CHAT CANVAS (GEMINI-STYLE)
+          ========================================================= */}
+      <main className="flex-1 flex flex-col h-full min-w-0 min-h-0 overflow-hidden bg-[var(--bg)]">
+        {/* Chat Room Top Navigation Bar */}
+        <header
+          className="h-14 px-4 lg:px-6 border-b flex items-center justify-between gap-3 shrink-0"
+          style={{ borderColor: "var(--divider)", background: "color-mix(in srgb, var(--bg) 95%, transparent)" }}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Toggle button to reopen Gemini History Sidebar if collapsed */}
+            {!isSidebarOpen && (
+              <button
+                type="button"
+                onClick={() => setIsSidebarOpen(true)}
+                className="w-9 h-9 rounded-xl flex items-center justify-center border app-muted hover:bg-[var(--hover)] hover:text-[var(--fg)] transition-all"
+                style={{ borderColor: "var(--input-border)" }}
+                title="Buka riwayat obrolan"
+              >
+                <span className="material-symbols-outlined text-[20px]">side_navigation</span>
+              </button>
+            )}
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-bold truncate text-[var(--fg)]">
+                  {activeSession?.title || "Percakapan Baru"}
+                </h1>
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
+                  <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
+                  Gemini Flash
+                </span>
+              </div>
+              <p className="text-[11px] app-muted truncate hidden sm:block">
+                Konteks Guru: {user?.name} {user?.username ? `(${user.username})` : ""}
+              </p>
+            </div>
+          </div>
+
+        </header>
+
+        {/* Chat Messages Stream Area */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 py-6 space-y-6">
+          {displayedMessages.length === 0 ? (
+            /* Gemini-style Empty Welcome State */
+            <div className="max-w-3xl mx-auto h-full flex flex-col justify-center items-center text-center py-10 px-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-rose-500 to-red-600 text-white flex items-center justify-center shadow-lg mb-6 ring-4 ring-red-500/20">
+                <span className="material-symbols-outlined text-[36px]">auto_awesome</span>
+              </div>
+
+              <h2 className="text-2xl md:text-3xl font-display font-extrabold tracking-tight text-[var(--fg)] mb-2">
+                Sebaiknya kita mulai dari mana{user?.name ? `, ${getHonorific(user)} ${user.name}` : ""}?
+              </h2>
+              <p className="text-sm app-muted max-w-lg mb-8">
+                Unggah dokumen, Excel nilai, gambar, materi soal, atau video pembelajaran untuk dianalisis oleh Asisten AI SIMAK.
+              </p>
+
+              {/* Suggestion Prompt Chips Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full max-w-2xl text-left">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSendMessage(
+                      "Tolong jadwalkan kegiatan hari ini di kelas 10-A jam 1 sampai 3 materi Eksponen dan Logaritma, semua siswa hadir."
+                    )
+                  }
+                  className="p-4 rounded-2xl border app-card hover:border-[var(--accent)] hover:shadow-md transition-all group cursor-pointer text-left"
+                  style={{ borderColor: "var(--input-border)" }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5 text-[var(--accent)] font-semibold text-xs">
+                    <span className="material-symbols-outlined text-[18px]">calendar_add_on</span>
+                    Jadwal & Jurnal Cepat
+                  </div>
+                  <div className="text-xs text-[var(--fg)] line-clamp-2 leading-relaxed opacity-90">
+                    "Tolong jadwalkan hari ini di kelas 10-A jam 1 sampai 3 materi Eksponen, semua hadir."
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSendMessage(
+                      "Saya ingin mengunggah file media (gambar soal / dokumen / Excel). Bagaimana AI dapat membantu menganalisisnya?"
+                    )
+                  }
+                  className="p-4 rounded-2xl border app-card hover:border-[var(--accent)] hover:shadow-md transition-all group cursor-pointer text-left"
+                  style={{ borderColor: "var(--input-border)" }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5 text-emerald-500 font-semibold text-xs">
+                    <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                    Multimodal Media & File
+                  </div>
+                  <div className="text-xs text-[var(--fg)] line-clamp-2 leading-relaxed opacity-90">
+                    "Unggah gambar soal, dokumen PDF, video, atau Excel nilai hingga 50 MB (maksimal 25 file)."
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSendMessage(
+                      "Cek apakah ada bentrokan jam mengajar di kelas 10-B hari Senin jam ke-1 sampai 3."
+                    )
+                  }
+                  className="p-4 rounded-2xl border app-card hover:border-[var(--accent)] hover:shadow-md transition-all group cursor-pointer text-left"
+                  style={{ borderColor: "var(--input-border)" }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5 text-amber-500 font-semibold text-xs">
+                    <span className="material-symbols-outlined text-[18px]">warning</span>
+                    Deteksi Tabrakan Jam
+                  </div>
+                  <div className="text-xs text-[var(--fg)] line-clamp-2 leading-relaxed opacity-90">
+                    "Cek apakah jam ke-1 sampai 3 di kelas 10-B hari Senin sudah terisi oleh guru lain."
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSendMessage(
+                      "Tampilkan daftar jurnal mengajar saya yang statusnya masih draft dan belum dikirim."
+                    )
+                  }
+                  className="p-4 rounded-2xl border app-card hover:border-[var(--accent)] hover:shadow-md transition-all group cursor-pointer text-left"
+                  style={{ borderColor: "var(--input-border)" }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5 text-indigo-500 font-semibold text-xs">
+                    <span className="material-symbols-outlined text-[18px]">drafts</span>
+                    Status Jurnal Mengajar
+                  </div>
+                  <div className="text-xs text-[var(--fg)] line-clamp-2 leading-relaxed opacity-90">
+                    "Tampilkan jurnal saya yang masih berstatus draft untuk segera dikirim resmi."
+                  </div>
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Message List Container */
+            <div className="max-w-3xl mx-auto space-y-6">
+              {displayedMessages.map((message) => (
+                <ChatBubbleItem
+                  key={message.id}
+                  message={message}
+                  isUser={message.sender === "user"}
+                  user={user}
+                  onEdit={handleEditMessage}
+                  onRetry={handleRetryMessage}
+                  onSendMessage={handleSendMessage}
+                  onImagePreview={(url) => setPreviewImageModal(url)}
+                />
+              ))}
+
+              {/* Generating Loading State */}
+              {isGenerating && (
+                <div className="flex gap-3 md:gap-4 items-start">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-rose-500 to-red-600 text-white flex items-center justify-center shrink-0 shadow-sm animate-pulse">
+                    <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+                  </div>
+                  <div className="bg-[var(--card)] border px-4 py-3 rounded-2xl rounded-tl-xs shadow-sm flex items-center gap-2 text-xs app-muted">
+                    <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce" style={{ animationDelay: "300ms" }} />
+                    <span className="ml-1 text-[11px]">Menghubungkan ke Gemini AI...</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+
+        {/* =========================================================
+            BOTTOM FLOATING INPUT DOCK (GEMINI-STYLE CAPSULE)
+            ========================================================= */}
+        <div className="p-4 md:p-6 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)] to-transparent shrink-0">
+          <div className="max-w-3xl mx-auto">
+            {/* Attached file chips dock */}
+            {attachedFiles.length > 0 && (
+              <div className="mb-2 p-2.5 rounded-2xl bg-[var(--card)] border border-[var(--input-border)] shadow-sm space-y-2">
+                <div className="flex items-center justify-between text-xs px-1">
+                  <span className="font-semibold flex items-center gap-1.5 text-[var(--fg)]">
+                    <span className="material-symbols-outlined text-[18px] text-[var(--accent)]">
+                      attach_file
+                    </span>
+                    {attachedFiles.length}/{MAX_FILES_PER_UPLOAD} File Terlampir
+                    <span className="text-[11px] font-normal app-muted">
+                      (Total: {formatFileSize(totalAttachedSize)})
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedFiles([])}
+                    className="text-[11px] text-red-500 hover:text-red-700 font-medium transition-colors"
+                  >
+                    Hapus Semua
+                  </button>
+                </div>
+
+                {/* Chips Grid / Horizontal Carousel */}
+                <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto p-0.5">
+                  {attachedFiles.map((file) => {
+                    const theme = getFileCategoryTheme(file.category);
+                    const isImg = file.category === "image" && (file.previewUrl || file.dataUrl);
+
+                    return (
+                      <div
+                        key={file.id}
+                        className={cn(
+                          "flex items-center gap-2 p-1.5 pr-2 rounded-xl border text-xs max-w-[240px] shadow-2xs group relative transition-all",
+                          theme.bgClass,
+                          theme.borderClass
+                        )}
+                      >
+                        {isImg ? (
+                          <img
+                            src={file.previewUrl || file.dataUrl}
+                            alt={file.name}
+                            className="w-8 h-8 rounded-lg object-cover shrink-0 border border-black/10"
+                          />
+                        ) : (
+                          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", theme.textClass)}>
+                            <span className="material-symbols-outlined text-[20px]">{theme.icon}</span>
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-[var(--fg)] text-[11px] truncate" title={file.name}>
+                            {file.name}
+                          </div>
+                          <div className="text-[10px] app-muted">{formatFileSize(file.size)}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                          className="w-5 h-5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+                          title="Hapus file ini"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">close</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Main Input Capsule (Direct Drag & Drop Target) */}
+            <div
+              onDragEnter={(e) => {
+                if (!e.dataTransfer?.types?.includes("Files")) return;
+                e.preventDefault();
+                setIsDraggingOverInput(true);
+              }}
+              onDragOver={(e) => {
+                if (!e.dataTransfer?.types?.includes("Files")) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                if (!isDraggingOverInput) setIsDraggingOverInput(true);
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setIsDraggingOverInput(false);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragCounterRef.current = 0;
+                setIsDragging(false);
+                setIsDraggingOverInput(false);
+                const dropped = extractFilesFromDataTransfer(e.dataTransfer);
+                if (dropped.length > 0) {
+                  handleFilesAdded(dropped);
+                }
+              }}
+              className={cn(
+                "relative flex items-end gap-2 p-2 sm:p-2.5 rounded-2xl border bg-[var(--card)] shadow-[var(--shadow)] transition-all focus-within:ring-2 focus-within:ring-[var(--accent)]/30 focus-within:border-[var(--accent)]",
+                isDraggingOverInput &&
+                  "border-2 border-dashed border-[var(--accent)] ring-4 ring-[var(--accent)]/20 bg-[var(--accent-soft)]/20 scale-[1.01]"
+              )}
+              style={{ borderColor: isDraggingOverInput ? "var(--accent)" : "var(--input-border)" }}
+            >
+              {/* Attachment Picker */}
+              <input
+                id={fileInputId}
+                type="file"
+                multiple
+                accept="*/*"
+                onChange={(e) => {
+                  if (e.target.files) {
+                    handleFilesAdded(e.target.files);
+                    e.target.value = ""; // Reset to allow re-uploading same file if desired
+                  }
+                }}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => document.getElementById(fileInputId)?.click()}
+                className="w-9 h-9 rounded-xl flex items-center justify-center app-muted hover:bg-[var(--hover)] hover:text-[var(--accent)] transition-colors shrink-0"
+                title="Klik atau seret & lepaskan (drag & drop) file ke kolom ini (Maks. 50 MB/file, hingga 25 file)"
+              >
+                <span className="material-symbols-outlined text-[20px]">
+                  {isDraggingOverInput ? "upload_file" : "add_circle"}
+                </span>
+              </button>
+
+              {/* Textarea */}
+              <textarea
+                ref={textareaRef}
+                value={inputText}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                onDragOver={(e) => {
+                  if (e.dataTransfer?.types?.includes("Files")) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "copy";
+                  }
+                }}
+                onDrop={(e) => {
+                  const dropped = extractFilesFromDataTransfer(e.dataTransfer);
+                  if (dropped.length > 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dragCounterRef.current = 0;
+                    setIsDragging(false);
+                    setIsDraggingOverInput(false);
+                    handleFilesAdded(dropped);
+                  }
+                }}
+                rows={1}
+                placeholder={
+                  isDraggingOverInput
+                    ? "Lepaskan file di sini..."
+                    : "Tanyakan sesuatu atau lampirkan file..."
+                }
+                className="flex-1 max-h-[160px] py-1.5 px-2 bg-transparent text-xs sm:text-sm text-[var(--fg)] placeholder:text-slate-400 placeholder:truncate focus:outline-none resize-none leading-relaxed"
+              />
+
+              {/* Send Button */}
+              <button
+                type="button"
+                onClick={() => handleSendMessage()}
+                disabled={(!inputText.trim() && attachedFiles.length === 0) || isGenerating}
+                className={cn(
+                  "w-9 h-9 rounded-xl flex items-center justify-center transition-all shrink-0",
+                  (inputText.trim() || attachedFiles.length > 0) && !isGenerating
+                    ? "bg-[var(--accent)] text-white shadow-sm hover:opacity-90 active:scale-95 cursor-pointer"
+                    : "bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed"
+                )}
+                title="Kirim pesan"
+              >
+                <span className="material-symbols-outlined text-[18px]">arrow_upward</span>
+              </button>
+            </div>
+
+            {/* Disclaimer Footer */}
+            <div className="mt-2 text-center text-[10px] app-muted">
+              Mendukung <strong>Drag &amp; Drop</strong> atau <strong>Paste (Ctrl+V)</strong> file langsung ke kolom chat • Maksimal 50 MB/file (hingga 25 file).
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Image Lightbox Modal */}
+      {previewImageModal && (
+        <div
+          onClick={() => setPreviewImageModal(null)}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+        >
+          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+            <button
+              type="button"
+              onClick={() => setPreviewImageModal(null)}
+              className="absolute -top-10 right-0 text-white hover:text-red-400 text-sm font-semibold flex items-center gap-1 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[22px]">close</span>
+              Tutup
+            </button>
+            <img
+              src={previewImageModal}
+              alt="Pratinjau gambar"
+              className="max-h-[85vh] max-w-full rounded-2xl object-contain shadow-2xl border border-white/20"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

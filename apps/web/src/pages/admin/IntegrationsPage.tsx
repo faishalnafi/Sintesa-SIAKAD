@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { ObjectStorageSection } from "@/components/admin/ObjectStorageSection";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 export type SsoProviderItem = {
@@ -461,7 +462,7 @@ function SsoConfigModal({
                 ? "019f7d42-6977-7053-853f-4707fa9ea7cf"
                 : isLdap
                 ? "cn=admin,dc=sekolah,dc=sch,dc=id"
-                : "siakad-client-id"
+                : "simak-client-id"
             }
             hint={isLdap ? "Distinguished Name of the LDAP reader account." : "Unique application identifier registered at the IdP."}
             required
@@ -1235,7 +1236,7 @@ function DataSyncTable({
             </span>
           </div>
           <p className="text-xs app-muted mt-0.5">
-            Pull and synchronize academic master data, student discipline records, and daily attendance into SIAKAD.
+            Pull and synchronize academic master data, student discipline records, and daily attendance into SIMAK.
           </p>
         </div>
         <div className="text-xs font-semibold app-muted">
@@ -1935,12 +1936,19 @@ export function IntegrationsPage() {
       </section>
 
       {/* ─────────────────────────────────────────────────────────────────────── */}
-      {/* ─── SECTION: KUNCI API REST UNTUK KLIEN ─────────────────────────────── */}
+      {/* ─── SECTION 3: CLOUD OBJECT STORAGE (S3, R2, GCS, GENERIC) ──────────── */}
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      <section className="space-y-4 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
+        <ObjectStorageSection />
+      </section>
+
+      {/* ─────────────────────────────────────────────────────────────────────── */}
+      {/* ─── SECTION 4: KUNCI API REST UNTUK KLIEN ───────────────────────────── */}
       {/* ─────────────────────────────────────────────────────────────────────── */}
       <section className="space-y-4 pt-4 border-t" style={{ borderColor: "var(--divider)" }}>
         <div className="flex flex-col gap-1">
           <h2 className="font-display font-bold text-base" style={{ color: "var(--fg)" }}>
-            SIAKAD REST API Keys
+            SIMAK REST API Keys
           </h2>
           <p className="text-xs app-muted">Manage API keys for data integration by third-party applications.</p>
         </div>

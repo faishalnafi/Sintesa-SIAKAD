@@ -133,7 +133,7 @@ export async function syncKehadiran() {
       ok: false,
       status: "coming_soon" as const,
       message:
-        "Integrasi Kehadiran Siswa masih coming soon. App terpisah dari GDS & Kredensia; SINTESA hanya akan menyimpan rekap sakit/izin/alpa.",
+        "Integrasi Kehadiran Siswa masih coming soon. App terpisah dari GDS & Kredensia; SIMAK hanya akan menyimpan rekap sakit/izin/alpa.",
       log,
     };
   }

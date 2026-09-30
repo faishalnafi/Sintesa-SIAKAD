@@ -240,7 +240,7 @@ export function AppUpdatePage({ defaultTab }: Props) {
       const a = document.createElement("a");
       a.href = url;
       const dateStr = new Date().toISOString().slice(0, 10);
-      a.download = `SIAKAD-backup-${dateStr}.json`;
+      a.download = `SIMAK-backup-${dateStr}.json`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -762,7 +762,7 @@ export function AppUpdatePage({ defaultTab }: Props) {
                     <span>Perhatian Penting</span>
                   </div>
                   <p className="app-muted">
-                    Memulihkan dari file backup JSON akan memperbarui dan menyesuaikan data di database sesuai dengan ID entri yang diunggah. Pastikan berkas JSON berasal dari sistem SIAKAD.
+                    Memulihkan dari file backup JSON akan memperbarui dan menyesuaikan data di database sesuai dengan ID entri yang diunggah. Pastikan berkas JSON berasal dari sistem SIMAK.
                   </p>
                 </div>
 

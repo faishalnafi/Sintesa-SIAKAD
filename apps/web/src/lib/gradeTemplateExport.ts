@@ -84,7 +84,7 @@ export function downloadGradeTemplate(params: GradeTemplateExportParams): string
   ];
 
   const sheetData: (string | number | null | undefined)[][] = [
-    ["SISTEM INFORMASI AKADEMIK (SIAKAD) — SMAN 3 MOJOKERTO"],
+    ["SISTEM INFORMASI AKADEMIK (SIMAK) — SMAN 3 MOJOKERTO"],
     ["TEMPLATE RESMI PENGISIAN NILAI AKADEMIK (DAPAT DIEDIT BEBAS DI EXCEL)"],
     [],
     ["Mata Pelajaran", subjectName, "UUID Mapel", subjectId],

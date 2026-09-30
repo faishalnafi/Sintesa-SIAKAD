@@ -8,7 +8,7 @@ import { ParticleCanvas } from "@/components/common/ParticleCanvas";
 const errorMessages: Record<string, string> = {
   missing_token: "Token SSO tidak ditemukan dari callback IdP.",
   invalid_state: "State tidak valid. Coba login ulang.",
-  no_role: "Akun tidak memiliki peran yang dikenali di SIAKAD. Hubungi admin untuk mendapatkan akses.",
+  no_role: "Akun tidak memiliki peran yang dikenali di SIMAK. Hubungi admin untuk mendapatkan akses.",
   user_missing: "Gagal memuat profil pengguna setelah login.",
   account_inactive: "Akun dinonaktifkan. Hubungi admin.",
   sso_failed:
@@ -60,7 +60,7 @@ export function LoginPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background dark:bg-[#020617]">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-4 border-[#0F91FC] border-t-transparent rounded-full animate-spin"></div>
+          <div className="w-10 h-10 border-4 border-[#EA4335] border-t-transparent rounded-full animate-spin"></div>
           <span className="text-xs text-on-surface-variant font-medium animate-pulse">Menghubungkan ke sistem...</span>
         </div>
       </div>
@@ -69,10 +69,10 @@ export function LoginPage() {
 
   return (
     <div className="min-h-screen w-full relative flex flex-col lg:flex-row overflow-x-hidden transition-colors duration-300 select-none">
-      {/* BACKGROUND SPLIT LAYER: Left White, Right SSO Blue */}
+      {/* BACKGROUND SPLIT LAYER: Left White, Right Red */}
       <div className="absolute inset-0 flex flex-col lg:flex-row pointer-events-none z-0">
         <div className="w-full lg:w-1/2 min-h-screen bg-surface dark:bg-[#090d16] lg:border-r border-outline-variant/20" />
-        <div className="hidden lg:block lg:w-1/2 min-h-screen bg-[#0F91FC] dark:bg-[#020617]" />
+        <div className="hidden lg:block lg:w-1/2 min-h-screen bg-[#EA4335] dark:bg-[#020617]" />
       </div>
 
       {/* FULL VIEWPORT INTERACTIVE PARTICLE CANVAS LAYER (Spans whole screen with automatic color change) */}
@@ -82,11 +82,11 @@ export function LoginPage() {
       <div className="relative z-10 w-full lg:w-1/2 shrink-0 min-h-screen flex flex-col justify-between p-6 sm:p-10 md:p-12 pointer-events-none">
         {/* Top Header / Branding */}
         <div className="flex items-center gap-3 pointer-events-auto">
-          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#0F91FC]/10 dark:bg-[#0F91FC]/20 border border-[#0F91FC]/20">
-            <span className="material-symbols-outlined text-[#0F91FC] text-[24px] fill">school</span>
+          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#EA4335]/10 dark:bg-[#EA4335]/20 border border-[#EA4335]/20">
+            <span className="material-symbols-outlined text-[#EA4335] text-[24px] fill">school</span>
           </div>
           <div>
-            <span className="font-display font-bold text-xl text-[#0F91FC] dark:text-[#0F91FC] tracking-tight">SIAKAD</span>
+            <span className="font-display font-bold text-xl text-[#EA4335] dark:text-[#EA4335] tracking-tight">SIMAK</span>
             <span className="text-[10px] block text-on-surface-variant/70 leading-none">SMAN 3 MOJOKERTO</span>
           </div>
         </div>
@@ -108,7 +108,7 @@ export function LoginPage() {
             {/* Button 1: Masuk dengan Kredensia SSO */}
             <a
               href={ssoLoginUrl()}
-              className="group relative w-full flex items-center justify-center gap-3 bg-[#0F91FC] text-white hover:bg-[#0F91FC]/90 active:scale-[0.98] transition-all py-4 px-5 rounded-2xl shadow-md font-semibold text-sm cursor-pointer"
+              className="group relative w-full flex items-center justify-center gap-3 bg-[#EA4335] text-white hover:bg-[#EA4335]/90 active:scale-[0.98] transition-all py-4 px-5 rounded-2xl shadow-md font-semibold text-sm cursor-pointer"
             >
               <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-white/20">
                 <span className="material-symbols-outlined text-white text-[20px] fill">key</span>
@@ -120,7 +120,7 @@ export function LoginPage() {
             <a
               href={googleLoginUrl()}
               id="btn-google-login"
-              className="group w-full flex items-center justify-center gap-3 bg-surface-container-lowest/90 dark:bg-white/5 border border-outline-variant/40 hover:border-[#0F91FC]/50 hover:bg-[#0F91FC]/5 active:scale-[0.98] transition-all py-4 px-5 rounded-2xl text-sm font-medium cursor-pointer shadow-sm"
+              className="group w-full flex items-center justify-center gap-3 bg-surface-container-lowest/90 dark:bg-white/5 border border-outline-variant/40 hover:border-[#EA4335]/50 hover:bg-[#EA4335]/5 active:scale-[0.98] transition-all py-4 px-5 rounded-2xl text-sm font-medium cursor-pointer shadow-sm"
             >
               <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24">
                 <path
@@ -147,8 +147,8 @@ export function LoginPage() {
           {/* Institutional support & alternative links */}
           <div className="mt-8 pt-6 border-t border-outline-variant/10 text-sm text-on-surface-variant">
             <div className="flex items-center justify-center gap-2.5">
-              <span className="material-symbols-outlined text-[18px] text-[#0F91FC]">help</span>
-              <span>Butuh bantuan akun? <a href="#" className="text-[#0F91FC] hover:underline font-semibold">Hubungi Admin</a></span>
+              <span className="material-symbols-outlined text-[18px] text-[#EA4335]">help</span>
+              <span>Butuh bantuan akun? <a href="#" className="text-[#EA4335] hover:underline font-semibold">Hubungi Admin</a></span>
             </div>
           </div>
         </div>
@@ -156,10 +156,10 @@ export function LoginPage() {
         {/* Footer info (Terms / Copyright) */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-[11px] text-on-surface-variant/60 pointer-events-auto">
           <div className="flex gap-4">
-            <a href="#" className="hover:text-[#0F91FC] hover:underline">Bantuan</a>
-            <a href="#" className="hover:text-[#0F91FC] hover:underline">Kebijakan Privasi</a>
+            <a href="#" className="hover:text-[#EA4335] hover:underline">Bantuan</a>
+            <a href="#" className="hover:text-[#EA4335] hover:underline">Kebijakan Privasi</a>
           </div>
-          <div>© {new Date().getFullYear()} SIAKAD · SMAN 3 Mojokerto.</div>
+          <div>© {new Date().getFullYear()} SIMAK · SMAN 3 Mojokerto.</div>
         </div>
       </div>
 
@@ -181,7 +181,7 @@ export function LoginPage() {
               href="https://sso.sman3mjk.sch.id/otentikasi#verifikasi"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 bg-white text-[#0F91FC] hover:bg-white/95 active:scale-[0.98] transition-all py-3.5 px-6 rounded-2xl font-bold text-sm shadow-lg pointer-events-auto cursor-pointer"
+              className="inline-flex items-center gap-2 bg-white text-[#EA4335] hover:bg-white/95 active:scale-[0.98] transition-all py-3.5 px-6 rounded-2xl font-bold text-sm shadow-lg pointer-events-auto cursor-pointer"
             >
               <span>Aktivasi Akun Sekarang</span>
               <span className="material-symbols-outlined text-[18px] fill">open_in_new</span>

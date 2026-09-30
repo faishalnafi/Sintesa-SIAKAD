@@ -52,7 +52,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "GDS — Poin Kedisiplinan",
     shortName: "GDS",
     description:
-      "Aplikasi terpisah untuk poin pelanggaran/prestasi. SINTESA hanya menyimpan agregat poin untuk matrix raport & dashboard siswa.",
+      "Aplikasi terpisah untuk poin pelanggaran/prestasi. SIMAK hanya menyimpan agregat poin untuk matrix raport & dashboard siswa.",
     ownsFields: ["students.poin_gds"],
     envKeys: ["GDS_BASE_URL", "GDS_API_KEY"],
     status: "coming_soon",
@@ -64,7 +64,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
     name: "Kehadiran Siswa",
     shortName: "Kehadiran",
     description:
-      "Aplikasi terpisah absensi (BK/kehadiran). SINTESA hanya menyimpan rekap sakit/izin/alpa untuk matrix raport.",
+      "Aplikasi terpisah absensi (BK/kehadiran). SIMAK hanya menyimpan rekap sakit/izin/alpa untuk matrix raport.",
     ownsFields: ["students.sakit", "students.izin", "students.alpa"],
     envKeys: ["KEHADIRAN_BASE_URL", "KEHADIRAN_API_KEY"],
     status: "coming_soon",

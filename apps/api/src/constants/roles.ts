@@ -159,7 +159,7 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
     canLogin: true,
     aliases: ["walikelas", "wali kelas", "homeroom"],
     description:
-      "Overlay SINTESA dari ScholarGate academic_histories.is_homeroom. Biasanya multi-role bersama guru.",
+      "Overlay SIMAK dari ScholarGate academic_histories.is_homeroom. Biasanya multi-role bersama guru.",
     detailFields: ["nip", "nama", "kelas_perwalian", "is_homeroom"],
   },
   {
@@ -169,7 +169,7 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
     canLogin: true,
     aliases: ["ortu", "orang tua", "parent", "wali murid"],
     description:
-      "Akses orang tua di SINTESA. Data sumber: blok ayah/ibu/wali pada member siswa ScholarGate.",
+      "Akses orang tua di SIMAK. Data sumber: blok ayah/ibu/wali pada member siswa ScholarGate.",
     detailFields: [...SCHOLARGATE_PARENT_FIELDS, "linked_student_ids"],
   },
 ];

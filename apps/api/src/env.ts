@@ -62,6 +62,10 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().optional()),
   GOOGLE_CLIENT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
 
+  // --- Google AI Studio / Gemini API ---
+  GEMINI_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  GEMINI_MODEL: z.preprocess(emptyToUndefined, z.string().default("gemini-2.0-flash")),
+
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().default(20),
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(600_000),
 });
@@ -169,6 +173,12 @@ export const env = {
   },
   get GOOGLE_CLIENT_SECRET() {
     return getGoogleClientSecret();
+  },
+  get GEMINI_API_KEY() {
+    return (process.env.GEMINI_API_KEY || parsed.GEMINI_API_KEY || "").trim();
+  },
+  get GEMINI_MODEL() {
+    return (process.env.GEMINI_MODEL || parsed.GEMINI_MODEL || "gemini-2.0-flash").trim();
   },
 };
 

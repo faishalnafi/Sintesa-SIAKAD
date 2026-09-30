@@ -125,7 +125,7 @@ export async function syncGds() {
       ok: false,
       status: "coming_soon" as const,
       message:
-        "Integrasi GDS masih coming soon. App terpisah; SINTESA hanya akan menyimpan poin_gds setelah API GDS live.",
+        "Integrasi GDS masih coming soon. App terpisah; SIMAK hanya akan menyimpan poin_gds setelah API GDS live.",
       log,
     };
   }

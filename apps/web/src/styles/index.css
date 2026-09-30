@@ -16,10 +16,10 @@
   --input-border: #e2e8f0;
   --hover: #f1f5f9;
   --divider: #f1f5f9;
-  --primary: #006591;
-  --accent: #0ea5e9;
-  --accent-soft: rgba(14, 165, 233, 0.12);
-  --ring: rgba(14, 165, 233, 0.14);
+  --primary: #c5221f;
+  --accent: #EA4335;
+  --accent-soft: rgba(234, 67, 53, 0.12);
+  --ring: rgba(234, 67, 53, 0.20);
   --shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.08);
   --radius-card: 1rem;
@@ -39,10 +39,10 @@ html.dark {
   --input-border: rgba(148, 163, 184, 0.22);
   --hover: rgba(148, 163, 184, 0.08);
   --divider: rgba(148, 163, 184, 0.12);
-  --primary: #89ceff;
-  --accent: #0ea5e9;
-  --accent-soft: rgba(14, 165, 233, 0.16);
-  --ring: rgba(14, 165, 233, 0.22);
+  --primary: #ff8a80;
+  --accent: #EA4335;
+  --accent-soft: rgba(234, 67, 53, 0.20);
+  --ring: rgba(234, 67, 53, 0.28);
   --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
 }
@@ -132,16 +132,16 @@ html:not(.dark) .app-card {
 }
 
 .app-sidebar {
-  background: #0f91fc;
-  color: #f0f9ff;
+  background: #EA4335;
+  color: #fff5f5;
   border-color: rgba(255, 255, 255, 0.18);
-  --fg: #f0f9ff;
+  --fg: #fff5f5;
   --muted: rgba(255, 255, 255, 0.85);
   --divider: rgba(255, 255, 255, 0.18);
   --card-border: rgba(255, 255, 255, 0.18);
-  --hover: rgba(255, 255, 255, 0.12);
-  --accent: #f0f9ff;
-  --accent-soft: rgba(255, 255, 255, 0.18);
+  --hover: rgba(255, 255, 255, 0.15);
+  --accent: #fff5f5;
+  --accent-soft: rgba(255, 255, 255, 0.20);
 }
 
 .app-sidebar .text-slate-400,
@@ -288,14 +288,23 @@ html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:first-child {
   padding-left: 0;
   padding-right: 0;
 }
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > a:first-child > div.min-w-0,
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > a:first-child > span:last-child,
 html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:first-child {
   display: none;
 }
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > a:first-child {
+  justify-content: center;
+  padding: 8px 0;
+}
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > button,
 html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button {
   font-size: 0;
   padding-left: 0;
   padding-right: 0;
+  justify-content: center;
 }
+html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > button .material-symbols-outlined,
 html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-child button .material-symbols-outlined {
   font-size: 20px;
 }
@@ -309,7 +318,7 @@ html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-chil
   height: 26px;
   border-radius: 9999px;
   background: #fff;
-  color: #0f91fc;
+  color: #EA4335;
   border: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   display: none;
@@ -322,7 +331,7 @@ html.sidebar-collapsed .app-sidebar.w-\[260px\] > div:last-child > div:last-chil
   padding: 0;
 }
 #sidebar-toggle-btn:hover {
-  background: #f0f9ff;
+  background: #fff5f5;
 }
 @media (min-width: 1024px) {
   #sidebar-toggle-btn {
@@ -395,14 +404,14 @@ html.dark .glass-effect {
   position: absolute;
   width: 560px;
   height: 560px;
-  background: radial-gradient(circle, rgba(14, 165, 233, 0.07) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(234, 67, 53, 0.08) 0%, transparent 70%);
   border-radius: 50%;
   z-index: -1;
   pointer-events: none;
 }
 
 html.dark .ambient-glow {
-  background: radial-gradient(circle, rgba(14, 165, 233, 0.06) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(234, 67, 53, 0.07) 0%, transparent 70%);
 }
 
 @media (prefers-reduced-motion: reduce) {

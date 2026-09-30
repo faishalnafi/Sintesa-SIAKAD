@@ -4,7 +4,7 @@ param(
 
 $root = $PSScriptRoot
 
-Write-Host "=== SIAKAD Deploy ZIP Builder ===" -ForegroundColor Cyan
+Write-Host "=== SIMAK Deploy ZIP Builder ===" -ForegroundColor Cyan
 
 $apiDist = Join-Path $root "apps\api\dist"
 $webDist = Join-Path $root "apps\web\dist"

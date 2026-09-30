@@ -884,7 +884,7 @@ export function SubjectsPage() {
 
       <div className="space-y-3">
         <h2 className="font-display font-bold text-xl">Penugasan Guru (Tugas Guru)</h2>
-        <p className="text-xs app-muted">Pasangkan guru yang diimpor dari SSO ke mata pelajaran di SIAKAD.</p>
+        <p className="text-xs app-muted">Pasangkan guru yang diimpor dari SSO ke mata pelajaran di SIMAK.</p>
       </div>
 
       <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6 mt-4">
@@ -1006,7 +1006,7 @@ export function SubjectsPage() {
 
       <div className="space-y-3">
         <h2 className="font-display font-bold text-xl">Penugasan Wali Kelas (Tugas Wali Kelas)</h2>
-        <p className="text-xs app-muted">Pasangkan guru sebagai Wali Kelas ke rombel/kelas di SIAKAD.</p>
+        <p className="text-xs app-muted">Pasangkan guru sebagai Wali Kelas ke rombel/kelas di SIMAK.</p>
       </div>
 
       <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6 mt-4">
