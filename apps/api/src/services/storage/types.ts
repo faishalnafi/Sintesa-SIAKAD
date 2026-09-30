@@ -59,6 +59,7 @@ export interface UploadOptions {
   filename: string;
   mimeType?: string;
   folder?: string;
+  customUuid?: string;
 }
 
 export interface UploadResult {
@@ -66,6 +67,8 @@ export interface UploadResult {
   provider: StorageProviderType;
   key: string;
   url: string;
+  cloudUrl?: string;
+  storedName: string;
   filename: string;
   mimeType: string;
   size: number;

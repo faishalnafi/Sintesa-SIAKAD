@@ -113,6 +113,31 @@ import {
         ('uh2', 'UH2', 'UJIAN', 'disabled', 4),
         ('t2', 'T2', 'TUGAS', 'disabled', 5)
       ON CONFLICT (code) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+        id VARCHAR(120) PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ai_chat_sessions_user_idx ON ai_chat_sessions (user_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS ai_chat_files (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id VARCHAR(120) NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        original_name VARCHAR(500) NOT NULL,
+        stored_name VARCHAR(255) NOT NULL,
+        storage_key TEXT NOT NULL,
+        storage_provider VARCHAR(50) NOT NULL,
+        storage_url TEXT NOT NULL,
+        mime_type VARCHAR(150) NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ai_chat_files_session_idx ON ai_chat_files (session_id);
     `);
 
     await initSystemVersionState();
@@ -463,6 +488,7 @@ app.get("/api/public/profile/:uuid", async (c) => {
 
 import { realtimeRoutes } from "./modules/realtime/routes.js";
 import { adminStorageRoutes, publicStorageRoutes } from "./modules/admin/storage.routes.js";
+import { getFileFromStorage } from "./services/storage/storage.service.js";
 
 app.route("/api/auth", authRoutes);
 app.route("/api/admin/storage", adminStorageRoutes);
@@ -474,19 +500,17 @@ app.route("/api/realtime", realtimeRoutes);
 app.route("/api/storage", publicStorageRoutes);
 app.route("/api", appUpdateRoutes);
 
-// Static file serving for local uploads directory
-const uploadsDir = path.resolve(_appDirname, "../uploads");
+// Unified file serving for local uploads and Cloud Object Storage
 app.get("/api/uploads/*", async (c) => {
-  const relPath = c.req.path.replace(/^\/api\/uploads\//, "");
-  const safePath = path.normalize(relPath).replace(/^(\.\.[\/\\])+/, "");
-  const fullPath = path.join(uploadsDir, safePath);
+  const relPath = decodeURIComponent(c.req.path.replace(/^\/api\/uploads\//, ""));
+  const safePath = relPath.replace(/\\/g, "/").replace(/^(\.\.\/)+/, "").replace(/^\/+/, "");
 
-  if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+  const fileObj = await getFileFromStorage(safePath);
+  if (!fileObj) {
     return c.notFound();
   }
 
-  const buffer = await fs.promises.readFile(fullPath);
-  const ext = path.extname(fullPath).toLowerCase();
+  const ext = path.extname(safePath).toLowerCase();
 
   const mimeTypes: Record<string, string> = {
     ".png": "image/png",
@@ -500,12 +524,19 @@ app.get("/api/uploads/*", async (c) => {
     ".xls": "application/vnd.ms-excel",
     ".csv": "text/csv",
     ".txt": "text/plain",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
   };
 
-  c.header("Content-Type", mimeTypes[ext] || "application/octet-stream");
+  c.header("Content-Type", fileObj.contentType || mimeTypes[ext] || "application/octet-stream");
   c.header("Cache-Control", "public, max-age=86400");
-  return c.body(buffer);
+  return c.body(new Uint8Array(fileObj.buffer));
 });
+
 
 
 // Intercept Google OAuth login without /api

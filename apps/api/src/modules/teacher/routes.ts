@@ -25,7 +25,8 @@ import { env } from "../../env.js";
 import { ssoListKelas } from "../../services/sso-api-client.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
 import { askGemini } from "../../services/gemini.js";
-import { uploadFile } from "../../services/storage/storage.service.js";
+import { uploadFile, deleteFile, deleteFolderPrefix } from "../../services/storage/storage.service.js";
+import type { StorageProviderType } from "../../services/storage/types.js";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -1098,7 +1099,40 @@ async function getTeacherAiContext(userId: string, userName: string) {
     )
     .orderBy(roles.code, users.name);
 
-  // 7. Tentukan sapaan berdasarkan jenis kelamin
+  // 7. Ambil daftar jam mengajar (teachingHours) — untuk resolusi jam oleh AI
+  const allTeachingHours = await db
+    .select({ id: teachingHours.id, label: teachingHours.label, startTime: teachingHours.startTime, endTime: teachingHours.endTime })
+    .from(teachingHours)
+    .orderBy(teachingHours.startTime);
+
+  // 8. Ambil jurnal terbaru guru (30 hari terakhir) — untuk konteks dan anti-duplikasi
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0, 10);
+  const recentJournals = await db
+    .select({
+      id: teacherJournals.id,
+      date: teacherJournals.date,
+      className: teacherJournals.className,
+      teachingHourLabel: teacherJournals.teachingHourLabel,
+      subjectName: teacherJournals.subjectName,
+      materi: teacherJournals.materi,
+      presenceInfo: teacherJournals.presenceInfo,
+      status: teacherJournals.status,
+      groupId: teacherJournals.groupId,
+    })
+    .from(teacherJournals)
+    .where(
+      and(
+        eq(teacherJournals.teacherUserId, userId),
+        isNull(teacherJournals.deletedAt),
+        sql`${teacherJournals.date} >= ${thirtyDaysAgoStr}`
+      )
+    )
+    .orderBy(desc(teacherJournals.date), desc(teacherJournals.createdAt))
+    .limit(50);
+
+  // 9. Tentukan sapaan berdasarkan jenis kelamin
   let honorific = "Bapak/Ibu";
   let genderLabel = "Tidak Diketahui";
   const jk = teacher?.jenisKelamin?.toUpperCase();
@@ -1128,6 +1162,8 @@ async function getTeacherAiContext(userId: string, userName: string) {
     subjectNames,
     classNames,
     adminUsers,
+    allTeachingHours,
+    recentJournals,
   };
 }
 
@@ -1153,13 +1189,309 @@ teacherRoutes.get("/ai/context", async (c) => {
 });
 
 /**
+ * GET /api/teacher/ai/sessions
+ * Mengambil seluruh riwayat roomchat beserta metadata file lampiran milik guru
+ */
+teacherRoutes.get("/ai/sessions", async (c) => {
+  const user = c.get("user");
+  try {
+    const res = await db.execute(sql`
+      SELECT id, title, messages, updated_at
+      FROM ai_chat_sessions
+      WHERE user_id = ${user.id}
+      ORDER BY updated_at DESC
+    `);
+    const rows = (res as any).rows || res || [];
+    const formatted = rows.map((r: any) => ({
+      id: r.id,
+      title: r.title,
+      updatedAt: r.updated_at ? new Date(r.updated_at).toLocaleString("id-ID") : "Baru saja",
+      messages: Array.isArray(r.messages) ? r.messages : [],
+    }));
+    return c.json({ success: true, data: formatted });
+  } catch (err: any) {
+    console.error("[Teacher AI Sessions GET] Error:", err);
+    return c.json({ success: true, data: [] });
+  }
+});
+
+/**
+ * POST /api/teacher/ai/sessions
+ * Menyimpan/memperbarui sesi roomchat ke database agar riwayat pesan & file permanen
+ */
+teacherRoutes.post("/ai/sessions", async (c) => {
+  const user = c.get("user");
+  try {
+    const body = await c.req.json();
+    const { id, title, messages = [] } = body;
+    if (!id) {
+      return c.json({ success: false, message: "Session ID wajib diisi" }, 400);
+    }
+
+    // Simpan metadata lampiran dengan URL permanen tanpa membebani DB dengan raw base64 besar
+    const cleanMessages = Array.isArray(messages)
+      ? messages.map((m: any) => ({
+          ...m,
+          attachments: Array.isArray(m.attachments)
+            ? m.attachments.map((att: any) => ({
+                id: att.id,
+                name: att.name,
+                storedName: att.storedName,
+                storageKey: att.storageKey,
+                storageProvider: att.storageProvider,
+                storageUrl: att.storageUrl || att.previewUrl,
+                cloudUrl: att.cloudUrl,
+                previewUrl: att.storageUrl || att.previewUrl,
+                size: att.size,
+                type: att.type,
+                category: att.category,
+                textPreview: att.textPreview,
+              }))
+            : undefined,
+        }))
+      : [];
+
+    const messagesJson = JSON.stringify(cleanMessages);
+    const safeTitle = (title || "Percakapan Baru").slice(0, 250);
+
+    await db.execute(sql`
+      INSERT INTO ai_chat_sessions (id, user_id, title, messages, updated_at, created_at)
+      VALUES (${id}, ${user.id}, ${safeTitle}, ${messagesJson}::jsonb, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        messages = EXCLUDED.messages,
+        updated_at = NOW()
+      WHERE ai_chat_sessions.user_id = ${user.id}
+    `);
+
+    return c.json({ success: true });
+  } catch (err: any) {
+    console.error("[Teacher AI Sessions POST] Error:", err);
+    return c.json({ success: false, message: err.message || "Gagal menyimpan sesi" }, 500);
+  }
+});
+
+/**
+ * POST /api/teacher/ai/upload
+ * Mengunggah file lampiran roomchat secara langsung:
+ * - Rename memakai UUID (`{uuid}.{ext}`)
+ * - Simpan di folder khusus `ai-chat/{sessionId}/{uuid}.{ext}`
+ * - Langsung masuk ke Cloud Object Storage (jika aktif) atau Folder Lokal khusus
+ * - Catat di tabel `ai_chat_files` untuk manajemen siklus hidup (auto-delete saat roomchat dihapus)
+ */
+teacherRoutes.post("/ai/upload", async (c) => {
+  const user = c.get("user");
+  try {
+    const body = await c.req.json();
+    const { sessionId = "default", files = [] } = body;
+    const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "") || "default";
+
+    if (!Array.isArray(files) || files.length === 0) {
+      return c.json({ success: false, message: "Tidak ada file untuk diunggah" }, 400);
+    }
+
+    const uploadedResults: Array<{
+      clientId?: string;
+      originalName: string;
+      storedName: string;
+      storageKey: string;
+      storageUrl: string;
+      cloudUrl?: string;
+      provider: StorageProviderType;
+      mimeType: string;
+      size: number;
+    }> = [];
+
+    for (const f of files) {
+      if (!f.base64) continue;
+      const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
+      const buf = Buffer.from(cleanB64, "base64");
+      const origName = f.name || `file-${Date.now()}`;
+      const mime = f.type || "application/octet-stream";
+
+      const uploaded = await uploadFile({
+        buffer: buf,
+        filename: origName,
+        mimeType: mime,
+        folder: `ai-chat/${safeSessionId}`,
+      });
+
+      await db.execute(sql`
+        INSERT INTO ai_chat_files (
+          session_id, user_id, original_name, stored_name, storage_key, storage_provider, storage_url, mime_type, size_bytes
+        ) VALUES (
+          ${safeSessionId},
+          ${user.id},
+          ${origName},
+          ${uploaded.storedName},
+          ${uploaded.key},
+          ${uploaded.provider},
+          ${uploaded.url},
+          ${mime},
+          ${uploaded.size}
+        )
+      `);
+
+      uploadedResults.push({
+        clientId: f.id,
+        originalName: origName,
+        storedName: uploaded.storedName,
+        storageKey: uploaded.key,
+        storageUrl: uploaded.url,
+        cloudUrl: uploaded.cloudUrl,
+        provider: uploaded.provider,
+        mimeType: mime,
+        size: uploaded.size,
+      });
+    }
+
+    return c.json({
+      success: true,
+      data: uploadedResults,
+    });
+  } catch (err: any) {
+    console.error("[Teacher AI Upload] Error:", err);
+    return c.json(
+      { success: false, message: err.message || "Gagal mengunggah file ke penyimpanan" },
+      500
+    );
+  }
+});
+
+/**
+ * DELETE /api/teacher/ai/files
+ * Menghapus satu file lampiran (misal saat pengguna membatalkan/menghapus chip file sebelum dikirim)
+ */
+teacherRoutes.delete("/ai/files", async (c) => {
+  const user = c.get("user");
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { storageKey, provider } = body;
+    if (!storageKey) {
+      return c.json({ success: false, message: "storageKey wajib diisi" }, 400);
+    }
+
+    await deleteFile(storageKey, provider);
+    await db.execute(sql`
+      DELETE FROM ai_chat_files
+      WHERE storage_key = ${storageKey} AND user_id = ${user.id}
+    `);
+
+    return c.json({ success: true, message: "File lampiran berhasil dihapus dari penyimpanan" });
+  } catch (err: any) {
+    console.error("[Teacher AI Delete File] Error:", err);
+    return c.json({ success: false, message: err.message || "Gagal menghapus file" }, 500);
+  }
+});
+
+/**
+ * DELETE /api/teacher/ai/sessions/:sessionId
+ * WAJIB: Saat roomchat dihapus, seluruh file unggahan di dalam roomchat tersebut
+ * otomatis dihapus dari Cloud Object Storage maupun Folder Lokal khusus (`ai-chat/{sessionId}`)!
+ */
+teacherRoutes.delete("/ai/sessions/:sessionId", async (c) => {
+  const user = c.get("user");
+  const rawSessionId = c.req.param("sessionId");
+  const safeSessionId = String(rawSessionId).replace(/[^a-zA-Z0-9_-]/g, "");
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const extraKeys: Array<{ key: string; provider?: StorageProviderType }> = Array.isArray(body?.files)
+      ? body.files
+      : [];
+
+    // 1. Ambil seluruh file yang tercatat di tabel ai_chat_files untuk roomchat ini
+    const dbFilesRes = await db.execute(sql`
+      SELECT storage_key, storage_provider
+      FROM ai_chat_files
+      WHERE session_id = ${safeSessionId} AND user_id = ${user.id}
+    `);
+    const dbFiles = ((dbFilesRes as any).rows || dbFilesRes || []) as Array<{
+      storage_key: string;
+      storage_provider: StorageProviderType;
+    }>;
+
+    // 2. Ambil juga dari JSON messages di ai_chat_sessions jika ada
+    const sessionRes = await db.execute(sql`
+      SELECT messages
+      FROM ai_chat_sessions
+      WHERE id = ${safeSessionId} AND user_id = ${user.id}
+      LIMIT 1
+    `);
+    const sessionRows = ((sessionRes as any).rows || sessionRes || []) as Array<{ messages: any }>;
+    const msgAttachments: Array<{ key: string; provider?: StorageProviderType }> = [];
+    if (sessionRows[0]?.messages && Array.isArray(sessionRows[0].messages)) {
+      for (const m of sessionRows[0].messages) {
+        if (Array.isArray(m.attachments)) {
+          for (const att of m.attachments) {
+            if (att.storageKey) {
+              msgAttachments.push({
+                key: att.storageKey,
+                provider: att.storageProvider,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Gabungkan semua key unik yang harus dihapus
+    const keyMap = new Map<string, StorageProviderType | undefined>();
+    for (const f of dbFiles) {
+      if (f.storage_key) keyMap.set(f.storage_key, f.storage_provider);
+    }
+    for (const f of msgAttachments) {
+      if (f.key && !keyMap.has(f.key)) keyMap.set(f.key, f.provider);
+    }
+    for (const f of extraKeys) {
+      if (f.key && !keyMap.has(f.key)) keyMap.set(f.key, f.provider);
+    }
+
+    let deletedFilesCount = 0;
+    for (const [key, prov] of keyMap.entries()) {
+      const ok = await deleteFile(key, prov);
+      if (ok) deletedFilesCount++;
+    }
+
+    // 4. Hapus seluruh isi folder khusus `ai-chat/{sessionId}` baik di Local Disk maupun Cloud Object Storage
+    const prefixDeletedCount = await deleteFolderPrefix(`ai-chat/${safeSessionId}`);
+
+    // 5. Hapus record dari tabel ai_chat_files & ai_chat_sessions
+    await db.execute(sql`
+      DELETE FROM ai_chat_files
+      WHERE session_id = ${safeSessionId} AND user_id = ${user.id}
+    `);
+    await db.execute(sql`
+      DELETE FROM ai_chat_sessions
+      WHERE id = ${safeSessionId} AND user_id = ${user.id}
+    `);
+
+    return c.json({
+      success: true,
+      message: "Roomchat beserta seluruh file unggahannya berhasil dihapus permanen.",
+      data: {
+        sessionId: safeSessionId,
+        deletedFilesCount: Math.max(deletedFilesCount, prefixDeletedCount),
+      },
+    });
+  } catch (err: any) {
+    console.error("[Teacher AI Delete Session] Error:", err);
+    return c.json(
+      { success: false, message: err.message || "Gagal menghapus roomchat dan file lampiran" },
+      500
+    );
+  }
+});
+
+/**
  * POST /api/teacher/ai/chat
  * Endpoint chat interaktif dengan Google Gemini API
  */
 teacherRoutes.post("/ai/chat", async (c) => {
   const user = c.get("user");
   const body = await c.req.json();
-  const { messages = [], userPrompt, systemPromptExtra, files = [] } = body;
+  const { sessionId = "default", messages = [], userPrompt, systemPromptExtra, files = [] } = body;
+  const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "") || "default";
 
   const ctx = await getTeacherAiContext(user.id, user.name);
 
@@ -1191,6 +1523,28 @@ teacherRoutes.post("/ai/chat", async (c) => {
           .join("\n")
       : "| (Tidak ada data siswa) | - | - | - | - |";
 
+  // Buat tabel jam mengajar (teachingHours) untuk referensi AI
+  const teachingHoursText =
+    ctx.allTeachingHours.length > 0
+      ? ctx.allTeachingHours
+          .map((h) => `| ${h.label} | ${h.startTime} | ${h.endTime} | \`${h.id}\` |`)
+          .join("\n")
+      : "| (Belum ada data jam mengajar) | - | - | - |";
+
+  // Buat ringkasan jurnal terbaru (30 hari) untuk anti-duplikasi
+  // Deduplikasi berdasarkan groupId agar tampil 1 baris per sesi mengajar
+  const journalGroups = new Map<string, typeof ctx.recentJournals[0]>();
+  for (const j of ctx.recentJournals) {
+    const key = j.groupId || j.id;
+    if (!journalGroups.has(key)) journalGroups.set(key, j);
+  }
+  const recentJournalsText =
+    journalGroups.size > 0
+      ? [...journalGroups.values()]
+          .map((j) => `| ${j.date} | ${j.className ?? "-"} | ${j.subjectName ?? "-"} | ${j.teachingHourLabel ?? "-"} | ${j.status} |`)
+          .join("\n")
+      : "| (Belum ada jurnal dalam 30 hari terakhir) | - | - | - | - |";
+
   const systemInstruction = `Anda adalah Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA).
 
 ## Identitas Pengguna yang Sedang Login
@@ -1210,6 +1564,28 @@ Tabel ini berisi siswa aktif beserta Kelas, NIS, NISN, dan UUID. Gunakan data in
 |---|---|---|---|---|
 ${studentRosterText}
 
+## ⏰ Daftar Jam Mengajar (Teaching Hours)
+Gunakan tabel ini untuk mencocokkan input guru saat membuat jurnal (misal "jam pertama", "jam 1", "07:00", dll.)
+
+| Label | Jam Mulai | Jam Selesai | ID (UUID) |
+|---|---|---|---|
+${teachingHoursText}
+
+## 📓 Riwayat Jurnal Mengajar (30 Hari Terakhir)
+Gunakan data ini untuk menghindari duplikasi jurnal. Jika guru meminta simpan jurnal di tanggal/kelas/jam yang sudah ada, tanyakan konfirmasi apakah ingin mengganti yang lama.
+
+| Tanggal | Kelas | Mapel | Jam Mengajar | Status |
+|---|---|---|---|---|
+${recentJournalsText}
+
+## 🗺️ Menu & Navigasi Aplikasi SIMAK
+Arahkan guru ke menu yang tepat sesuai kebutuhannya:
+- **Asisten AI (halaman ini):** /guru/ai
+- **Input Nilai Siswa:** /guru (halaman utama, pilih kelas & mapel)
+- **Jurnal Mengajar:** /guru/jurnal
+- **Pengiriman Jurnal (Bulk Send):** /guru/jurnal → tombol "Kirim Semua Draft"
+- **Profil & Pengaturan:** /guru/profile
+
 ## Tugas Utama Anda
 1. Panggil pengguna dengan "${ctx.honorific} ${user.name.split(" ")[0]}" secara ramah dan profesional.
 2. Bantu guru dalam: pembuatan RPP/Modul Ajar Kurikulum Merdeka, bank soal, kisi-kisi, administrasi jurnal mengajar, pengolahan nilai, dan pertanyaan seputar akademik sekolah.
@@ -1217,17 +1593,11 @@ ${studentRosterText}
 4. Format jawaban menggunakan Markdown rapi (bullet, **tebal**, tabel, dsb.).
 
 ## 🔍 ATURAN PENCOCOKAN SISWA & KONFIRMASI (SANGAT PENTING)
-Ketika guru meminta mengubah atau menyimpan nilai siswa:
+Ketika guru meminta mengubah atau menyimpan nilai siswa (baik lewat teks maupun lewat unggahan file Excel/gambar):
 
 1. **JIKA DITEMUKAN LEBIH DARI 1 SISWA (NAMA KEMBAR / AMBIGU):**
    - ⚠️ **DILARANG MENEBAK DAN DILARANG MEMBUAT ACTION BLOCK!**
-   - Anda **WAJIB** meminta konfirmasi kepada guru dengan menyajikan daftar semua siswa yang cocok beserta Kelas dan NIS/NISN-nya:
-     *Contoh respons jika guru hanya mengetik "Angelica":*
-     "Ditemukan 2 siswa yang cocok dengan nama tersebut:
-      1. **ANGELICA PUTRI SAVIRA** (Kelas **X-1**, NIS: 0102112563)
-      2. **AIZYAH ANGELICA PUTERI** (Kelas **XI-9**, NIS: 0107617534)
-      
-      Mohon konfirmasi, siswa mana dan di kelas mana yang dimaksud, ${ctx.honorific} ${user.name.split(" ")[0]}?"
+   - Anda **WAJIB** meminta konfirmasi kepada guru dengan menyajikan daftar semua siswa yang cocok beserta Kelas dan NIS/NISN-nya.
 
 2. **JIKA SISWA TIDAK DITEMUKAN:**
    - Beritahu bahwa siswa tidak ditemukan di sistem. Minta guru memeriksa kembali penulisan nama, kelas, atau NIS/NISN.
@@ -1235,8 +1605,8 @@ Ketika guru meminta mengubah atau menyimpan nilai siswa:
 3. **JIKA DATA BELUM LENGKAP:**
    - Jika guru belum menyebutkan: mapel, jenis penilaian (UH1, T1, STS, UH2, T2), atau nilai angka (0-100), tanyakan bagian yang kurang terlebih dahulu sebelum membuat action block.
 
-4. **JIKA IDENTITAS PASTI & DATA LENGKAP (TEPAT 1 SISWA):**
-   - Buat format ACTION BLOCK tepat di baris pertama respon Anda:
+4. **JIKA IDENTITAS PASTI & DATA LENGKAP (SATU ATAU BANYAK SISWA DARI EXCEL/GAMBAR/TEKS):**
+   - Buat format ACTION BLOCK untuk setiap perubahan nilai siswa:
      \`\`\`action
      SAVE_GRADE_DRAFT
      student_id: <UUID siswa dari tabel Daftar Siswa di atas>
@@ -1248,7 +1618,37 @@ Ketika guru meminta mengubah atau menyimpan nilai siswa:
      tahun: 2025/2026
      semester: 1
      \`\`\`
+   - Jika guru mengunggah file Excel/daftar nilai berisi beberapa siswa atau beberapa kolom nilai (UH1, T1, STS, UH2, T2) dan meminta untuk disimpan/diubah, Anda boleh membuat beberapa blok \`\`\`action SAVE_GRADE_DRAFT ... \`\`\` secara berurutan untuk semua nilai yang valid!
    - Di bawah action block, tulis penjelasan ramah bahwa nilai disimpan sebagai **draft** di database (bukan dikirim resmi, guru dapat meninjau di halaman Input Nilai).
+
+## 📓 ATURAN JURNAL MENGAJAR — ACTION SAVE_JOURNAL_DRAFT
+Ketika guru meminta menyimpan/mencatat jurnal mengajar:
+
+1. **DATA WAJIB yang harus ada sebelum membuat action block jurnal:**
+   - Tanggal mengajar (format: YYYY-MM-DD, default hari ini jika tidak disebutkan)
+   - Nama kelas (cocokkan dengan daftar kelas aktif)
+   - Mata pelajaran
+   - Jam mengajar awal & akhir (cocokkan dengan tabel Jam Mengajar di atas)
+   - Materi yang diajarkan
+   - Informasi kehadiran/presensi
+
+2. **JIKA DATA BELUM LENGKAP:** tanyakan bagian yang kurang. Jangan mengarang data.
+
+3. **JIKA SUDAH LENGKAP:** buat ACTION BLOCK tepat di baris pertama respons:
+   \`\`\`action
+   SAVE_JOURNAL_DRAFT
+   tanggal: <YYYY-MM-DD>
+   kelas: <Nama Kelas, contoh: X-1>
+   mapel: <Nama Mapel, contoh: RPL>
+   jam_awal_id: <UUID dari tabel Jam Mengajar di atas>
+   jam_akhir_id: <UUID dari tabel Jam Mengajar di atas>
+   materi: <Deskripsi materi yang diajarkan>
+   presensi: <Informasi kehadiran siswa, contoh: Nihil (hadir semua) atau 2 siswa sakit>
+   \`\`\`
+   - Di bawah action block, konfirmasi detail jurnal yang akan disimpan secara ramah.
+   - Jurnal disimpan sebagai **draft**. Guru dapat meninjau di menu **Jurnal Mengajar** (/guru/jurnal) dan mengirimkan secara resmi dari sana.
+
+4. **CEK DUPLIKASI:** Jika kelas + jam + tanggal yang diminta sudah ada di riwayat jurnal (lihat tabel Riwayat Jurnal di atas), informasikan kepada guru dan tanyakan apakah ingin mengganti yang lama.
 
 ## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE
 - **JANGAN PERNAH** mengklaim bahwa data sudah tersimpan, diperbarui permanen, atau dikunci di sistem TANPA menyertakan format ACTION BLOCK di atas.
@@ -1256,15 +1656,11 @@ Ketika guru meminta mengubah atau menyimpan nilai siswa:
 - Jika dalam riwayat obrolan sebelumnya Anda pernah mengklaim data tersimpan padahal pengguna bilang belum berubah, AKUI dengan jujur bahwa sebelumnya belum tersimpan dan gunakan ACTION BLOCK sekarang untuk menyimpannya ke database.
 
 ## ⚠️ ATURAN BISNIS APLIKASI YANG WAJIB DITEGAKKAN
-### 🔒 ISOLASI DATA ANTAR PENGGUNA (PRIORITAS TERTINGGI)
+### 🔒 ISOLASI DATA ANTAR PENGGUNA & PEMROSESAN FILE UNGGAHAN
 - **Setiap guru HANYA boleh mengelola data MILIKNYA SENDIRI.**
 - Guru yang sedang login adalah **${user.name} (ID: ${user.id})**.
-- **DILARANG KERAS** membantu, memfasilitasi, atau memberikan instruksi untuk mengubah, membatalkan, menghapus, atau memanipulasi data milik guru lain — meskipun keduanya memiliki role yang sama (sesama guru).
-- Contoh yang HARUS DITOLAK:
-  - "Tolong ubah jurnal mengajar Pak/Bu [nama guru lain]..."
-  - "Batalkan nilai yang diinput oleh guru lain..."
-  - "Edit data [nama guru lain] di sistem..."
-- Jika ada permintaan seperti ini → **Tolak tegas**, jelaskan bahwa data guru lain adalah privasi yang dilindungi sistem dan hanya Admin yang berwenang mengelola data lintas pengguna.
+- **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai (termasuk file template seperti \`Template_Nilai_..._Super_...\` atau template yang diunduh dari akun Admin/Superadmin) atau gambar tabel nilai untuk kelas/mapel yang diampunya (${ctx.subjectNames}), **JANGAN DITOLAK!** File tersebut sedang dikerjakan oleh ${ctx.honorific} ${user.name} dan **WAJIB Anda bantu proses/simpan nilainya** menggunakan action block \`SAVE_GRADE_DRAFT\`.
+- Hanya tolak apabila pengguna secara eksplisit meminta mengubah jurnal/nilai mata pelajaran milik guru lain yang tidak diampunya.
 
 ### Jurnal Mengajar (Teacher Journals)
 - **Status jurnal**: \`draft\` → bisa diedit/dihapus oleh guru PEMILIKNYA sendiri | \`sent\` → sudah dikirim resmi, terkunci.
@@ -1351,23 +1747,68 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
   }
 
   try {
-    // Store uploaded files into Object Storage (if active) or Local Storage
-    const storedFiles: Array<{ name: string; url: string; provider: string }> = [];
+    // Store uploaded files into Object Storage (if active) or Dedicated Local Folder (`ai-chat/{sessionId}`)
+    // with UUID renaming (`{uuid}.{ext}`) if not already uploaded via `/ai/upload`
+    const storedFiles: Array<{
+      clientId?: string;
+      originalName: string;
+      storedName: string;
+      storageKey: string;
+      storageUrl: string;
+      cloudUrl?: string;
+      provider: string;
+    }> = [];
+
     if (Array.isArray(files) && files.length > 0) {
       for (const f of files) {
-        if (f.base64) {
+        if (f.storageKey && f.storageUrl) {
+          // Already uploaded immediately when attached in the roomchat
+          storedFiles.push({
+            clientId: f.id,
+            originalName: f.name,
+            storedName: f.storedName || f.storageKey.split("/").pop() || f.name,
+            storageKey: f.storageKey,
+            storageUrl: f.storageUrl,
+            cloudUrl: f.cloudUrl,
+            provider: f.storageProvider || "local",
+          });
+        } else if (f.base64) {
           try {
             const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
             const buf = Buffer.from(cleanB64, "base64");
+            const origName = f.name || `file-${Date.now()}`;
+            const mime = f.type || "application/octet-stream";
+
             const uploaded = await uploadFile({
               buffer: buf,
-              filename: f.name || `file-${Date.now()}`,
-              mimeType: f.type || "application/octet-stream",
-              folder: "ai-chat",
+              filename: origName,
+              mimeType: mime,
+              folder: `ai-chat/${safeSessionId}`,
             });
+
+            await db.execute(sql`
+              INSERT INTO ai_chat_files (
+                session_id, user_id, original_name, stored_name, storage_key, storage_provider, storage_url, mime_type, size_bytes
+              ) VALUES (
+                ${safeSessionId},
+                ${user.id},
+                ${origName},
+                ${uploaded.storedName},
+                ${uploaded.key},
+                ${uploaded.provider},
+                ${uploaded.url},
+                ${mime},
+                ${uploaded.size}
+              )
+            `);
+
             storedFiles.push({
-              name: f.name,
-              url: uploaded.url,
+              clientId: f.id,
+              originalName: origName,
+              storedName: uploaded.storedName,
+              storageKey: uploaded.key,
+              storageUrl: uploaded.url,
+              cloudUrl: uploaded.cloudUrl,
               provider: uploaded.provider,
             });
           } catch (uploadErr: any) {
@@ -1585,6 +2026,184 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       };
     }
 
+    // =========================================================
+    // HELPER: Eksekusi simpan draft jurnal mengajar ke database
+    // =========================================================
+    async function executeSaveJournalDraft(params: {
+      tanggal: string;
+      className: string;
+      subjectName: string;
+      startHourIdOrLabel: string;
+      endHourIdOrLabel: string;
+      materi: string;
+      presenceInfo: string;
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      const { tanggal, className, subjectName, startHourIdOrLabel, endHourIdOrLabel, materi, presenceInfo } = params;
+
+      // 1. Validasi tanggal
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
+        return { success: false, message: `Format tanggal tidak valid: "${tanggal}". Gunakan format YYYY-MM-DD.` };
+      }
+
+      // 2. Resolve kelas
+      const cleanClass = className.replace(/[-\s]/g, "").toLowerCase();
+      const classConds = [
+        sql`lower(${classes.name}) = lower(${className})`,
+        sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
+      ];
+      if (isUuid(className)) classConds.push(eq(classes.id, className));
+
+      const [resolvedClass] = await db
+        .select({ id: classes.id, name: classes.name })
+        .from(classes)
+        .where(or(...classConds))
+        .limit(1);
+
+      if (!resolvedClass) {
+        return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
+      }
+
+      // 3. Resolve mapel
+      const subjectConds = [
+        sql`lower(${subjects.name}) = lower(${subjectName})`,
+        sql`lower(${subjects.code}) = lower(${subjectName})`,
+        sql`lower(${subjects.name}) like lower(${'%' + subjectName + '%'})`,
+      ];
+      if (isUuid(subjectName)) subjectConds.push(eq(subjects.id, subjectName));
+
+      const [resolvedSubject] = await db
+        .select({ id: subjects.id, name: subjects.name })
+        .from(subjects)
+        .where(or(...subjectConds))
+        .limit(1);
+
+      if (!resolvedSubject) {
+        return { success: false, message: `Mata pelajaran "${subjectName}" tidak ditemukan di database.` };
+      }
+
+      // 4. Ambil semua jam mengajar untuk resolusi
+      const hours = await db
+        .select()
+        .from(teachingHours)
+        .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
+
+      if (hours.length === 0) {
+        return { success: false, message: "Data jam mengajar belum tersedia di sistem." };
+      }
+
+      // Fungsi resolusi: UUID → cari by UUID, angka → jam ke-N, label → cocokkan label, waktu → cocokkan startTime
+      function resolveHour(input: string): (typeof hours)[0] | undefined {
+        const clean = input.trim().toLowerCase();
+        // Coba UUID
+        if (isUuid(input)) return hours.find(h => h.id === input);
+        // Coba angka (jam ke-N)
+        const numMatch = clean.match(/^(\d+)$/);
+        if (numMatch) {
+          const idx = parseInt(numMatch[1], 10) - 1;
+          return hours[idx];
+        }
+        // Coba label (jam ke-1, jam pertama, dll)
+        const found = hours.find(h =>
+          h.label.toLowerCase().includes(clean) ||
+          clean.includes(h.label.toLowerCase()) ||
+          h.startTime === clean ||
+          // Kata urutan Indonesia
+          ["pertama","kedua","ketiga","keempat","kelima","keenam","ketujuh","kedelapan","kesembilan","kesepuluh"].some((w, i) => clean.includes(w) && hours[i]?.id === h.id)
+        );
+        return found;
+      }
+
+      const startHour = resolveHour(startHourIdOrLabel);
+      const endHour = resolveHour(endHourIdOrLabel);
+
+      if (!startHour) {
+        return { success: false, message: `Jam mengajar awal "${startHourIdOrLabel}" tidak ditemukan. Gunakan UUID atau label seperti "Jam ke-1" atau angka "1".` };
+      }
+      if (!endHour) {
+        return { success: false, message: `Jam mengajar akhir "${endHourIdOrLabel}" tidak ditemukan. Gunakan UUID atau label seperti "Jam ke-3" atau angka "3".` };
+      }
+
+      let startIdx = hours.findIndex(h => h.id === startHour.id);
+      let endIdx = hours.findIndex(h => h.id === endHour.id);
+      if (startIdx > endIdx) { const tmp = startIdx; startIdx = endIdx; endIdx = tmp; }
+      const targetHours = hours.slice(startIdx, endIdx + 1);
+      const targetHourIds = targetHours.map(h => h.id);
+
+      // 5. Cek bentrok dengan guru lain (sent/draft) atau guru sendiri (sent)
+      const classCondJournal = eq(teacherJournals.classId, resolvedClass.id);
+      const existing3D = await db
+        .select({
+          id: teacherJournals.id,
+          teacherUserId: teacherJournals.teacherUserId,
+          status: teacherJournals.status,
+          groupId: teacherJournals.groupId,
+        })
+        .from(teacherJournals)
+        .where(
+          and(
+            eq(teacherJournals.date, tanggal),
+            classCondJournal,
+            inArray(teacherJournals.teachingHourId, targetHourIds),
+            isNull(teacherJournals.deletedAt)
+          )
+        );
+
+      const conflictOther = existing3D.find(j => j.teacherUserId !== user.id);
+      if (conflictOther) {
+        return {
+          success: false,
+          message: `⚠️ Jam mengajar di kelas **${resolvedClass.name}** pada **${tanggal}** (${startHour.label}–${endHour.label}) sudah terisi oleh guru lain. Tidak dapat menyimpan jurnal yang bertabrakan.`,
+        };
+      }
+
+      const conflictSentSelf = existing3D.find(j => j.teacherUserId === user.id && j.status === "sent");
+      if (conflictSentSelf) {
+        return {
+          success: false,
+          message: `⚠️ Jurnal pada slot ini (${tanggal}, kelas ${resolvedClass.name}, ${startHour.label}–${endHour.label}) sudah berstatus **sent** dan terkunci. Hubungi Admin untuk membatalkannya.`,
+        };
+      }
+
+      // 6. Hapus draft guru sendiri yang bentrok, lalu buat groupId baru
+      const myDraftConflict = existing3D.filter(j => j.teacherUserId === user.id && j.status === "draft");
+      if (myDraftConflict.length > 0) {
+        const conflictGroupIds = [...new Set(myDraftConflict.map(j => j.groupId).filter(Boolean))] as string[];
+        if (conflictGroupIds.length > 0) {
+          for (const gid of conflictGroupIds) {
+            await db.delete(teacherJournals).where(eq(teacherJournals.groupId, gid));
+          }
+        } else {
+          const conflictIds = myDraftConflict.map(j => j.id);
+          await db.delete(teacherJournals).where(inArray(teacherJournals.id, conflictIds));
+        }
+      }
+
+      const newGroupId = crypto.randomUUID();
+      const inserts = targetHours.map(h => ({
+        teacherUserId: user.id,
+        date: tanggal,
+        classId: resolvedClass.id,
+        className: resolvedClass.name,
+        teachingHourId: h.id,
+        teachingHourLabel: h.label,
+        subjectId: resolvedSubject.id,
+        subjectName: resolvedSubject.name,
+        groupId: newGroupId,
+        materi: materi || "",
+        presenceInfo: presenceInfo || "",
+        status: "draft" as const,
+      }));
+
+      await db.insert(teacherJournals).values(inserts);
+      broadcastRealtimeEvent({ type: "journal_saved", classId: resolvedClass.id, actorId: user.id });
+
+      return {
+        success: true,
+        message: `✅ Jurnal mengajar berhasil disimpan sebagai **draft** di database!\n- **Tanggal:** ${tanggal}\n- **Kelas:** ${resolvedClass.name}\n- **Mapel:** ${resolvedSubject.name}\n- **Jam:** ${startHour.label} – ${endHour.label} (${targetHours.length} jam pelajaran)\n- **Materi:** ${materi}\n- **Presensi:** ${presenceInfo}\n\n> Tinjau dan kirim jurnal resmi di menu **Jurnal Mengajar** (/guru/jurnal).`,
+        data: { groupId: newGroupId, count: inserts.length },
+      };
+    }
+
     const aiActions: Array<{
       type: string;
       payload: Record<string, unknown>;
@@ -1629,6 +2248,38 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
             score: nilaiRaw,
             academicYear: ay,
             semester: sem,
+          });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "SAVE_JOURNAL_DRAFT") {
+        const params: Record<string, string> = {};
+        for (const line of lines.slice(1)) {
+          const colonIdx = line.indexOf(":");
+          if (colonIdx === -1) continue;
+          const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_");
+          const val = line.slice(colonIdx + 1).trim();
+          params[key] = val;
+        }
+
+        const tanggal       = params["tanggal"] || params["date"] || new Date().toISOString().slice(0, 10);
+        const className     = params["kelas"] || params["class"] || "";
+        const subjectName   = params["mapel"] || params["subject"] || "";
+        const startHourId   = params["jam_awal_id"] || params["jam_awal"] || params["start_hour_id"] || params["start"] || "";
+        const endHourId     = params["jam_akhir_id"] || params["jam_akhir"] || params["end_hour_id"] || params["end"] || startHourId;
+        const materi        = params["materi"] || params["material"] || "";
+        const presenceInfo  = params["presensi"] || params["presence"] || params["presence_info"] || "";
+
+        if (className && subjectName && startHourId) {
+          const res = await executeSaveJournalDraft({
+            tanggal,
+            className,
+            subjectName,
+            startHourIdOrLabel: startHourId,
+            endHourIdOrLabel: endHourId || startHourId,
+            materi,
+            presenceInfo,
           });
           aiActions.push({ type: actionType, payload: params, result: res });
         }
@@ -1691,6 +2342,57 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         aiActions.push({
           type: "SAVE_GRADE_DRAFT",
           payload: { from: "prompt_fallback", student: promptStudentMatch[1] },
+          result: res,
+        });
+      }
+    }
+
+    // =========================================================
+    // LAYER 3B: Fallback jika userPrompt memerintahkan simpan jurnal
+    // Diperlukan karena AI Gemini Flash sering tidak menyertakan action block
+    // =========================================================
+    if (aiActions.length === 0 && (
+      promptToCheck.includes("jurnal") ||
+      promptToCheck.includes("simpan jurnal") ||
+      promptToCheck.includes("catat jurnal") ||
+      promptToCheck.includes("input jurnal") ||
+      promptToCheck.includes("tambah jurnal")
+    )) {
+      // Ekstrak kelas dari prompt
+      const journalClassMatch = promptToCheck.match(/kelas\s+([xXiI0-9\-\s]+?)(?:\s*,|\s+mapel|\s+jam|\s+materi|$)/i);
+      // Ekstrak mapel dari prompt
+      const journalSubjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk|dasar|pemrog\w*)\b/i) ||
+        promptToCheck.match(/mapel\s+(\w[\w\s]*?)(?:\s*,|\s+jam|\s+materi|$)/i);
+      // Ekstrak jam awal
+      const journalStartHourMatch = promptToCheck.match(/jam\s+(pertama|kedua|ketiga|keempat|kelima|keenam|[\d]+)\s*(?:sampai|hingga|ke|s\/d|–|-)?/i);
+      // Ekstrak jam akhir
+      const journalEndHourMatch = promptToCheck.match(/(?:sampai|hingga|ke|s\/d|–|-)\s*(?:jam\s+)?(pertama|kedua|ketiga|keempat|kelima|keenam|[\d]+)/i);
+      // Ekstrak materi
+      const journalMateriMatch = promptToCheck.match(/materi[:\s]+([^,]+?)(?:\s*,|\s+presensi|\s+kehadiran|$)/i);
+      // Ekstrak presensi
+      const journalPresensiMatch = promptToCheck.match(/(?:presensi|kehadiran|hadir)[:\s]+([^,]+?)(?:\s*,|$)/i) ||
+        promptToCheck.match(/\b(nihil|hadir semua|hadir seluruhnya)\b/i);
+
+      const journalClass = journalClassMatch?.[1]?.trim();
+      const journalSubject = journalSubjectMatch?.[1]?.trim() || journalSubjectMatch?.[2]?.trim();
+      const journalStartHour = journalStartHourMatch?.[1]?.trim();
+      const journalEndHour = journalEndHourMatch?.[1]?.trim() || journalStartHour;
+      const journalMateri = journalMateriMatch?.[1]?.trim() || "Materi tidak disebutkan";
+      const journalPresensi = journalPresensiMatch?.[1]?.trim() || "Tidak disebutkan";
+
+      if (journalClass && journalSubject && journalStartHour) {
+        const res = await executeSaveJournalDraft({
+          tanggal: new Date().toISOString().slice(0, 10),
+          className: journalClass,
+          subjectName: journalSubject,
+          startHourIdOrLabel: journalStartHour,
+          endHourIdOrLabel: journalEndHour || journalStartHour,
+          materi: journalMateri,
+          presenceInfo: journalPresensi,
+        });
+        aiActions.push({
+          type: "SAVE_JOURNAL_DRAFT",
+          payload: { from: "prompt_fallback", journalClass, journalSubject, journalStartHour },
           result: res,
         });
       }

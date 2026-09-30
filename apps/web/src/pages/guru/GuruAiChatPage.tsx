@@ -29,11 +29,17 @@ export type FileCategory =
 export interface ChatAttachment {
   id: string;
   name: string;
+  storedName?: string; // UUID filename e.g. f47ac10b-58cc-4372-a567-0e02b2c3d479.png
+  storageKey?: string; // Full storage key e.g. ai-chat/session-xxx/f47ac10b-....png
+  storageProvider?: string; // "local" | "r2" | "s3" | "gcs" | "generic"
+  storageUrl?: string; // Persistent URL (/api/uploads/ai-chat/...)
+  cloudUrl?: string; // Direct Cloud Object Storage URL if active
+  isUploading?: boolean;
   size: number;
   type: string;
   category: FileCategory;
   dataUrl?: string; // base64 DataURL
-  previewUrl?: string; // Blob object URL for instant UI preview
+  previewUrl?: string; // Persistent storageUrl or Blob object URL
   textPreview?: string; // Extracted content for Excel / CSV / txt
 }
 
@@ -223,19 +229,19 @@ function ChatBubbleItem({
             <div className="mb-2.5 flex flex-wrap gap-2">
               {message.attachments.map((att) => {
                 const theme = getFileCategoryTheme(att.category);
-                const isImg = att.category === "image" && (att.previewUrl || att.dataUrl);
+                const resolvedUrl = att.storageUrl || att.previewUrl || att.dataUrl || "";
+                const isImg = att.category === "image" && Boolean(resolvedUrl);
 
                 if (isImg) {
-                  const imgUrl = att.previewUrl || att.dataUrl || "";
                   return (
                     <div
                       key={att.id}
-                      onClick={() => onImagePreview?.(imgUrl)}
+                      onClick={() => onImagePreview?.(resolvedUrl)}
                       className="group/img relative rounded-xl overflow-hidden border border-black/15 dark:border-white/20 cursor-pointer shadow-xs hover:opacity-95 transition-all max-w-[200px]"
-                      title={`Klik untuk memperbesar: ${att.name}`}
+                      title={`Klik untuk memperbesar: ${att.name}${att.storedName ? ` (${att.storedName})` : ""}`}
                     >
                       <img
-                        src={imgUrl}
+                        src={resolvedUrl}
                         alt={att.name}
                         className="max-h-36 w-auto object-cover rounded-xl"
                       />
@@ -243,21 +249,26 @@ function ChatBubbleItem({
                         <span className="material-symbols-outlined text-[20px]">zoom_in</span>
                       </div>
                       <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-[2px] px-1.5 py-0.5 text-[9px] text-white truncate">
-                        {att.name}
+                        {att.storedName || att.name}
                       </div>
                     </div>
                   );
                 }
 
                 return (
-                  <div
+                  <a
                     key={att.id}
+                    href={resolvedUrl || undefined}
+                    target={resolvedUrl ? "_blank" : undefined}
+                    rel="noreferrer"
+                    download={att.name}
                     className={cn(
-                      "flex items-center gap-2 p-1.5 pr-2.5 rounded-xl border text-xs shadow-2xs max-w-[240px]",
+                      "flex items-center gap-2 p-1.5 pr-2.5 rounded-xl border text-xs shadow-2xs max-w-[250px] transition-opacity hover:opacity-90",
                       isUser
                         ? "bg-white/15 border-white/20 text-white"
                         : cn(theme.bgClass, theme.borderClass, "text-[var(--fg)]")
                     )}
+                    title={`${att.name}${att.storedName ? ` • Tersimpan: ${att.storedName}` : ""}`}
                   >
                     <div
                       className={cn(
@@ -273,15 +284,15 @@ function ChatBubbleItem({
                           "font-semibold text-[11px] truncate",
                           isUser ? "text-white" : "text-[var(--fg)]"
                         )}
-                        title={att.name}
                       >
                         {att.name}
                       </div>
-                      <div className={cn("text-[9px]", isUser ? "text-white/80" : "app-muted")}>
+                      <div className={cn("text-[9px] truncate", isUser ? "text-white/80" : "app-muted")}>
                         {formatFileSize(att.size)}
+                        {att.storedName ? ` • ${att.storedName.slice(0, 8)}…` : ""}
                       </div>
                     </div>
-                  </div>
+                  </a>
                 );
               })}
             </div>
@@ -642,6 +653,46 @@ export function GuruAiChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef<number>(0);
+  const draftSessionIdRef = useRef<string>(`session-${Date.now()}`);
+
+  // Helper to persist a session to backend DB
+  const syncSessionToServer = (session: ChatSession) => {
+    api("/teacher/ai/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        id: session.id,
+        title: session.title,
+        messages: session.messages,
+      }),
+    }).catch((err) => {
+      console.warn("[GuruAiChat] Failed to sync session to server:", err);
+    });
+  };
+
+  // Load saved sessions from backend DB on mount and merge with localStorage
+  useEffect(() => {
+    api<ChatSession[]>("/teacher/ai/sessions")
+      .then((res) => {
+        if (Array.isArray(res.data) && res.data.length > 0) {
+          setSessions((prev) => {
+            const byId = new Map<string, ChatSession>();
+            for (const s of res.data!) {
+              byId.set(s.id, s);
+            }
+            for (const localS of prev) {
+              if (!byId.has(localS.id)) {
+                byId.set(localS.id, localS);
+                syncSessionToServer(localS);
+              }
+            }
+            return Array.from(byId.values());
+          });
+        }
+      })
+      .catch(() => {
+        // Ignore offline/initial fetch error
+      });
+  }, []);
 
   useEffect(() => {
     if (renamingSessionId) {
@@ -677,7 +728,11 @@ export function GuruAiChatPage() {
           ...m,
           attachments: m.attachments?.map((att) => ({
             ...att,
-            dataUrl: att.dataUrl && att.dataUrl.length < 200_000 ? att.dataUrl : undefined,
+            previewUrl: att.storageUrl || att.previewUrl,
+            dataUrl:
+              !att.storageUrl && att.dataUrl && att.dataUrl.length < 200_000
+                ? att.dataUrl
+                : undefined,
           })),
         })),
       }));
@@ -720,7 +775,7 @@ export function GuruAiChatPage() {
     let dataUrl: string | undefined = undefined;
     let textPreview: string | undefined = undefined;
 
-    // Fast Blob Object URL for UI previews (images, videos, audio)
+    // Fast Blob Object URL for instant UI preview before server upload finishes
     if (category === "image" || category === "video" || category === "audio") {
       try {
         previewUrl = URL.createObjectURL(file);
@@ -754,7 +809,7 @@ export function GuruAiChatPage() {
       }
     }
 
-    // Read as base64 dataUrl (needed for sending to Gemini API)
+    // Read as base64 dataUrl (needed for uploading to storage & sending to Gemini API)
     try {
       dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -772,6 +827,7 @@ export function GuruAiChatPage() {
       size: file.size,
       type: file.type || "application/octet-stream",
       category,
+      isUploading: true,
       previewUrl: previewUrl || dataUrl,
       dataUrl,
       textPreview,
@@ -779,6 +835,7 @@ export function GuruAiChatPage() {
   };
 
   // Add multiple files with strict validation (max 50MB per file, max 25 files total)
+  // Immediately uploads to dedicated folder `ai-chat/{sessionId}` (Object Storage if active, or Local) with UUID name
   const handleFilesAdded = async (fileList: FileList | File[]) => {
     const incoming = Array.from(fileList);
     if (incoming.length === 0) return;
@@ -833,6 +890,98 @@ export function GuruAiChatPage() {
     if (filesToProcess.length > 0) {
       const processed = await Promise.all(filesToProcess.map(processSingleFile));
       setAttachedFiles((prev) => [...prev, ...processed]);
+
+      const currentTargetSessionId = activeSession?.id || draftSessionIdRef.current;
+
+      // Immediately upload files to Object Storage (or dedicated local folder) with UUID naming
+      api<
+        Array<{
+          clientId?: string;
+          originalName: string;
+          storedName: string;
+          storageKey: string;
+          storageUrl: string;
+          cloudUrl?: string;
+          provider: string;
+          mimeType: string;
+          size: number;
+        }>
+      >("/teacher/ai/upload", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: currentTargetSessionId,
+          files: processed.map((f) => ({
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            size: f.size,
+            base64: f.dataUrl ? f.dataUrl.split(",")[1] : undefined,
+          })),
+        }),
+      })
+        .then((res) => {
+          const uploadedList = res.data || [];
+          if (uploadedList.length > 0) {
+            setAttachedFiles((prev) =>
+              prev.map((item) => {
+                const match = uploadedList.find(
+                  (u) => u.clientId === item.id || u.originalName === item.name
+                );
+                if (match) {
+                  return {
+                    ...item,
+                    isUploading: false,
+                    storedName: match.storedName,
+                    storageKey: match.storageKey,
+                    storageProvider: match.provider,
+                    storageUrl: match.storageUrl,
+                    cloudUrl: match.cloudUrl,
+                    previewUrl: match.storageUrl || item.previewUrl,
+                  };
+                }
+                return { ...item, isUploading: false };
+              })
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn("[GuruAiChat] Immediate file upload warning:", err);
+          setAttachedFiles((prev) =>
+            prev.map((item) => ({ ...item, isUploading: false }))
+          );
+        });
+    }
+  };
+
+  // Remove a single attached file chip and delete it from storage if already uploaded
+  const handleRemoveAttachedFile = (fileId: string) => {
+    const target = attachedFiles.find((f) => f.id === fileId);
+    setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
+    if (target?.storageKey) {
+      api("/teacher/ai/files", {
+        method: "DELETE",
+        body: JSON.stringify({
+          storageKey: target.storageKey,
+          provider: target.storageProvider,
+        }),
+      }).catch(() => {});
+    }
+  };
+
+  // Clear all attached file chips and delete them from storage if already uploaded
+  const handleClearAllAttachedFiles = () => {
+    const toDelete = [...attachedFiles];
+    setAttachedFiles([]);
+    for (const f of toDelete) {
+      if (f.storageKey) {
+        api("/teacher/ai/files", {
+          method: "DELETE",
+          body: JSON.stringify({
+            storageKey: f.storageKey,
+            provider: f.storageProvider,
+          }),
+        }).catch(() => {});
+      }
     }
   };
 
@@ -865,10 +1014,16 @@ export function GuruAiChatPage() {
 
   // Switch to a fresh New Chat screen (room is created only when first prompt is responded to)
   const handleNewChat = () => {
+    // If there were unsent attached files in a "new" draft, clean them up
+    if (activeSessionId === "new" && attachedFiles.length > 0) {
+      handleClearAllAttachedFiles();
+    } else {
+      setAttachedFiles([]);
+    }
+    draftSessionIdRef.current = `session-${Date.now()}`;
     setActiveSessionId("new");
     setPendingMessages([]);
     setInputText("");
-    setAttachedFiles([]);
     setTimeout(() => textareaRef.current?.focus(), 20);
   };
 
@@ -914,30 +1069,56 @@ export function GuruAiChatPage() {
     const trimmed = renameDraft.trim();
     if (trimmed) {
       setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, title: trimmed } : s))
+        prev.map((s) => {
+          if (s.id === id) {
+            const updated = { ...s, title: trimmed };
+            syncSessionToServer(updated);
+            return updated;
+          }
+          return s;
+        })
       );
     }
     setRenamingSessionId(null);
   };
 
-  // Delete chat session
+  // Delete chat session + MANDATORY deletion of all uploaded files in that roomchat
   const handleDeleteSession = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setSessionMenu(null);
+    const targetSession = sessions.find((s) => s.id === id);
+    const sessionFiles =
+      targetSession?.messages
+        .flatMap((m) => m.attachments || [])
+        .filter((att) => Boolean(att.storageKey))
+        .map((att) => ({
+          key: att.storageKey!,
+          provider: att.storageProvider,
+        })) || [];
+
     Swal.fire({
       title: "Hapus percakapan ini?",
-      text: "Riwayat obrolan tidak dapat dikembalikan.",
+      text: "Riwayat obrolan beserta seluruh file unggahan di dalam roomchat ini akan dihapus permanen dari penyimpanan.",
       icon: "warning",
       showCancelButton: true,
       confirmButtonColor: "#ef4444",
       cancelButtonColor: "#64748b",
-      confirmButtonText: "Ya, Hapus",
+      confirmButtonText: "Ya, Hapus Semua",
       cancelButtonText: "Batal",
     }).then((result) => {
       if (result.isConfirmed) {
+        // Delete all files in this roomchat from Object Storage & Local Folder + DB
+        api(`/teacher/ai/sessions/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ files: sessionFiles }),
+        }).catch((err) => {
+          console.error("[GuruAiChat] Failed to delete session files from server:", err);
+        });
+
         setSessions((prev) => {
           const filtered = prev.filter((s) => s.id !== id);
           if (activeSessionId === id) {
+            draftSessionIdRef.current = `session-${Date.now()}`;
             setActiveSessionId("new");
             setPendingMessages([]);
           }
@@ -954,8 +1135,9 @@ export function GuruAiChatPage() {
 
     if (!textToSend && filesToSend.length === 0) return;
 
+    const userMessageId = `m-u-${Date.now()}`;
     const userMessage: Message = {
-      id: `m-u-${Date.now()}`,
+      id: userMessageId,
       sender: "user",
       text: textToSend,
       attachments: filesToSend.length > 0 ? filesToSend : undefined,
@@ -969,6 +1151,8 @@ export function GuruAiChatPage() {
       : "Percakapan AI";
 
     const existingSessionId = activeSession?.id || null;
+    const targetSessionId = existingSessionId || draftSessionIdRef.current;
+
     const nextPending = !activeSession
       ? [...pendingMessages.filter((m) => !m.text.startsWith("⚠️")), userMessage]
       : [];
@@ -1017,18 +1201,38 @@ export function GuruAiChatPage() {
       time: m.time,
     }));
 
-    // Payload files for backend AI
+    // Payload files for backend AI (includes storage metadata if already uploaded via /ai/upload)
     const payloadFiles = filesToSend.map((f) => ({
+      id: f.id,
       name: f.name,
       type: f.type,
       size: f.size,
+      storedName: f.storedName,
+      storageKey: f.storageKey,
+      storageProvider: f.storageProvider,
+      storageUrl: f.storageUrl,
+      cloudUrl: f.cloudUrl,
       base64: f.dataUrl ? f.dataUrl.split(",")[1] : undefined,
       textPreview: f.textPreview,
     }));
 
-    api<{ reply: string; honorific: string; teacherName: string }>("/teacher/ai/chat", {
+    api<{
+      reply: string;
+      honorific: string;
+      teacherName: string;
+      storedFiles?: Array<{
+        clientId?: string;
+        originalName: string;
+        storedName: string;
+        storageKey: string;
+        storageUrl: string;
+        cloudUrl?: string;
+        provider: string;
+      }>;
+    }>("/teacher/ai/chat", {
       method: "POST",
       body: JSON.stringify({
+        sessionId: targetSessionId,
         messages: historyMessages,
         userPrompt: textToSend,
         files: payloadFiles,
@@ -1036,6 +1240,34 @@ export function GuruAiChatPage() {
     })
       .then((res) => {
         const replyText = res.data?.reply || "Tidak ada respon dari asisten AI.";
+        const serverStoredFiles = res.data?.storedFiles || [];
+
+        // Enrich userMessage attachments with persistent UUID storageUrl & storageKey
+        const applyStoredFiles = (msg: Message): Message => {
+          if (msg.id !== userMessageId || !msg.attachments) return msg;
+          return {
+            ...msg,
+            attachments: msg.attachments.map((att) => {
+              const matched = serverStoredFiles.find(
+                (sf) => sf.clientId === att.id || sf.originalName === att.name
+              );
+              if (matched) {
+                return {
+                  ...att,
+                  isUploading: false,
+                  storedName: matched.storedName,
+                  storageKey: matched.storageKey,
+                  storageProvider: matched.provider,
+                  storageUrl: matched.storageUrl,
+                  cloudUrl: matched.cloudUrl,
+                  previewUrl: matched.storageUrl || att.previewUrl,
+                };
+              }
+              return { ...att, isUploading: false };
+            }),
+          };
+        };
+
         const aiResponse: Message = {
           id: `m-ai-${Date.now()}`,
           sender: "assistant",
@@ -1045,25 +1277,30 @@ export function GuruAiChatPage() {
 
         if (!existingSessionId) {
           // Prompt has been successfully responded to! Now create the room in sidebar with automatic title
-          const createdSessionId = `session-${Date.now()}`;
+          const createdSessionId = targetSessionId;
+          const enrichedPending = nextPending.map(applyStoredFiles);
           const newSession: ChatSession = {
             id: createdSessionId,
             title: newTitle,
             updatedAt: "Baru saja",
-            messages: [...nextPending, aiResponse],
+            messages: [...enrichedPending, aiResponse],
           };
           setSessions((prevSessions) => [newSession, ...prevSessions]);
           setActiveSessionId(createdSessionId);
           setPendingMessages([]);
+          draftSessionIdRef.current = `session-${Date.now()}`;
+          syncSessionToServer(newSession);
         } else {
           setSessions((prevSessions) =>
             prevSessions.map((s) => {
               if (s.id === existingSessionId) {
-                return {
+                const updatedSession: ChatSession = {
                   ...s,
                   updatedAt: "Baru saja",
-                  messages: [...s.messages, aiResponse],
+                  messages: [...s.messages.map(applyStoredFiles), aiResponse],
                 };
+                syncSessionToServer(updatedSession);
+                return updatedSession;
               }
               return s;
             })
@@ -1666,7 +1903,7 @@ export function GuruAiChatPage() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setAttachedFiles([])}
+                    onClick={handleClearAllAttachedFiles}
                     className="text-[11px] text-red-500 hover:text-red-700 font-medium transition-colors"
                   >
                     Hapus Semua
@@ -1677,20 +1914,21 @@ export function GuruAiChatPage() {
                 <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto p-0.5">
                   {attachedFiles.map((file) => {
                     const theme = getFileCategoryTheme(file.category);
-                    const isImg = file.category === "image" && (file.previewUrl || file.dataUrl);
+                    const imgSrc = file.storageUrl || file.previewUrl || file.dataUrl;
+                    const isImg = file.category === "image" && Boolean(imgSrc);
 
                     return (
                       <div
                         key={file.id}
                         className={cn(
-                          "flex items-center gap-2 p-1.5 pr-2 rounded-xl border text-xs max-w-[240px] shadow-2xs group relative transition-all",
+                          "flex items-center gap-2 p-1.5 pr-2 rounded-xl border text-xs max-w-[260px] shadow-2xs group relative transition-all",
                           theme.bgClass,
                           theme.borderClass
                         )}
                       >
                         {isImg ? (
                           <img
-                            src={file.previewUrl || file.dataUrl}
+                            src={imgSrc}
                             alt={file.name}
                             className="w-8 h-8 rounded-lg object-cover shrink-0 border border-black/10"
                           />
@@ -1700,16 +1938,26 @@ export function GuruAiChatPage() {
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="font-medium text-[var(--fg)] text-[11px] truncate" title={file.name}>
+                          <div
+                            className="font-medium text-[var(--fg)] text-[11px] truncate"
+                            title={`${file.name}${file.storedName ? ` • UUID: ${file.storedName}` : ""}`}
+                          >
                             {file.name}
                           </div>
-                          <div className="text-[10px] app-muted">{formatFileSize(file.size)}</div>
+                          <div className="text-[10px] app-muted truncate">
+                            {formatFileSize(file.size)}
+                            {file.isUploading
+                              ? " • Menyimpan..."
+                              : file.storedName
+                              ? ` • ${file.storedName.slice(0, 8)}…`
+                              : ""}
+                          </div>
                         </div>
                         <button
                           type="button"
-                          onClick={() => setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                          onClick={() => handleRemoveAttachedFile(file.id)}
                           className="w-5 h-5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
-                          title="Hapus file ini"
+                          title="Hapus file ini dari penyimpanan"
                         >
                           <span className="material-symbols-outlined text-[14px]">close</span>
                         </button>
