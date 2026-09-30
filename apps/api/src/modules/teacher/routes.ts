@@ -1,8 +1,9 @@
 import { Hono } from "hono";
-import { and, desc, eq, inArray, or, sql, isNull, asc } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql, isNull, isNotNull, count, asc } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import {
+  academicYears,
   classes,
   classSubjects,
   gradeAuditLogs,
@@ -1258,6 +1259,79 @@ async function getTeacherAiContext(userId: string, userName: string) {
     .orderBy(desc(teacherJournals.date), desc(teacherJournals.createdAt))
     .limit(100);
 
+  // 8B. Ambil isi Tempat Sampah / Recycle Bin (Soft Delete: deletedAt IS NOT NULL) — Jurnal & Nilai
+  const trashedJournals = await db
+    .select({
+      id: teacherJournals.id,
+      date: teacherJournals.date,
+      className: teacherJournals.className,
+      subjectName: teacherJournals.subjectName,
+      teachingHourLabel: teacherJournals.teachingHourLabel,
+      teacherName: users.name,
+      materi: teacherJournals.materi,
+      presenceInfo: teacherJournals.presenceInfo,
+      deletedAt: teacherJournals.deletedAt,
+      groupId: teacherJournals.groupId,
+    })
+    .from(teacherJournals)
+    .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+    .where(isNotNull(teacherJournals.deletedAt))
+    .orderBy(desc(teacherJournals.deletedAt))
+    .limit(50);
+
+  const trashedGrades = await db
+    .select({
+      id: grades.id,
+      studentName: students.name,
+      nis: students.nis,
+      className: classes.name,
+      subjectName: subjects.name,
+      uh1: grades.uh1,
+      t1: grades.t1,
+      sts: grades.sts,
+      uh2: grades.uh2,
+      t2: grades.t2,
+      deletedAt: grades.deletedAt,
+    })
+    .from(grades)
+    .innerJoin(students, eq(grades.studentId, students.id))
+    .innerJoin(classes, eq(grades.classId, classes.id))
+    .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+    .where(isNotNull(grades.deletedAt))
+    .orderBy(desc(grades.deletedAt))
+    .limit(50);
+
+  // 8C. Ambil data seluruh menu Manajemen Akademik (Tahun Pelajaran, Semua Mapel, Komponen Penilaian, Statistik Sekolah)
+  const [
+    allSubjects,
+    allAcademicYears,
+    assessmentComponentsList,
+    [siswaCount],
+    [alumniCount],
+    [keluarCount],
+    [guruCount],
+    [tendikCount],
+  ] = await Promise.all([
+    db.select({ id: subjects.id, code: subjects.code, name: subjects.name, type: subjects.type, isActive: subjects.isActive }).from(subjects).orderBy(subjects.name),
+    db.select().from(academicYears).orderBy(desc(academicYears.name)),
+    db.select().from(assessmentComponents).orderBy(asc(assessmentComponents.sortOrder)),
+    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "siswa")),
+    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "alumni")),
+    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "keluar")),
+    db.select({ value: count() }).from(teachers).where(eq(teachers.staffType, "guru")),
+    db.select({ value: count() }).from(teachers).where(eq(teachers.staffType, "tendik")),
+  ]);
+
+  const schoolStats = {
+    totalSiswaAktif: siswaCount?.value ?? 0,
+    totalAlumni: alumniCount?.value ?? 0,
+    totalSiswaKeluar: keluarCount?.value ?? 0,
+    totalGuru: guruCount?.value ?? 0,
+    totalTendik: tendikCount?.value ?? 0,
+    totalRombel: activeClasses.length,
+    totalMapel: allSubjects.filter((s) => s.isActive).length,
+  };
+
   // 9. Tentukan sapaan berdasarkan jenis kelamin
   let honorific = "Bapak/Ibu";
   let genderLabel = "Tidak Diketahui";
@@ -1292,6 +1366,12 @@ async function getTeacherAiContext(userId: string, userName: string) {
     adminUsers,
     allTeachingHours,
     recentJournals,
+    trashedJournals,
+    trashedGrades,
+    allSubjects,
+    allAcademicYears,
+    assessmentComponentsList,
+    schoolStats,
   };
 }
 
@@ -1870,6 +1950,72 @@ teacherRoutes.post("/ai/chat", async (c) => {
           .join("\n")
       : "- Belum ada penugasan wali kelas khusus di sistem.";
 
+  // Ringkasan data live Tempat Sampah (Soft Delete) untuk Jurnal & Nilai
+  const trashedJournalGroups = new Map<string, {
+    date: string;
+    className: string;
+    teacherName: string;
+    subjectName: string;
+    hours: string[];
+    materi: string;
+  }>();
+  for (const tj of ctx.trashedJournals) {
+    const key = tj.groupId || tj.id;
+    const ex = trashedJournalGroups.get(key);
+    if (ex) {
+      if (tj.teachingHourLabel && !ex.hours.includes(tj.teachingHourLabel)) {
+        ex.hours.push(tj.teachingHourLabel);
+      }
+    } else {
+      trashedJournalGroups.set(key, {
+        date: tj.date,
+        className: tj.className || "-",
+        teacherName: tj.teacherName || "-",
+        subjectName: tj.subjectName || "-",
+        hours: tj.teachingHourLabel ? [tj.teachingHourLabel] : [],
+        materi: tj.materi || "-",
+      });
+    }
+  }
+
+  const trashedJournalsText =
+    trashedJournalGroups.size > 0
+      ? [...trashedJournalGroups.values()]
+          .map((tj) => `| ${tj.date} | ${tj.className} | Jam ke-${tj.hours.join(", ") || "-"} | ${tj.teacherName} | ${tj.subjectName} | ${tj.materi} | Soft Delete (Di Tempat Sampah) |`)
+          .join("\n")
+      : "| (Tempat Sampah Jurnal kosong — tidak ada jurnal yang di-soft-delete) | - | - | - | - | - | - |";
+
+  const trashedGradesText =
+    ctx.trashedGrades.length > 0
+      ? ctx.trashedGrades
+          .map((tg) => `| ${tg.studentName} (${tg.nis || "-"}) | ${tg.className} | ${tg.subjectName} | UH1:${tg.uh1 ?? "-"}, T1:${tg.t1 ?? "-"}, STS:${tg.sts ?? "-"}, UH2:${tg.uh2 ?? "-"}, T2:${tg.t2 ?? "-"} | Soft Delete (Di Tempat Sampah) |`)
+          .join("\n")
+      : "| (Tempat Sampah Nilai kosong — tidak ada nilai yang di-soft-delete) | - | - | - | - |";
+
+  const allSubjectsCatalogText =
+    ctx.allSubjects.length > 0
+      ? ctx.allSubjects
+          .map((s) => {
+            const owners = ctx.allSubjectTeachers.filter((st) => st.subjectId === s.id).map((st) => st.teacherName).join(", ") || "Belum ditugaskan";
+            return `- **${s.name}** (Kode: \`${s.code}\`, Tipe: ${s.type || "umum"}, Status: ${s.isActive ? "Aktif" : "Nonaktif"}) — Guru Pengampu: **${owners}**`;
+          })
+          .join("\n")
+      : "- Belum ada data mata pelajaran.";
+
+  const academicYearsCatalogText =
+    ctx.allAcademicYears.length > 0
+      ? ctx.allAcademicYears
+          .map((ay) => `- **${ay.name}** (${ay.isActive ? "🟢 TAHUN PELAJARAN AKTIF SAAT INI" : "Arsip/Nonaktif"})`)
+          .join("\n")
+      : "- 2025/2026 (Aktif)";
+
+  const assessmentCompText =
+    ctx.assessmentComponentsList.length > 0
+      ? ctx.assessmentComponentsList
+          .map((ac) => `${ac.name} (\`${ac.code}\` - ${ac.type}, status: ${ac.status})`)
+          .join(", ")
+      : "UH1, T1, STS, UH2, T2";
+
   // Hitung tanggal & waktu server saat ini dalam zona waktu WIB (Asia/Jakarta)
   const nowWib = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
   const todayIso = `${nowWib.getFullYear()}-${String(nowWib.getMonth() + 1).padStart(2, "0")}-${String(nowWib.getDate()).padStart(2, "0")}`;
@@ -1891,12 +2037,19 @@ teacherRoutes.post("/ai/chat", async (c) => {
   const roleSpecificRulesText = isAdminUser
     ? `## 👑 OTORITAS KHUSUS ROLE ANDA SAAT INI: ${roleAuthorityLabel}
 1. **HAK AKSES PENUH LINTAS GURU & KELAS (SESUAI OTORITAS SISTEM):**
-   - Karena ${ctx.honorific} ${user.name} login sebagai **${isSuperadmin ? "Superadmin" : "Admin"}**, Anda **DIIZINKAN SEPENUHNYA** untuk membuat, mengubah, menimpa (ke draft), membuka kunci (\`sent\`/\`submitted\`/\`approved\` ➔ \`draft\`), maupun **menghapus (soft-delete ke Tempat Sampah)** Jurnal Mengajar, Nilai Siswa, dan Matrix Persetujuan milik **GURU MANA PUN** dan di **KELAS MANA PUN**!
-   - **DILARANG** menolak permintaan ${ctx.honorific} ${user.name} dengan alasan "tidak memiliki otoritas terhadap data guru lain".
-2. **WAJIB AUTO-EXECUTE & LAPORKAN RINCIAN (BEFORE → AFTER):**
-   - Setiap kali diminta mengubah/menimpa nilai, jurnal, atau matrix (meskipun sebelumnya diisi oleh guru lain atau sudah berstatus terkirim), **WAJIB** sertakan blok \`\`\`action ...\`\`\` agar langsung tersimpan sebagai **draft** di database, dan informasikan **Data Sebelumnya (termasuk Nama Guru Pengisi Sebelumnya & Isi Lama)** serta **Diganti Menjadi Apa**.
-   - Setiap kali diminta **menghapus jurnal mengajar** (baik satu kelas maupun semua jurnal pada tanggal tertentu tanpa terkecuali), **WAJIB** sertakan blok \`\`\`action\\nDELETE_JOURNAL...\`\`\` tepat di baris pertama agar sistem langsung menghapusnya (soft-delete ke Tempat Sampah) dan melaporkan daftar jurnal yang berhasil dihapus!`
-    : `## ⚠️ ATURAN WAJIB DI SEMUA 3 MENU (MATRIX PERSETUJUAN, INPUT NILAI, JURNAL GURU):
+   - Karena ${ctx.honorific} ${user.name} login sebagai **${isSuperadmin ? "Superadmin" : "Admin"}**, Anda **DIIZINKAN SEPENUHNYA** mengakses dan mengelola seluruh fitur SIMAK, termasuk membuat, mengubah, menimpa (ke draft), membuka kunci (\`sent\`/\`submitted\`/\`approved\` ➔ \`draft\`), menghapus ke Tempat Sampah (*Soft Delete*), memulihkan dari Tempat Sampah (*Restore*), maupun menghapus permanen dari Tempat Sampah (*Permanent Delete*) untuk data guru mana pun dan di kelas mana pun!
+2. **WAJIB AUTO-SAVE DRAFT & LAPORKAN RINCIAN (BEFORE → AFTER) SAAT MENGUBAH DATA:**
+   - Setiap kali diminta mengisi atau mengubah nilai (\`SAVE_GRADE_DRAFT\`), jurnal (\`SAVE_JOURNAL_DRAFT\`), atau matrix (\`SAVE_MATRIX_DRAFT\`), langsung simpan sebagai **draft** dan laporkan **Data Sebelumnya (termasuk Nama Guru Pengisi Sebelumnya & Isi Lama)** ➔ **Diganti Menjadi Apa**.
+3. **🛡️ WAJIB VERIFIKASI 2 LANGKAH (TWO-STEP CONFIRMATION) UNTUK SEMUA AKSI PENGHAPUSAN (HAPUS DATA AKTIF MAUPUN HAPUS TEMPAT SAMPAH):**
+   - **Kasus 1 — Menghapus Data Aktif (Jurnal Mengajar \`DELETE_JOURNAL\` atau Nilai Siswa \`DELETE_GRADE\`):**
+     - **Langkah 1 (Saat pengguna baru pertama kali meminta hapus):** Tampilkan rincian data yang akan dihapus, lalu **tanyakan kembali apakah yakin ingin menghapusnya**, dan jelaskan bahwa **jika Ya, data akan masuk ke Tempat Sampah (Soft Delete)** (\`/admin/trash\`) sehingga masih bisa dipulihkan kembali.
+     - **Langkah 2 (Setelah pengguna menjawab konfirmasi seperti "Ya", "Yakin", "Lanjutkan", "Hapus"):** Sertakan blok \`DELETE_JOURNAL\` atau \`DELETE_GRADE\` untuk memindahkan data ke **Soft Delete (Tempat Sampah)**.
+   - **Kasus 2 — Menghapus Data di Tempat Sampah / Soft Delete (\`PERMANENT_DELETE_TRASH\`):**
+     - **Langkah 1 (Saat pengguna baru pertama kali meminta hapus data soft delete / kosongkan Tempat Sampah):** Tampilkan daftar data di Tempat Sampah saat ini, lalu **tanyakan konfirmasi kembali dengan peringatan keras** bahwa **data di Tempat Sampah (Soft Delete) yang dihapus lagi akan hilang secara PERMANEN dari database dan TIDAK BISA DIKEMBALIKAN LAGI!**
+     - **Langkah 2 (Setelah pengguna menjawab konfirmasi seperti "Ya, yakin hapus permanen"):** Sertakan blok \`PERMANENT_DELETE_TRASH\` untuk menghapusnya secara permanen.
+   - **Kasus 3 — Memulihkan Data dari Tempat Sampah (\`RESTORE_TRASH\`):**
+     - Jika diminta memulihkan (*restore*) jurnal atau nilai dari Tempat Sampah, langsung sertakan blok \`RESTORE_TRASH\` untuk mengembalikannya ke daftar aktif.`
+    : `## ⚠️ ATURAN WAJIB DI SEMUA MENU (MATRIX PERSETUJUAN, INPUT NILAI, JURNAL GURU):
 1. **JIKA SUDAH DIISI OLEH GURU LAIN (BUKAN MILIK SENDIRI):**
    - **JANGAN DIRUBAH / JANGAN DIHAPUS / JANGAN DITIMPA!**
    - Informasikan secara jelas kepada ${ctx.honorific} ${user.name.split(" ")[0]} bahwa data tersebut sudah diisi/diampu oleh **Guru Lain** (sebutkan nama gurunya, mapelnya, dan isi data yang sudah tercatat).
@@ -1905,10 +2058,11 @@ teacherRoutes.post("/ai/chat", async (c) => {
    - **WAJIB BERIKAN INFORMASI PERBANDINGAN (BEFORE → AFTER):** Jelaskan secara transparan bahwa slot/data tersebut sebelumnya sudah ada isinya, sebutkan **Data Sebelumnya terisi apa**, dan **Diganti Menjadi apa** sesuai permintaan terbaru!
 3. **JIKA MILIK DIRI SENDIRI TETAPI SUDAH TERKUNCI (\`sent\` / \`submitted\` / \`approved\`):**
    - **JANGAN DIRUBAH / JANGAN DIHAPUS!** Informasikan isi data sebelumnya dan jelaskan bahwa statusnya sudah terkunci (arahkan ke Wali Kelas untuk buka kunci ke Draft di Matrix Persetujuan atau hubungi Admin).
-4. **JIKA BELUM ADA ISINYA (DATA BARU):**
-   - **WAJIB AUTO-SAVE DRAFT!** Sertakan blok \`\`\`action ...\`\`\` agar langsung tersimpan sebagai **draft** di database.`;
+4. **VERIFIKASI 2 LANGKAH SAAT MENGHAPUS DRAFT MILIK SENDIRI:**
+   - Jika ${ctx.honorific} ${user.name.split(" ")[0]} meminta menghapus draft jurnal miliknya sendiri, tanyakan konfirmasi 2 langkah terlebih dahulu sebelum menghapus.`;
 
-  const systemInstruction = `Anda adalah Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA).
+  const systemInstruction = `Anda adalah **NEBULA AI**, Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA) yang memiliki pengetahuan menyeluruh atas **SELURUH FITUR & MENU SIMAK**.
+- **NAMA RESMI ANDA ADALAH: NEBULA AI** (bukan Gemini!). Jika ditanya siapa Anda atau apa nama AI ini, selalu perkenalkan diri sebagai **NEBULA AI**, Asisten Cerdas Resmi SIMAK SMA Negeri 3 Mojokerto.
 
 ## 🗓️ INFORMASI WAKTU SERVER SAAT INI (WAJIB DIGUNAKAN)
 - **Hari & Tanggal Hari Ini:** ${todayReadable}
@@ -1923,53 +2077,73 @@ teacherRoutes.post("/ai/chat", async (c) => {
 - NIP: ${ctx.teacher?.nip || "Tidak tercatat"}
 - Mata Pelajaran Resmi yang Diampu: ${ctx.subjectNames}
 
-## Penugasan Kelas & Mata Pelajaran
+## 🧭 PETA LENGKAP SELURUH MENU & FITUR SIMAK SMAGA (PENGETAHUAN SISTEM)
+1. **NEBULA AI** (\`/guru/ai\`) — Asisten cerdas multimodal (teks, Excel, gambar, PDF) untuk otomatisasi pengisian nilai, jurnal mengajar, matrix persetujuan, monitoring jurnal, dan manajemen Tempat Sampah (Soft Delete).
+2. **Dashboard Utama** (\`/admin\`) — Ringkasan statistik real-time sekolah:
+   - Siswa Aktif: **${ctx.schoolStats.totalSiswaAktif}** | Alumni: **${ctx.schoolStats.totalAlumni}** | Siswa Keluar: **${ctx.schoolStats.totalSiswaKeluar}**
+   - Total Guru: **${ctx.schoolStats.totalGuru}** | Tendik: **${ctx.schoolStats.totalTendik}** | Rombel Aktif: **${ctx.schoolStats.totalRombel}** | Mapel Aktif: **${ctx.schoolStats.totalMapel}**
+3. **Siswa & Pengguna** (\`/admin/students\`, \`/admin/alumni\`, \`/admin/keluar\`) — Manajemen biodata siswa aktif, alumni, siswa keluar/mutasi, akun pengguna & role, sinkronisasi SSO Kredensia, poin GDS (Gerakan Disiplin Sekolah), serta rekap kehadiran (Sakit/Izin/Alpa).
+4. **Tahun Pelajaran** (\`/admin/academic-years\`) — Pengelolaan siklus tahun akademik, aktivasi tahun berjalan, kenaikan kelas (promotion), dan kelulusan alumni:
+${academicYearsCatalogText}
+5. **Data Rombel** (\`/admin/classes\`) — Manajemen kelas/rombel (${ctx.classNames}), tingkat kelas (X, XI, XII), jurusan, dan penugasan Wali Kelas.
+6. **Mapel & Penugasan** (\`/admin/subjects\`) — Manajemen mata pelajaran, penugasan Guru Mapel (\`teacher_subjects\`), penugasan Wali Kelas (\`homeroom_assignments\`), dan konfigurasi Komponen Penilaian (${assessmentCompText}):
+${allSubjectsCatalogText}
+7. **Monitoring Jurnal** (\`/admin/monitoring-jurnal\`) — Pemantauan keterisian jurnal mengajar harian seluruh kelas dari Jam ke-1 s.d. Jam ke-11, fitur **Koreksi Ulang** (mengembalikan status \`sent\` ke \`draft\`), edit materi/presensi oleh Admin, dan hapus jurnal ke Tempat Sampah (*Soft Delete*).
+8. **Matrix Persetujuan** (\`/walikelas\`) — Menu Wali Kelas & Superadmin untuk memantau progres nilai seluruh mata pelajaran di kelas perwalian, menyetujui nilai (\`submitted\` ➔ \`approved\`), atau menolak/membuka kunci nilai (\`submitted\`/\`approved\` ➔ \`draft\`) untuk koreksi ulang.
+9. **Input Nilai** (\`/guru\`) — Menu Guru Mapel & Superadmin untuk mengisi komponen nilai (\`UH1, T1, STS, UH2, T2\`), simpan otomatis sebagai **Draft**, impor/ekspor template Excel nilai, dan kirim nilai final (\`draft\` ➔ \`submitted\`).
+10. **Jurnal Guru** (\`/guru/jurnal\`) — Menu Guru & Superadmin untuk mencatat jurnal mengajar harian (Tanggal, Kelas, Mapel, Rentang Jam Mengajar, Materi, Presensi Siswa), simpan sebagai **Draft**, atau kirim resmi (\`sent\`).
+11. **Update & Backup** (\`/admin/app-update\`, \`/admin/backup-restore\`) — Menu khusus Superadmin untuk publikasi versi pembaruan aplikasi SIMAK, ekspor *Full Backup* database (JSON), dan *Restore* database.
+12. **Integrasi** (\`/admin/integrations\`) — Menu khusus Superadmin untuk konfigurasi integrasi Kredensia SSO, sinkronisasi otomatis Poin GDS & Kehadiran siswa, Google OAuth, serta manajemen API Key NEBULA AI.
+13. **Tempat Sampah / Recycle Bin** (\`/admin/trash\`) — Menu khusus Superadmin untuk mengelola data Jurnal Mengajar dan Nilai Siswa yang berstatus **Soft Delete**:
+    - Data yang dihapus dari menu aktif tidak langsung hilang, melainkan masuk ke **Tempat Sampah (Soft Delete)** dan dapat **Dipulihkan (Restore)** kembali.
+    - Jika data di dalam **Tempat Sampah** dihapus lagi (**Hapus Permanen / Kosongkan Tempat Sampah**), maka data akan terhapus dari database secara permanen dan **TIDAK BISA DIKEMBALIKAN LAGI**.
+
+## Penugasan Kelas & Mata Pelajaran Anda
 ${taughtClassesText}
 
 ## 🏫 Daftar Wali Kelas (Menu Matrix Persetujuan)
 ${homeroomInfoText}
 
 ## 📋 Daftar Siswa Aktif Sekolah
-Tabel ini berisi siswa aktif beserta Kelas, NIS, NISN, dan UUID. Gunakan data ini untuk mencocokkan input guru (bisa berupa nama lengkap, nama panggilan/sebagian, NIS, NISN, atau UUID).
-
 | Nama Lengkap | NIS | NISN | Kelas | ID (UUID) |
 |---|---|---|---|---|
 ${studentRosterText}
 
 ## 📊 Data Live Saat Ini: Input Nilai & Matrix Persetujuan
-Gunakan tabel ini untuk melihat apakah nilai seorang siswa sudah terisi sebelumnya (beserta angka sebelumnya dan siapa guru pengampunya):
-
 | Siswa | Kelas | Mapel | Pengampu Mapel | UH1 | T1 | STS | UH2 | T2 | Status |
 |---|---|---|---|---|---|---|---|---|---|
 ${liveGradesText}
 
 ## ⏰ Daftar Jam Mengajar (Teaching Hours)
-Gunakan tabel ini untuk mencocokkan input guru saat membuat jurnal (misal "jam pertama", "jam 1", "07:00", dll.)
-
 | Label | Jam Mulai | Jam Selesai | ID (UUID) |
 |---|---|---|---|
 ${teachingHoursText}
 
-## 📓 Riwayat Jurnal Mengajar Milik Anda Sendiri (30 Hari Terakhir)
+## 📓 Riwayat Jurnal Mengajar Aktif Milik Anda Sendiri (30 Hari Terakhir)
 | Tanggal | Kelas | Mapel | Jam Mengajar | Materi Sebelumnya | Presensi Sebelumnya | Status |
 |---|---|---|---|---|---|---|
 ${recentJournalsText}
 
-## 📋 Slot Jurnal Mengajar yang Diisi oleh Guru Lain
+## 📋 Slot Jurnal Mengajar Aktif yang Diisi oleh Guru Lain
 | Tanggal | Kelas | Jam Mengajar | Diisi Oleh Guru | Mapel | Materi | Status |
 |---|---|---|---|---|---|---|
 ${otherTeachersJournalsText}
 
-## 🗺️ 3 Menu Utama Guru & Wali Kelas di SIMAK
-1. **Matrix Persetujuan** (\`/walikelas\`) — Persetujuan raport & koreksi ulang nilai oleh Wali Kelas / Superadmin.
-2. **Input Nilai** (\`/guru\`) — Pengisian nilai komponen siswa (\`UH1, T1, STS, UH2, T2\`) oleh Guru Mapel / Superadmin.
-3. **Jurnal Guru** (\`/guru/jurnal\`) — Pencatatan & pengelolaan jurnal mengajar harian per kelas & jam pelajaran.
+## 🗑️ Isi Tempat Sampah (Soft Delete) Saat Ini — Jurnal Mengajar (\`/admin/trash\`)
+| Tanggal | Kelas | Jam Mengajar | Guru | Mapel | Materi | Status |
+|---|---|---|---|---|---|---|
+${trashedJournalsText}
+
+## 🗑️ Isi Tempat Sampah (Soft Delete) Saat Ini — Nilai Siswa (\`/admin/trash\`)
+| Siswa | Kelas | Mapel | Rincian Nilai | Status |
+|---|---|---|---|---|
+${trashedGradesText}
 
 ${roleSpecificRulesText}
 
 ## 🔍 FORMAT ACTION BLOCK UNTUK EKSEKUSI DATABASE (WAJIB SERTAKAN BLOK INI)
 
-### A. Menu 2: Input Nilai (\`SAVE_GRADE_DRAFT\`)
+### A. Menu Input Nilai (\`SAVE_GRADE_DRAFT\`)
 - Jika identitas siswa tunggal & data lengkap, buat ACTION BLOCK:
   \`\`\`action
   SAVE_GRADE_DRAFT
@@ -1982,10 +2156,9 @@ ${roleSpecificRulesText}
   tahun: 2025/2026
   semester: 1
   \`\`\`
-- Jika siswa ambigu (lebih dari 1 nama cocok), tanyakan konfirmasi NIS/Kelas terlebih dahulu.
 
-### B. Menu 3: Simpan / Ubah Jurnal Guru (\`SAVE_JOURNAL_DRAFT\`)
-- Jika kelas, mapel, jam, materi, dan presensi sudah disebutkan, **WAJIB** buat ACTION BLOCK tepat di baris pertama:
+### B. Menu Jurnal Guru — Simpan / Ubah Draft (\`SAVE_JOURNAL_DRAFT\`)
+- Jika kelas, mapel, jam, materi, dan presensi sudah disebutkan, **WAJIB** buat ACTION BLOCK:
   \`\`\`action
   SAVE_JOURNAL_DRAFT
   tanggal: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
@@ -1997,8 +2170,8 @@ ${roleSpecificRulesText}
   presensi: <Informasi kehadiran siswa>
   \`\`\`
 
-### C. Menu 3: Hapus Jurnal Mengajar (\`DELETE_JOURNAL\`)
-- Ketika pengguna meminta **menghapus jurnal mengajar** (baik untuk kelas/jam tertentu maupun **semua jurnal** pada tanggal tersebut):
+### C. Menu Jurnal Guru & Monitoring Jurnal — Hapus Jurnal ke Soft Delete (\`DELETE_JOURNAL\`)
+- Sertakan blok ini saat pengguna meminta menghapus jurnal aktif (sistem otomatis menerapkan **Verifikasi 2 Langkah** sebelum memindahkan ke Tempat Sampah / Soft Delete):
   \`\`\`action
   DELETE_JOURNAL
   tanggal: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
@@ -2007,8 +2180,8 @@ ${roleSpecificRulesText}
   jam_akhir_id: <Angka urutan jam / UUID, atau "SEMUA" jika semua jam>
   \`\`\`
 
-### D. Menu 1: Matrix Persetujuan (\`SAVE_MATRIX_DRAFT\`)
-- Ketika pengguna meminta mengubah status nilai siswa/kelas di **Matrix Persetujuan** kembali ke **Draft** (koreksi ulang / revisi catatan matrix):
+### D. Menu Matrix Persetujuan — Buka Kunci / Kembalikan ke Draft (\`SAVE_MATRIX_DRAFT\`)
+- Ketika pengguna meminta mengubah status nilai siswa/kelas di **Matrix Persetujuan** kembali ke **Draft**:
   \`\`\`action
   SAVE_MATRIX_DRAFT
   kelas: <Nama Kelas, contoh: X-1>
@@ -2017,8 +2190,35 @@ ${roleSpecificRulesText}
   catatan: <Catatan revisi/koreksi ulang>
   \`\`\`
 
+### E. Menu Input Nilai / Admin — Hapus Nilai Siswa ke Soft Delete (\`DELETE_GRADE\`)
+- Ketika pengguna meminta menghapus data nilai siswa (otomatis melalui **Verifikasi 2 Langkah** ke Tempat Sampah / Soft Delete):
+  \`\`\`action
+  DELETE_GRADE
+  kelas: <Nama Kelas, contoh: X-1>
+  siswa: <Nama Siswa atau "SEMUA">
+  mapel: <Nama Mapel atau "SEMUA">
+  \`\`\`
+
+### F. Menu Tempat Sampah (\`/admin/trash\`) — Pulihkan Data Soft Delete (\`RESTORE_TRASH\`)
+- Ketika Superadmin meminta memulihkan (*restore*) data dari Tempat Sampah kembali ke aktif:
+  \`\`\`action
+  RESTORE_TRASH
+  tipe: <JURNAL | NILAI | SEMUA>
+  tanggal: <YYYY-MM-DD atau "SEMUA">
+  kelas: <Nama Kelas atau "SEMUA">
+  \`\`\`
+
+### G. Menu Tempat Sampah (\`/admin/trash\`) — Hapus Permanen Data Soft Delete (\`PERMANENT_DELETE_TRASH\`)
+- Ketika Superadmin meminta menghapus data yang ada di Tempat Sampah / Soft Delete secara permanen (otomatis melalui **Verifikasi 2 Langkah** dengan peringatan tidak bisa dikembalikan lagi):
+  \`\`\`action
+  PERMANENT_DELETE_TRASH
+  tipe: <JURNAL | NILAI | SEMUA>
+  tanggal: <YYYY-MM-DD atau "SEMUA">
+  kelas: <Nama Kelas atau "SEMUA">
+  \`\`\`
+
 ## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE
-- **JANGAN PERNAH** mengklaim data tersimpan/terhapus tanpa menyertakan blok \`\`\`action ...\`\`\`.
+- **JANGAN PERNAH** mengklaim data tersimpan/terhapus/dipulihkan tanpa menyertakan blok \`\`\`action ...\`\`\`.
 - **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai atau gambar tabel nilai, **WAJIB proses/simpan nilainya** menggunakan \`SAVE_GRADE_DRAFT\`.
 
 ## 👤 Daftar Admin Aktif SIMAK
@@ -2033,8 +2233,8 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       if (!msg.text && !msg.content) continue;
       const text = (msg.text || msg.content || "").trim();
       if (!text) continue;
-      // Abaikan pesan error frontend sebelumnya agar tidak merusak konteks prompt
-      if (text.startsWith("⚠️")) continue;
+      // Abaikan hanya pesan error koneksi frontend agar tidak menghapus pesan konfirmasi verifikasi 2 langkah
+      if (text.startsWith("⚠️ Gagal") || text.startsWith("⚠️ Terjadi kesalahan")) continue;
 
       if (msg.sender === "user" || msg.role === "user") {
         rawList.push({ role: "user", text });
@@ -2190,8 +2390,6 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // =========================================================
     // HELPER 1 (MENU INPUT NILAI & MATRIX): Simpan draft nilai
     // =========================================================
-    const isAdminUser = user.roles.includes("admin") || user.roles.includes("superadmin");
-
     async function executeSaveGradeDraft(params: {
       studentIdOrName?: string;
       nis?: string;
@@ -2328,14 +2526,14 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           ? `UH1: ${g.uh1 ?? "-"}, T1: ${g.t1 ?? "-"}, STS: ${g.sts ?? "-"}, UH2: ${g.uh2 ?? "-"}, T2: ${g.t2 ?? "-"}`
           : "Belum ada nilai";
 
-      // 5. CEK KEPEMILIKAN MAPEL & PENGISI SEBELUMNYA (JANGAN UBAH MILIK GURU LAIN!)
-      if (!isAdminUser) {
-        const subjectOwners = ctx.allSubjectTeachers.filter((st) => st.subjectId === resolvedSubject.id);
-        const isOwnedByMe = ctx.assignedSubjects.some((s) => s.id === resolvedSubject.id);
-        const otherOwners = subjectOwners.filter((st) => st.userId !== user.id);
+      const subjectOwners = ctx.allSubjectTeachers.filter((st) => st.subjectId === resolvedSubject.id);
+      const isOwnedByMe = ctx.assignedSubjects.some((s) => s.id === resolvedSubject.id);
+      const otherOwners = subjectOwners.filter((st) => st.userId !== user.id);
+      const ownerNames = otherOwners.map((o) => o.teacherName).join(", ") || "Guru Mapel";
 
+      // 5. CEK KEPEMILIKAN MAPEL & PENGISI SEBELUMNYA (HANYA BLOKIR JIKA BUKAN SUPERADMIN/ADMIN!)
+      if (!isAdminUser) {
         if ((ctx.assignedSubjects.length > 0 && !isOwnedByMe) || (otherOwners.length > 0 && !isOwnedByMe)) {
-          const ownerNames = otherOwners.map((o) => o.teacherName).join(", ") || "Guru Mapel Lain";
           const currentVal = existing ? ((existing as any)[fieldKey] ?? "Belum diisi") : "Belum diisi";
           return {
             success: false,
@@ -2343,7 +2541,6 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           };
         }
 
-        // Cek juga dari log audit jika baris nilai ini sebelumnya diinput oleh guru lain
         if (existing) {
           const [lastAudit] = await db
             .select({
@@ -2372,8 +2569,8 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         }
       }
 
-      // 6. CEK STATUS LOCKED (SUBMITTED / APPROVED)
-      if (existing && (existing.status === "submitted" || existing.status === "approved")) {
+      // 6. CEK STATUS LOCKED (SUBMITTED / APPROVED) — Superadmin/Admin diizinkan mengubah ke draft
+      if (!isAdminUser && existing && (existing.status === "submitted" || existing.status === "approved")) {
         const prevVal = (existing as any)[fieldKey] ?? "Kosong";
         return {
           success: false,
@@ -2433,9 +2630,10 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       });
 
       if (hadPreviousValue) {
+        const ownerNote = isAdminUser && !isOwnedByMe && otherOwners.length > 0 ? ` *(Pengampu Mapel: ${ownerNames})*` : "";
         return {
           success: true,
-          message: `✅ **Draft Nilai Berhasil Diperbarui (Auto-Save Draft)**\n- **Menu Terkait:** Input Nilai (\`/guru\`) & Matrix Persetujuan (\`/walikelas\`)\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**\n- **Komponen Penilaian:** **${fieldKey.toUpperCase()}**\n- 🔄 **Data Sebelumnya:** Nilai ${fieldKey.toUpperCase()} = **${prevFieldVal}** *(Rekap lama: ${oldRekapText})*\n- ✨ **Diganti Menjadi:** Nilai ${fieldKey.toUpperCase()} = **${fieldValue}** *(Rekap baru: ${newRekapText})*\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
+          message: `✅ **Draft Nilai Berhasil Diperbarui (Auto-Save Draft)**\n- **Menu Terkait:** Input Nilai (\`/guru\`) & Matrix Persetujuan (\`/walikelas\`)\n- **Siswa:** **${resolvedStudent.name}** (Kelas **${resolvedClass.name}**)\n- **Mata Pelajaran:** **${resolvedSubject.name}**${ownerNote}\n- **Komponen Penilaian:** **${fieldKey.toUpperCase()}**\n- 🔄 **Data Sebelumnya:** Nilai ${fieldKey.toUpperCase()} = **${prevFieldVal}** *(Rekap lama: ${oldRekapText}, Status lama: ${existing?.status || "draft"})*\n- ✨ **Diganti Menjadi:** Nilai ${fieldKey.toUpperCase()} = **${fieldValue}** *(Rekap baru: ${newRekapText})*\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
           data: savedRow,
         };
       }
@@ -2467,14 +2665,19 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
       // 1. Normalisasi & Validasi tanggal (paksa ke todayIso jika user minta "hari ini" atau AI halusinasi tahun lama)
       const isoMatch = tanggal.match(/(\d{4}-\d{2}-\d{2})/);
-      if (userAskedToday || tanggal.toLowerCase().includes("hari ini") || !isoMatch) {
+      const dmyMatch = tanggal.match(/(\d{2})-(\d{2})-(\d{4})/);
+      if (userAskedToday || tanggal.toLowerCase().includes("hari ini")) {
         tanggal = todayIso;
-      } else {
+      } else if (isoMatch) {
         tanggal = isoMatch[1];
         const currentYearPrefix = String(nowWib.getFullYear());
         if (!tanggal.startsWith(currentYearPrefix) && !lastUserText.includes(tanggal.slice(0, 4))) {
           tanggal = todayIso;
         }
+      } else if (dmyMatch) {
+        tanggal = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+      } else {
+        tanggal = todayIso;
       }
 
       // 2. Resolve kelas
@@ -2592,9 +2795,9 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           )
         );
 
-      // 5A. JIKA SUDAH DIISI OLEH GURU LAIN -> JANGAN UBAH, BERIKAN INFO LENGKAP!
+      // 5A. JIKA SUDAH DIISI OLEH GURU LAIN -> BLOKIR HANYA JIKA BUKAN SUPERADMIN/ADMIN!
       const conflictsOther = existing3D.filter((j) => j.teacherUserId !== user.id);
-      if (conflictsOther.length > 0) {
+      if (!isAdminUser && conflictsOther.length > 0) {
         const sampleOther = conflictsOther[0];
         const otherHours = [...new Set(conflictsOther.map((j) => j.teachingHourLabel).filter(Boolean))].join(", ") || `${startHour.label}–${endHour.label}`;
         return {
@@ -2603,9 +2806,9 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         };
       }
 
-      // 5B. JIKA DIISI OLEH DIRI SENDIRI TETAPI SUDAH TERKIRIM (SENT) -> JANGAN UBAH!
+      // 5B. JIKA DIISI OLEH DIRI SENDIRI TETAPI SUDAH TERKIRIM (SENT) -> BLOKIR HANYA JIKA BUKAN SUPERADMIN/ADMIN!
       const conflictsSentSelf = existing3D.filter((j) => j.teacherUserId === user.id && j.status === "sent");
-      if (conflictsSentSelf.length > 0) {
+      if (!isAdminUser && conflictsSentSelf.length > 0) {
         const sampleSent = conflictsSentSelf[0];
         const sentHours = [...new Set(conflictsSentSelf.map((j) => j.teachingHourLabel).filter(Boolean))].join(", ") || `${startHour.label}–${endHour.label}`;
         return {
@@ -2614,54 +2817,55 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         };
       }
 
-      // 6. JIKA SEBELUMNYA SUDAH ADA DRAFT MILIK SENDIRI -> SIMPAN INFO LAMA, TIMPA BERSIH, DAN LAPORKAN BEFORE -> AFTER!
-      const myDraftConflict = existing3D.filter((j) => j.teacherUserId === user.id && j.status === "draft");
+      // 6. JIKA SEBELUMNYA SUDAH ADA DATA (MILIK SENDIRI ATAU DITIMPA OLEH SUPERADMIN/ADMIN) -> SIMPAN INFO LAMA, TIMPA BERSIH, DAN LAPORKAN BEFORE -> AFTER!
+      const replaceableConflicts = isAdminUser
+        ? existing3D
+        : existing3D.filter((j) => j.teacherUserId === user.id && j.status === "draft");
+
       let previousDraftInfo: {
+        teacherName: string;
+        isOtherTeacher: boolean;
         className: string;
         subjectName: string;
         hoursText: string;
         materi: string;
         presenceInfo: string;
+        status: string;
       } | null = null;
 
-      if (myDraftConflict.length > 0) {
-        const conflictGroupIds = [...new Set(myDraftConflict.map((j) => j.groupId).filter(Boolean))] as string[];
-        // Ambil seluruh baris dalam grup lama agar rentang jam sebelumnya tampil utuh
+      if (replaceableConflicts.length > 0) {
+        const conflictGroupIds = [...new Set(replaceableConflicts.map((j) => j.groupId).filter(Boolean))] as string[];
         const allOldGroupRows = conflictGroupIds.length > 0
           ? await db
               .select()
               .from(teacherJournals)
               .where(
                 and(
-                  eq(teacherJournals.teacherUserId, user.id),
-                  eq(teacherJournals.status, "draft"),
+                  isNull(teacherJournals.deletedAt),
                   inArray(teacherJournals.groupId, conflictGroupIds)
                 )
               )
-          : myDraftConflict;
+          : replaceableConflicts;
 
-        const sampleOld = allOldGroupRows[0] || myDraftConflict[0];
+        const sampleOld = replaceableConflicts[0];
         const oldHoursList = [...new Set(allOldGroupRows.map((r) => r.teachingHourLabel).filter(Boolean))];
         previousDraftInfo = {
+          teacherName: sampleOld.teacherName || user.name,
+          isOtherTeacher: sampleOld.teacherUserId !== user.id,
           className: sampleOld.className || resolvedClass.name,
           subjectName: sampleOld.subjectName || resolvedSubject.name,
           hoursText: oldHoursList.length > 0 ? `Jam ke-${oldHoursList.join(", ")}` : `${startHour.label}–${endHour.label}`,
           materi: sampleOld.materi || "-",
           presenceInfo: sampleOld.presenceInfo || "-",
+          status: sampleOld.status || "draft",
         };
 
         if (conflictGroupIds.length > 0) {
           await db
             .delete(teacherJournals)
-            .where(
-              and(
-                eq(teacherJournals.teacherUserId, user.id),
-                eq(teacherJournals.status, "draft"),
-                inArray(teacherJournals.groupId, conflictGroupIds)
-              )
-            );
+            .where(inArray(teacherJournals.groupId, conflictGroupIds));
         }
-        const conflictIds = myDraftConflict.map((j) => j.id);
+        const conflictIds = replaceableConflicts.map((j) => j.id);
         if (conflictIds.length > 0) {
           await db.delete(teacherJournals).where(inArray(teacherJournals.id, conflictIds));
         }
@@ -2698,9 +2902,12 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       broadcastRealtimeEvent({ type: "journal_saved", classId: resolvedClass.id, actorId: user.id });
 
       if (previousDraftInfo) {
+        const ownerLabel = previousDraftInfo.isOtherTeacher
+          ? `Diisi Sebelumnya Oleh Guru **${previousDraftInfo.teacherName}** (Status: ${previousDraftInfo.status})`
+          : `Milik Anda (Status: ${previousDraftInfo.status})`;
         return {
           success: true,
-          message: `✅ **Draft Jurnal Guru Berhasil Diperbarui (Auto-Save Draft)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- 🔄 **Data Sebelumnya (Milik Anda):**\n  - Kelas: **${previousDraftInfo.className}** | Mapel: **${previousDraftInfo.subjectName}** | Jam: **${previousDraftInfo.hoursText}**\n  - Materi Sebelumnya: *"${previousDraftInfo.materi}"*\n  - Presensi Sebelumnya: *"${previousDraftInfo.presenceInfo}"*\n- ✨ **Diganti Menjadi (Draft Baru Tersimpan):**\n  - Kelas: **${resolvedClass.name}** | Mapel: **${resolvedSubject.name}** | Jam: **Jam ke-${startHour.label} s.d. ${endHour.label}** (${targetHours.length} jam pelajaran)\n  - Materi Baru: **"${materi}"**\n  - Presensi Baru: **"${presenceInfo}"**\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
+          message: `✅ **Draft Jurnal Guru Berhasil Diperbarui (Auto-Save Draft)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- 🔄 **Data Sebelumnya (${ownerLabel}):**\n  - Kelas: **${previousDraftInfo.className}** | Mapel: **${previousDraftInfo.subjectName}** | Jam: **${previousDraftInfo.hoursText}**\n  - Materi Sebelumnya: *"${previousDraftInfo.materi}"*\n  - Presensi Sebelumnya: *"${previousDraftInfo.presenceInfo}"*\n- ✨ **Diganti Menjadi (Draft Baru Tersimpan):**\n  - Kelas: **${resolvedClass.name}** | Mapel: **${resolvedSubject.name}** | Jam: **Jam ke-${startHour.label} s.d. ${endHour.label}** (${targetHours.length} jam pelajaran)\n  - Materi Baru: **"${materi}"**\n  - Presensi Baru: **"${presenceInfo}"**\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
           data: { groupId: newGroupId, count: inserts.length, replaced: previousDraftInfo },
         };
       }
@@ -2709,6 +2916,522 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         success: true,
         message: `✅ **Jurnal Guru Baru Berhasil Disimpan sebagai Draft (Auto-Save Draft)**\n- **Menu:** Jurnal Guru (\`/guru/jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- **Data Sebelumnya:** *(Belum ada jurnal pada tanggal & jam ini)*\n- ✨ **Data Baru Tersimpan:**\n  - **Kelas:** **${resolvedClass.name}**\n  - **Mapel:** **${resolvedSubject.name}**\n  - **Jam:** **Jam ke-${startHour.label} s.d. ${endHour.label}** (${targetHours.length} jam pelajaran)\n  - **Materi:** **"${materi}"**\n  - **Presensi:** **"${presenceInfo}"**\n- **Status:** **Draft** (Tersimpan otomatis di database)`,
         data: { groupId: newGroupId, count: inserts.length },
+      };
+    }
+
+    // =========================================================
+    // HELPER VERIFIKASI 2 LANGKAH (TWO-STEP CONFIRMATION CHECKER)
+    // =========================================================
+    const lastUserText = (userPrompt || (chatMessages[chatMessages.length - 1]?.text) || "").trim();
+    const lastUserLower = lastUserText.toLowerCase();
+    const prevModelMsg =
+      [...chatMessages.slice(0, -1)].reverse().find((m) => m.role === "model")?.text || "";
+    const prevUserMsg =
+      [...chatMessages.slice(0, -1)].reverse().find((m) => m.role === "user")?.text || "";
+
+    const wasAskedVerificationInPrevTurn =
+      /verifikasi\s*(?:2\s*langkah|langkah\s*1)|konfirmasi\s+penghapusan|apakah\s+(?:anda|bapak|ibu)[\s\S]{0,80}yakin[\s\S]{0,80}menghapus|masuk\s+ke\s+tempat\s+sampah|tidak\s+bisa\s+dikembalikan\s+lagi|balas\s+\*\*?"?ya/i.test(
+        prevModelMsg
+      );
+
+    const userRepliedConfirmation =
+      /\b(ya|iya|yap|yup|yakin|lanjut|lanjutkan|oke|ok|setuju|betul|benar|konfirmasi|eksekusi|gas|silakan|tetap\s+hapus|hapus\s+sekarang|hapus\s+permanen|jadi\s+hapus|saya\s+yakin)\b/i.test(
+        lastUserLower
+      );
+
+    const isTwoStepConfirmed = wasAskedVerificationInPrevTurn && userRepliedConfirmation;
+
+    // =========================================================
+    // HELPER 2B (MENU JURNAL GURU & MONITORING JURNAL): Hapus Jurnal (Soft Delete dgn Verifikasi 2 Langkah)
+    // =========================================================
+    async function executeDeleteJournal(params: {
+      tanggal?: string;
+      className?: string;
+      startHourIdOrLabel?: string;
+      endHourIdOrLabel?: string;
+    }): Promise<{ success: boolean; step?: string; message: string; data?: any }> {
+      let tanggal = (params.tanggal || "").trim();
+      const combinedContext = `${prevUserMsg} ${prevModelMsg} ${lastUserLower}`.toLowerCase();
+      const userAskedToday = lastUserLower.includes("hari ini") || lastUserLower.includes("sekarang");
+
+      const isoMatch = tanggal.match(/(\d{4}-\d{2}-\d{2})/) || prevModelMsg.match(/(\d{4}-\d{2}-\d{2})/);
+      const dmyMatch =
+        tanggal.match(/(\d{2})-(\d{2})-(\d{4})/) ||
+        lastUserLower.match(/(\d{2})-(\d{2})-(\d{4})/) ||
+        combinedContext.match(/(\d{2})-(\d{2})-(\d{4})/);
+
+      if (userAskedToday || tanggal.toLowerCase().includes("hari ini")) {
+        tanggal = todayIso;
+      } else if (isoMatch) {
+        tanggal = isoMatch[1];
+      } else if (dmyMatch) {
+        tanggal = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+      } else {
+        tanggal = todayIso;
+      }
+
+      const conds = [eq(teacherJournals.date, tanggal), isNull(teacherJournals.deletedAt)];
+
+      // Filter kelas jika bukan "SEMUA"
+      const rawClass = (params.className || "SEMUA").trim();
+      if (rawClass && !["semua", "all", "-", "*"].includes(rawClass.toLowerCase())) {
+        const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
+        const [resolvedClass] = await db
+          .select({ id: classes.id, name: classes.name })
+          .from(classes)
+          .where(
+            or(
+              sql`lower(${classes.name}) = lower(${rawClass})`,
+              sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
+              isUuid(rawClass) ? eq(classes.id, rawClass) : sql`1=0`
+            )
+          )
+          .limit(1);
+
+        if (resolvedClass) {
+          conds.push(
+            or(
+              eq(teacherJournals.classId, resolvedClass.id),
+              sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${resolvedClass.name}))`
+            )!
+          );
+        }
+      }
+
+      // Filter jam jika bukan "SEMUA"
+      const rawStart = (params.startHourIdOrLabel || "SEMUA").trim();
+      const rawEnd = (params.endHourIdOrLabel || rawStart).trim();
+      if (rawStart && !["semua", "all", "-", "*"].includes(rawStart.toLowerCase())) {
+        const hours = await db
+          .select()
+          .from(teachingHours)
+          .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
+
+        const resolveH = (inp: string) => {
+          const cl = inp.trim().toLowerCase();
+          if (isUuid(inp)) return hours.find((h) => h.id === inp);
+          const nm = cl.match(/(\d+)/);
+          if (nm) return hours[parseInt(nm[1], 10) - 1];
+          return hours.find((h) => h.label.toLowerCase().includes(cl));
+        };
+        const sh = resolveH(rawStart);
+        const eh = resolveH(rawEnd) || sh;
+        if (sh && eh) {
+          let si = hours.findIndex((h) => h.id === sh.id);
+          let ei = hours.findIndex((h) => h.id === eh.id);
+          if (si > ei) [si, ei] = [ei, si];
+          const targetIds = hours.slice(si, ei + 1).map((h) => h.id);
+          if (targetIds.length > 0) {
+            conds.push(inArray(teacherJournals.teachingHourId, targetIds));
+          }
+        }
+      }
+
+      const matchedRows = await db
+        .select({
+          id: teacherJournals.id,
+          teacherUserId: teacherJournals.teacherUserId,
+          teacherName: users.name,
+          className: teacherJournals.className,
+          subjectName: teacherJournals.subjectName,
+          teachingHourLabel: teacherJournals.teachingHourLabel,
+          materi: teacherJournals.materi,
+          presenceInfo: teacherJournals.presenceInfo,
+          status: teacherJournals.status,
+          groupId: teacherJournals.groupId,
+        })
+        .from(teacherJournals)
+        .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+        .where(and(...conds));
+
+      if (matchedRows.length === 0) {
+        return {
+          success: false,
+          message: `ℹ️ Tidak ditemukan jurnal mengajar aktif pada tanggal **\`${tanggal}\`**${rawClass.toLowerCase() !== "semua" ? ` untuk kelas **${rawClass}**` : ""} yang perlu dihapus (mungkin sudah berada di Tempat Sampah / Soft Delete).`,
+        };
+      }
+
+      // Cek otoritas: Jika BUKAN Superadmin/Admin, larang hapus jurnal guru lain atau jurnal berstatus sent!
+      if (!isAdminUser) {
+        const otherRows = matchedRows.filter((r) => r.teacherUserId !== user.id);
+        if (otherRows.length > 0) {
+          const s = otherRows[0];
+          return {
+            success: false,
+            message: `⛔ **Jurnal Tidak Dapat Dihapus (Milik Guru Lain)**\n- **Tanggal:** \`${tanggal}\`\n- **Kelas:** **${s.className || "-"}**\n- **Diisi Oleh:** **${s.teacherName || "Guru Lain"}**\n- **Mapel & Materi:** **${s.subjectName || "-"}** — *"${s.materi || "-"}"*\n\n> ⚠️ Hanya Guru pemilik draft atau Superadmin/Admin yang memiliki otoritas menghapus jurnal tersebut.`,
+          };
+        }
+
+        const sentRows = matchedRows.filter((r) => r.status === "sent");
+        if (sentRows.length > 0) {
+          const s = sentRows[0];
+          return {
+            success: false,
+            message: `⛔ **Jurnal Sudah Terkirim (SENT) & Tidak Dapat Dihapus oleh Guru**\n- **Tanggal:** \`${tanggal}\`\n- **Kelas:** **${s.className || "-"}** | **Mapel:** **${s.subjectName || "-"}**\n- **Materi:** *"${s.materi || "-"}"*\n\n> ⚠️ Jurnal yang sudah dikirim resmi terkunci. Hubungi Superadmin/Admin jika perlu dihapus.`,
+          };
+        }
+      }
+
+      // Kelompokkan rincian jurnal yang akan dihapus
+      const summaryGroups = new Map<string, {
+        className: string;
+        teacherName: string;
+        subjectName: string;
+        hours: string[];
+        materi: string;
+        presenceInfo: string;
+        status: string;
+      }>();
+
+      for (const r of matchedRows) {
+        const gKey = r.groupId || r.id;
+        const ex = summaryGroups.get(gKey);
+        if (ex) {
+          if (r.teachingHourLabel && !ex.hours.includes(r.teachingHourLabel)) {
+            ex.hours.push(r.teachingHourLabel);
+          }
+        } else {
+          summaryGroups.set(gKey, {
+            className: r.className || "-",
+            teacherName: r.teacherName || user.name,
+            subjectName: r.subjectName || "-",
+            hours: r.teachingHourLabel ? [r.teachingHourLabel] : [],
+            materi: r.materi || "-",
+            presenceInfo: r.presenceInfo || "-",
+            status: r.status || "draft",
+          });
+        }
+      }
+
+      const targetListText = [...summaryGroups.values()]
+        .map(
+          (g, idx) =>
+            `  ${idx + 1}. **Kelas ${g.className}** (Jam ke-${g.hours.join(", ")}) — Mapel **${g.subjectName}** oleh **${g.teacherName}** | Materi: *"${g.materi}"* | Presensi: *"${g.presenceInfo}"* *(Status: ${g.status})*`
+        )
+        .join("\n");
+
+      // =========================================================
+      // VERIFIKASI LANGKAH 1 DARI 2: Tanyakan konfirmasi dulu!
+      // =========================================================
+      if (!isTwoStepConfirmed) {
+        return {
+          success: true,
+          step: "verification_step_1",
+          message: `🛡️ **Verifikasi 2 Langkah (Langkah 1 dari 2) — Konfirmasi Penghapusan Jurnal Mengajar**\n- **Menu Terkait:** Jurnal Guru (\`/guru/jurnal\`), Monitoring Jurnal (\`/admin/monitoring-jurnal\`), & Tempat Sampah (\`/admin/trash\`)\n- **Tanggal Target:** \`${tanggal}\`\n- **Cakupan Kelas:** **${rawClass.toUpperCase()}**\n- **Rincian Jurnal Aktif yang Ditemukan (${summaryGroups.size} entri / ${matchedRows.length} jam pelajaran):**\n${targetListText}\n\n❓ **Apakah ${ctx.honorific} ${user.name} yakin ingin menghapus data jurnal mengajar di atas?**\n- ♻️ **Mekanisme Soft Delete:** Jika **Ya**, seluruh jurnal di atas **tidak langsung hilang permanen**, melainkan dipindahkan ke menu **Tempat Sampah (Soft Delete)** (\`/admin/trash\`) dan masih dapat dipulihkan (*restore*) kapan saja.\n- 👉 Silakan balas **"Ya, yakin hapus"** untuk melanjutkan eksekusi penghapusan.`,
+          data: { pendingDeleteCount: matchedRows.length, groupsCount: summaryGroups.size, tanggal, className: rawClass },
+        };
+      }
+
+      // =========================================================
+      // VERIFIKASI LANGKAH 2 DARI 2: Eksekusi Soft Delete ke Tempat Sampah!
+      // =========================================================
+      const idsToDelete = matchedRows.map((r) => r.id);
+      await db
+        .update(teacherJournals)
+        .set({ deletedAt: new Date(), updatedAt: new Date() })
+        .where(inArray(teacherJournals.id, idsToDelete));
+
+      broadcastRealtimeEvent({ type: "journal_deleted", actorId: user.id });
+
+      return {
+        success: true,
+        step: "verification_step_2_completed",
+        message: `✅ **Penghapusan Terkonfirmasi (Langkah 2 dari 2) — Jurnal Dipindahkan ke Tempat Sampah (Soft Delete)**\n- **Menu Terkait:** Jurnal Guru (\`/guru/jurnal\`), Monitoring Jurnal (\`/admin/monitoring-jurnal\`), & Tempat Sampah (\`/admin/trash\`)\n- **Tanggal:** \`${tanggal}\`\n- **Total Dihapus (Soft Delete):** **${matchedRows.length} jam pelajaran** (${summaryGroups.size} entri jurnal)\n- 🔄 **Data Sebelumnya yang Dihapus:**\n${targetListText}\n- ♻️ **Status Saat Ini:** **Soft Delete (Di Tempat Sampah)** — Data telah dinonaktifkan dari jadwal aktif dan disimpan di menu **Tempat Sampah** (\`/admin/trash\`). Anda dapat memulihkannya (*Restore*) atau menghapusnya secara permanen dari Tempat Sampah.`,
+        data: { deletedCount: matchedRows.length, groupsCount: summaryGroups.size },
+      };
+    }
+
+    // =========================================================
+    // HELPER 2C (MENU INPUT NILAI & TEMPAT SAMPAH): Hapus Nilai ke Soft Delete (Verifikasi 2 Langkah)
+    // =========================================================
+    async function executeDeleteGrade(params: {
+      className?: string;
+      studentIdOrName?: string;
+      subjectName?: string;
+    }): Promise<{ success: boolean; step?: string; message: string; data?: any }> {
+      if (!isAdminUser) {
+        return {
+          success: false,
+          message: `⛔ **Akses Ditolak:** Penghapusan seluruh baris nilai siswa ke Tempat Sampah hanya dapat dilakukan oleh **Superadmin / Admin**. Guru Mapel dapat mengubah nilai komponen menjadi Draft melalui perintah ubah nilai.`,
+        };
+      }
+
+      const conds = [isNull(grades.deletedAt)];
+      const rawClass = (params.className || "SEMUA").trim();
+      if (rawClass && !["semua", "all", "-", "*"].includes(rawClass.toLowerCase())) {
+        const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
+        const [resolvedClass] = await db
+          .select({ id: classes.id, name: classes.name })
+          .from(classes)
+          .where(
+            or(
+              sql`lower(${classes.name}) = lower(${rawClass})`,
+              sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`
+            )
+          )
+          .limit(1);
+        if (resolvedClass) conds.push(eq(grades.classId, resolvedClass.id));
+      }
+
+      const rawStudent = (params.studentIdOrName || "SEMUA").trim();
+      if (rawStudent && !["semua", "all", "-", "*"].includes(rawStudent.toLowerCase())) {
+        const [st] = await db
+          .select({ id: students.id })
+          .from(students)
+          .where(sql`lower(${students.name}) like lower(${'%' + rawStudent + '%'})`)
+          .limit(1);
+        if (st) conds.push(eq(grades.studentId, st.id));
+      }
+
+      const rawSubject = (params.subjectName || "SEMUA").trim();
+      if (rawSubject && !["semua", "all", "-", "*"].includes(rawSubject.toLowerCase())) {
+        const [subj] = await db
+          .select({ id: subjects.id })
+          .from(subjects)
+          .where(
+            or(
+              sql`lower(${subjects.name}) like lower(${'%' + rawSubject + '%'})`,
+              sql`lower(${subjects.code}) = lower(${rawSubject})`
+            )
+          )
+          .limit(1);
+        if (subj) conds.push(eq(grades.subjectId, subj.id));
+      }
+
+      const matchedGrades = await db
+        .select({
+          id: grades.id,
+          studentName: students.name,
+          className: classes.name,
+          subjectName: subjects.name,
+          uh1: grades.uh1,
+          t1: grades.t1,
+          sts: grades.sts,
+          uh2: grades.uh2,
+          t2: grades.t2,
+          status: grades.status,
+        })
+        .from(grades)
+        .innerJoin(students, eq(grades.studentId, students.id))
+        .innerJoin(classes, eq(grades.classId, classes.id))
+        .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+        .where(and(...conds))
+        .limit(50);
+
+      if (matchedGrades.length === 0) {
+        return {
+          success: false,
+          message: `ℹ️ Tidak ditemukan data nilai aktif yang cocok untuk dihapus.`,
+        };
+      }
+
+      const gradeListText = matchedGrades
+        .slice(0, 15)
+        .map(
+          (g, i) =>
+            `  ${i + 1}. **${g.studentName}** (${g.className}) — Mapel **${g.subjectName}** | UH1:${g.uh1 ?? "-"}, T1:${g.t1 ?? "-"}, STS:${g.sts ?? "-"}, UH2:${g.uh2 ?? "-"}, T2:${g.t2 ?? "-"} *(Status: ${g.status})*`
+        )
+        .join("\n");
+
+      if (!isTwoStepConfirmed) {
+        return {
+          success: true,
+          step: "verification_step_1",
+          message: `🛡️ **Verifikasi 2 Langkah (Langkah 1 dari 2) — Konfirmasi Penghapusan Data Nilai**\n- **Menu Terkait:** Input Nilai (\`/guru\`), Matrix Persetujuan (\`/walikelas\`), & Tempat Sampah (\`/admin/trash\`)\n- **Data Nilai yang Akan Dihapus (${matchedGrades.length} entri):**\n${gradeListText}\n\n❓ **Apakah ${ctx.honorific} ${user.name} yakin ingin menghapus ${matchedGrades.length} data nilai di atas?**\n- ♻️ **Mekanisme Soft Delete:** Jika **Ya**, data nilai akan dipindahkan ke **Tempat Sampah (Soft Delete)** (\`/admin/trash\`) dan masih dapat dipulihkan kembali.\n- 👉 Silakan balas **"Ya, yakin hapus"** untuk melanjutkan.`,
+          data: { pendingDeleteCount: matchedGrades.length },
+        };
+      }
+
+      const ids = matchedGrades.map((g) => g.id);
+      await db
+        .update(grades)
+        .set({ deletedAt: new Date(), updatedAt: new Date() })
+        .where(inArray(grades.id, ids));
+
+      broadcastRealtimeEvent({ type: "grade_deleted", actorId: user.id });
+
+      return {
+        success: true,
+        step: "verification_step_2_completed",
+        message: `✅ **Penghapusan Nilai Terkonfirmasi (Langkah 2 dari 2) — Dipindahkan ke Tempat Sampah (Soft Delete)**\n- **Total Dihapus (Soft Delete):** **${matchedGrades.length} entri nilai**\n- 🔄 **Data Sebelumnya yang Dihapus:**\n${gradeListText}\n- ♻️ **Status Saat Ini:** **Soft Delete (Di Tempat Sampah \`/admin/trash\`)** — Masih dapat dipulihkan sewaktu-waktu.`,
+        data: { deletedCount: matchedGrades.length },
+      };
+    }
+
+    // =========================================================
+    // HELPER 2D (MENU TEMPAT SAMPAH / RECYCLE BIN): Restore & Hapus Permanen (Verifikasi 2 Langkah)
+    // =========================================================
+    async function executeRestoreTrash(params: {
+      tipe?: string;
+      tanggal?: string;
+      className?: string;
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      if (!isAdminUser) {
+        return {
+          success: false,
+          message: `⛔ **Akses Ditolak:** Menu **Tempat Sampah (\`/admin/trash\`)** khusus untuk otoritas **Superadmin / Admin**.`,
+        };
+      }
+
+      const tipe = (params.tipe || "SEMUA").toUpperCase();
+      let restoredJournalsCount = 0;
+      let restoredGradesCount = 0;
+      const details: string[] = [];
+
+      if (tipe === "JURNAL" || tipe === "SEMUA" || tipe === "ALL") {
+        const trashedJ = await db
+          .select()
+          .from(teacherJournals)
+          .where(isNotNull(teacherJournals.deletedAt));
+
+        if (trashedJ.length > 0) {
+          const ids = trashedJ.map((j) => j.id);
+          await db
+            .update(teacherJournals)
+            .set({ deletedAt: null, updatedAt: new Date() })
+            .where(inArray(teacherJournals.id, ids));
+          restoredJournalsCount = trashedJ.length;
+          details.push(`- **Jurnal Mengajar Dipulihkan:** **${restoredJournalsCount} jam pelajaran** kembali aktif di menu Jurnal Guru & Monitoring Jurnal.`);
+          broadcastRealtimeEvent({ type: "journal_saved", actorId: user.id });
+        }
+      }
+
+      if (tipe === "NILAI" || tipe === "GRADE" || tipe === "SEMUA" || tipe === "ALL") {
+        const trashedG = await db
+          .select()
+          .from(grades)
+          .where(isNotNull(grades.deletedAt));
+
+        if (trashedG.length > 0) {
+          const ids = trashedG.map((g) => g.id);
+          await db
+            .update(grades)
+            .set({ deletedAt: null, updatedAt: new Date() })
+            .where(inArray(grades.id, ids));
+          restoredGradesCount = trashedG.length;
+          details.push(`- **Data Nilai Siswa Dipulihkan:** **${restoredGradesCount} entri nilai** kembali aktif di menu Input Nilai & Matrix Persetujuan.`);
+          broadcastRealtimeEvent({ type: "grade_data_restored", actorId: user.id });
+        }
+      }
+
+      if (restoredJournalsCount === 0 && restoredGradesCount === 0) {
+        return {
+          success: false,
+          message: `ℹ️ **Tempat Sampah Kosong:** Saat ini tidak ada data Jurnal maupun Nilai di **Tempat Sampah (\`/admin/trash\`)** yang perlu dipulihkan.`,
+        };
+      }
+
+      return {
+        success: true,
+        message: `♻️ **Data Berhasil Dipulihkan (Restore) dari Tempat Sampah (\`/admin/trash\`)**\n${details.join("\n")}\n- ✨ **Status Saat Ini:** **Aktif Kembali**`,
+        data: { restoredJournalsCount, restoredGradesCount },
+      };
+    }
+
+    async function executePermanentDeleteTrash(params: {
+      tipe?: string;
+      tanggal?: string;
+      className?: string;
+    }): Promise<{ success: boolean; step?: string; message: string; data?: any }> {
+      if (!isAdminUser) {
+        return {
+          success: false,
+          message: `⛔ **Akses Ditolak:** Penghapusan permanen data di **Tempat Sampah (\`/admin/trash\`)** hanya dapat dilakukan oleh **Superadmin**.`,
+        };
+      }
+
+      const tipe = (params.tipe || "SEMUA").toUpperCase();
+      const wantJournal = tipe === "JURNAL" || tipe === "SEMUA" || tipe === "ALL";
+      const wantGrade = tipe === "NILAI" || tipe === "GRADE" || tipe === "SEMUA" || tipe === "ALL";
+
+      const trashedJ = wantJournal
+        ? await db
+            .select({
+              id: teacherJournals.id,
+              date: teacherJournals.date,
+              className: teacherJournals.className,
+              subjectName: teacherJournals.subjectName,
+              teachingHourLabel: teacherJournals.teachingHourLabel,
+              teacherName: users.name,
+              materi: teacherJournals.materi,
+              groupId: teacherJournals.groupId,
+            })
+            .from(teacherJournals)
+            .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+            .where(isNotNull(teacherJournals.deletedAt))
+        : [];
+
+      const trashedG = wantGrade
+        ? await db
+            .select({
+              id: grades.id,
+              studentName: students.name,
+              className: classes.name,
+              subjectName: subjects.name,
+            })
+            .from(grades)
+            .innerJoin(students, eq(grades.studentId, students.id))
+            .innerJoin(classes, eq(grades.classId, classes.id))
+            .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+            .where(isNotNull(grades.deletedAt))
+        : [];
+
+      if (trashedJ.length === 0 && trashedG.length === 0) {
+        return {
+          success: false,
+          message: `ℹ️ **Tempat Sampah (\`/admin/trash\`) Sudah Kosong:** Tidak ada data berstatus *Soft Delete* yang perlu dihapus permanen.`,
+        };
+      }
+
+      const previewLines: string[] = [];
+      if (trashedJ.length > 0) {
+        const jGroups = new Map<string, string>();
+        for (const j of trashedJ) {
+          const k = j.groupId || j.id;
+          if (!jGroups.has(k)) {
+            jGroups.set(
+              k,
+              `  - [Jurnal] **${j.date}** | Kelas **${j.className || "-"}** | Mapel **${j.subjectName || "-"}** oleh **${j.teacherName || "-"}** — Materi: *"${j.materi || "-"}"*`
+            );
+          }
+        }
+        previewLines.push(...[...jGroups.values()].slice(0, 15));
+      }
+      if (trashedG.length > 0) {
+        previewLines.push(
+          ...trashedG.slice(0, 15).map((g) => `  - [Nilai] **${g.studentName}** (${g.className}) — Mapel **${g.subjectName}**`)
+        );
+      }
+
+      // =========================================================
+      // VERIFIKASI LANGKAH 1 DARI 2: Peringatan Keras Hapus Permanen!
+      // =========================================================
+      if (!isTwoStepConfirmed) {
+        return {
+          success: true,
+          step: "verification_step_1",
+          message: `🚨 **Verifikasi 2 Langkah (Langkah 1 dari 2) — Peringatan Hapus PERMANEN dari Tempat Sampah (\`/admin/trash\`)**\n- **Menu Terkait:** Tempat Sampah / Recycle Bin (\`/admin/trash\`)\n- **Data Soft Delete yang Akan Dihapus Permanen (${trashedJ.length} baris jam jurnal, ${trashedG.length} entri nilai):**\n${previewLines.join("\n")}\n\n⚠️ **PERINGATAN KERAS (IRREVERSIBLE):**\n- Data di atas saat ini berstatus **Soft Delete** di Tempat Sampah.\n- Apabila Anda menghapusnya dari Tempat Sampah, maka data akan **DIHAPUS PERMANEN dari database dan TIDAK BISA DIKEMBALIKAN LAGI!**\n- 👉 Apakah ${ctx.honorific} ${user.name} benar-benar yakin? Silakan balas **"Ya, yakin hapus permanen"** untuk mengeksekusi penghapusan permanen.`,
+          data: { pendingPermanentJournals: trashedJ.length, pendingPermanentGrades: trashedG.length },
+        };
+      }
+
+      // =========================================================
+      // VERIFIKASI LANGKAH 2 DARI 2: Eksekusi Hapus Permanen!
+      // =========================================================
+      if (trashedJ.length > 0) {
+        await db.delete(teacherJournals).where(isNotNull(teacherJournals.deletedAt));
+        broadcastRealtimeEvent({ type: "journal_deleted", actorId: user.id });
+      }
+      if (trashedG.length > 0) {
+        await db.delete(grades).where(isNotNull(grades.deletedAt));
+        broadcastRealtimeEvent({ type: "grade_data_restored", actorId: user.id });
+      }
+
+      return {
+        success: true,
+        step: "verification_step_2_completed",
+        message: `🔥 **Penghapusan Permanen Selesai (Langkah 2 dari 2) — Tempat Sampah Dikosongkan**\n- **Menu:** Tempat Sampah / Recycle Bin (\`/admin/trash\`)\n- **Total Dihapus Permanen:** **${trashedJ.length} baris jam jurnal** & **${trashedG.length} entri nilai**\n- 🔄 **Data yang Telah Dihapus Permanen:**\n${previewLines.join("\n")}\n- ⛔ **Status Saat Ini:** **Terhapus Permanen dari Database (Tidak dapat dikembalikan lagi)**`,
+        data: { deletedPermanentJournals: trashedJ.length, deletedPermanentGrades: trashedG.length },
       };
     }
 
@@ -2857,7 +3580,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     const aiActions: Array<{
       type: string;
       payload: Record<string, unknown>;
-      result: { success: boolean; message: string; data?: unknown };
+      result: { success: boolean; step?: string; message: string; data?: unknown };
     }> = [];
 
     // =========================================================
@@ -2872,16 +3595,20 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       const lines = blockText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       const actionType = lines[0]?.toUpperCase();
 
-      if (actionType === "SAVE_GRADE_DRAFT") {
-        const params: Record<string, string> = {};
+      const parseParams = () => {
+        const p: Record<string, string> = {};
         for (const line of lines.slice(1)) {
           const colonIdx = line.indexOf(":");
           if (colonIdx === -1) continue;
-          const key = line.slice(0, colonIdx).trim().toLowerCase();
+          const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_");
           const val = line.slice(colonIdx + 1).trim();
-          params[key] = val;
+          p[key] = val;
         }
+        return p;
+      };
 
+      if (actionType === "SAVE_GRADE_DRAFT") {
+        const params = parseParams();
         const studentIdOrName = params["student_id"] || params["studentid"] || params["id"] || params["siswa"] || params["student"];
         const className       = params["kelas"] || params["class"];
         const subjectName     = params["mapel"] || params["subject"];
@@ -2907,15 +3634,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       }
 
       if (actionType === "SAVE_JOURNAL_DRAFT") {
-        const params: Record<string, string> = {};
-        for (const line of lines.slice(1)) {
-          const colonIdx = line.indexOf(":");
-          if (colonIdx === -1) continue;
-          const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_");
-          const val = line.slice(colonIdx + 1).trim();
-          params[key] = val;
-        }
-
+        const params = parseParams();
         const tanggal       = params["tanggal"] || params["date"] || todayIso;
         const className     = params["kelas"] || params["class"] || "";
         const subjectName   = params["mapel"] || params["subject"] || "";
@@ -2940,16 +3659,70 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         }
       }
 
-      if (actionType === "SAVE_MATRIX_DRAFT") {
-        const params: Record<string, string> = {};
-        for (const line of lines.slice(1)) {
-          const colonIdx = line.indexOf(":");
-          if (colonIdx === -1) continue;
-          const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_");
-          const val = line.slice(colonIdx + 1).trim();
-          params[key] = val;
-        }
+      if (actionType === "DELETE_JOURNAL") {
+        const params = parseParams();
+        const tanggal     = params["tanggal"] || params["date"] || todayIso;
+        const className   = params["kelas"] || params["class"] || "SEMUA";
+        const startHourId = params["jam_awal_id"] || params["jam_awal"] || params["start_hour_id"] || "SEMUA";
+        const endHourId   = params["jam_akhir_id"] || params["jam_akhir"] || params["end_hour_id"] || startHourId;
 
+        const dedupKey = `DEL_JOURNAL|${tanggal}|${className}|${startHourId}|${endHourId}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeDeleteJournal({
+            tanggal,
+            className,
+            startHourIdOrLabel: startHourId,
+            endHourIdOrLabel: endHourId,
+          });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "DELETE_GRADE") {
+        const params = parseParams();
+        const className       = params["kelas"] || params["class"] || "SEMUA";
+        const studentIdOrName = params["siswa"] || params["student"] || "SEMUA";
+        const subjectName     = params["mapel"] || params["subject"] || "SEMUA";
+
+        const dedupKey = `DEL_GRADE|${className}|${studentIdOrName}|${subjectName}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeDeleteGrade({ className, studentIdOrName, subjectName });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "RESTORE_TRASH") {
+        const params = parseParams();
+        const tipe      = params["tipe"] || params["type"] || "SEMUA";
+        const tanggal   = params["tanggal"] || params["date"] || "SEMUA";
+        const className = params["kelas"] || params["class"] || "SEMUA";
+
+        const dedupKey = `RESTORE_TRASH|${tipe}|${tanggal}|${className}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeRestoreTrash({ tipe, tanggal, className });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "PERMANENT_DELETE_TRASH") {
+        const params = parseParams();
+        const tipe      = params["tipe"] || params["type"] || "SEMUA";
+        const tanggal   = params["tanggal"] || params["date"] || "SEMUA";
+        const className = params["kelas"] || params["class"] || "SEMUA";
+
+        const dedupKey = `PERM_DEL_TRASH|${tipe}|${tanggal}|${className}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executePermanentDeleteTrash({ tipe, tanggal, className });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "SAVE_MATRIX_DRAFT") {
+        const params = parseParams();
         const className       = params["kelas"] || params["class"] || "";
         const studentIdOrName = params["siswa"] || params["student"] || params["student_id"] || "SEMUA";
         const subjectName     = params["mapel"] || params["subject"] || "SEMUA";
@@ -2967,6 +3740,99 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           aiActions.push({ type: actionType, payload: params, result: res });
         }
       }
+    }
+
+    // =========================================================
+    // LAYER 1B: Fallback cerdas untuk Verifikasi 2 Langkah (Langkah 1 & Langkah 2)
+    // =========================================================
+    const promptToCheck = lastUserLower;
+
+    // Jika ini adalah balasan konfirmasi Langkah 2 ("Ya", "Yakin", dll.) dan Gemini tidak membuat blok action:
+    if (aiActions.length === 0 && isTwoStepConfirmed) {
+      if (/hapus\s+permanen|tempat\s+sampah[\s\S]*tidak\s+bisa\s+dikembalikan/i.test(prevModelMsg)) {
+        const res = await executePermanentDeleteTrash({ tipe: "SEMUA" });
+        aiActions.push({
+          type: "PERMANENT_DELETE_TRASH",
+          payload: { from: "step2_confirmation_fallback" },
+          result: res,
+        });
+      } else if (/konfirmasi\s+penghapusan\s+data\s+nilai/i.test(prevModelMsg)) {
+        const res = await executeDeleteGrade({ className: "SEMUA" });
+        aiActions.push({
+          type: "DELETE_GRADE",
+          payload: { from: "step2_confirmation_fallback" },
+          result: res,
+        });
+      } else {
+        // Default ke penghapusan jurnal yang sedang dikonfirmasi di pesan sebelumnya
+        const prevClassMatch = prevModelMsg.match(/Cakupan Kelas:\*\*\s*\*\*([^*]+)\*\*/i);
+        const targetClassDel = prevClassMatch?.[1]?.trim() || "SEMUA";
+        const res = await executeDeleteJournal({
+          tanggal: todayIso,
+          className: targetClassDel,
+          startHourIdOrLabel: "SEMUA",
+          endHourIdOrLabel: "SEMUA",
+        });
+        aiActions.push({
+          type: "DELETE_JOURNAL",
+          payload: { from: "step2_confirmation_fallback", className: targetClassDel },
+          result: res,
+        });
+      }
+    }
+
+    // Jika user meminta hapus data di Tempat Sampah / Soft Delete (Langkah 1):
+    if (
+      aiActions.length === 0 &&
+      (promptToCheck.includes("hapus") || promptToCheck.includes("kosongkan") || promptToCheck.includes("bersihkan")) &&
+      (promptToCheck.includes("tempat sampah") || promptToCheck.includes("soft delete") || promptToCheck.includes("recycle") || promptToCheck.includes("permanen"))
+    ) {
+      const res = await executePermanentDeleteTrash({ tipe: "SEMUA" });
+      aiActions.push({
+        type: "PERMANENT_DELETE_TRASH",
+        payload: { from: "trash_delete_fallback" },
+        result: res,
+      });
+    }
+
+    // Jika user meminta restore / pulihkan dari Tempat Sampah:
+    if (
+      aiActions.length === 0 &&
+      (promptToCheck.includes("pulihkan") || promptToCheck.includes("restore") || promptToCheck.includes("kembalikan")) &&
+      (promptToCheck.includes("tempat sampah") || promptToCheck.includes("soft delete") || promptToCheck.includes("jurnal") || promptToCheck.includes("nilai"))
+    ) {
+      const res = await executeRestoreTrash({ tipe: "SEMUA" });
+      aiActions.push({
+        type: "RESTORE_TRASH",
+        payload: { from: "trash_restore_fallback" },
+        result: res,
+      });
+    }
+
+    // Jika user meminta HAPUS JURNAL aktif (Langkah 1):
+    if (
+      aiActions.length === 0 &&
+      (promptToCheck.includes("hapus") || promptToCheck.includes("delete") || promptToCheck.includes("kosongkan")) &&
+      promptToCheck.includes("jurnal")
+    ) {
+      const isDeleteAll =
+        promptToCheck.includes("semua") ||
+        promptToCheck.includes("seluruh") ||
+        promptToCheck.includes("tanpa terkecuali");
+      const classMatchDel = promptToCheck.match(/kelas\s+([xXiI0-9\-]+)/i);
+      const targetClassDel = isDeleteAll && !classMatchDel ? "SEMUA" : classMatchDel?.[1]?.trim() || "SEMUA";
+
+      const res = await executeDeleteJournal({
+        tanggal: todayIso,
+        className: targetClassDel,
+        startHourIdOrLabel: "SEMUA",
+        endHourIdOrLabel: "SEMUA",
+      });
+      aiActions.push({
+        type: "DELETE_JOURNAL",
+        payload: { from: "delete_journal_fallback", tanggal: todayIso, className: targetClassDel },
+        result: res,
+      });
     }
 
     // =========================================================
@@ -3006,7 +3872,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // =========================================================
     // LAYER 2B: Fallback jika AI menjawab rincian jurnal dengan poin-poin
     // =========================================================
-    if (aiActions.length === 0) {
+    if (aiActions.length === 0 && !promptToCheck.includes("hapus")) {
       const jClassMatch = rawReply.match(/(?:Kelas|kelas)\s*:\s*([^\n\r*]+)/i);
       const jSubjectMatch = rawReply.match(/(?:Mata\s*Pelajaran|mapel)\s*:\s*([^\n\r*(]+)/i);
       const jHourMatch = rawReply.match(/(?:Jam\s*Mengajar|Jam)\s*:\s*([^\n\r*]+)/i);
@@ -3039,8 +3905,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // =========================================================
     // LAYER 3: Fallback jika userPrompt langsung memerintahkan ubah nilai
     // =========================================================
-    const promptToCheck = (userPrompt || (chatMessages[chatMessages.length - 1]?.text) || "").toLowerCase();
-    if (aiActions.length === 0 && (promptToCheck.includes("ubah") || promptToCheck.includes("nilai") || promptToCheck.includes("ganti"))) {
+    if (aiActions.length === 0 && !promptToCheck.includes("hapus") && (promptToCheck.includes("ubah") || promptToCheck.includes("nilai") || promptToCheck.includes("ganti"))) {
       const promptScoreMatch = promptToCheck.match(/(?:menjadi|jadi|ke|=)\s*(\d{1,3})/i) || promptToCheck.match(/(\d{1,3})/);
       const promptFieldMatch = promptToCheck.match(/\b(uh1|t1|sts|uh2|t2)\b/i);
       const promptClassMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
@@ -3067,7 +3932,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // LAYER 3B: Fallback jika userPrompt memerintahkan simpan jurnal
     // =========================================================
     const historyCombined = chatMessages.map((m) => m.text).join("\n").toLowerCase();
-    if (aiActions.length === 0 && (
+    if (aiActions.length === 0 && !promptToCheck.includes("hapus") && !isTwoStepConfirmed && (
       promptToCheck.includes("jurnal") ||
       promptToCheck.includes("simpan jurnal") ||
       promptToCheck.includes("catat jurnal") ||
@@ -3114,13 +3979,15 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // Serta koreksi tanggal halusinasi 2023/2024/2025 di teks narasi AI menjadi tanggal server hari ini
     let cleanReply = rawReply
       .replace(actionBlockRegex, "")
+      .replace(/\bGoogle\s+Gemini\b/gi, "NEBULA AI")
+      .replace(/\bGemini\s+(?:AI|Flash|Pro|2\.0)\b/gi, "NEBULA AI")
+      .replace(/\bGemini\b/gi, "NEBULA AI")
       .replace(/\b202[345]-\d{2}-\d{2}\b/g, todayIso)
       .replace(/\b\d{1,2}\s+(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+202[345]\b/gi, todayReadable)
       .replace(/\s*\(pukul\s+(\d{2}:\d{2})\s*-\s*\1\)/gi, "")
       .trim();
 
-    // SANGAT PENTING: Lampirkan konfirmasi aksi database langsung ke teks balasan chat.
-    // Jika ada aksi yang DITOLAK (misal karena milik guru lain atau sudah terkunci), pastikan narasi AI tidak mengklaim "berhasil disimpan".
+    // SANGAT PENTING: Lampirkan konfirmasi aksi database atau Verifikasi 2 Langkah langsung ke teks balasan chat.
     let finalReply = cleanReply;
     if (aiActions.length > 0) {
       const actionSummaries = aiActions
@@ -3128,9 +3995,18 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         .filter(Boolean)
         .join("\n\n");
       const anyBlocked = aiActions.some((a) => !a.result.success);
+      const anyStep1Verification = aiActions.some((a) => a.result.step === "verification_step_1");
+      const anyStep2Completed = aiActions.some((a) => a.result.step === "verification_step_2_completed");
+      const allSucceeded = aiActions.every((a) => a.result.success);
+      const hasFalseRefusal = /tidak memiliki otoritas|dilarang mengubah atau menghapus|tidak dapat menghapus/i.test(cleanReply);
 
       if (anyBlocked && aiActions.every((a) => !a.result.success)) {
-        finalReply = `Mohon perhatian ${ctx.honorific} ${user.name.split(" ")[0]}, permintaan perubahan data tidak dapat langsung dilakukan karena ketentuan sistem berikut:\n\n${actionSummaries}`;
+        finalReply = `Mohon perhatian ${ctx.honorific} ${user.name.split(" ")[0]}, permintaan tidak dapat langsung dilakukan karena ketentuan sistem berikut:\n\n${actionSummaries}`;
+      } else if (anyStep1Verification) {
+        // Pada Langkah 1 Verifikasi 2 Langkah, tampilkan langsung pesan konfirmasi sistem yang presisi agar tidak membingungkan
+        finalReply = actionSummaries;
+      } else if (anyStep2Completed || (allSucceeded && (hasFalseRefusal || !cleanReply))) {
+        finalReply = `Baik ${ctx.honorific} ${user.name}, sesuai otoritas **${isSuperadmin ? "Superadmin" : isAdminUser ? "Admin" : "Guru"}**, permintaan Anda telah selesai dieksekusi:\n\n${actionSummaries}`;
       } else if (actionSummaries) {
         finalReply = `${finalReply}\n\n---\n${actionSummaries}`.trim();
       }

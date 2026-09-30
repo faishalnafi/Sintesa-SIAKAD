@@ -213,8 +213,8 @@ export async function askGemini({
     }
   }
 
-  console.error("[Gemini API] All candidate models failed:", lastError?.message);
+  console.error("[NEBULA AI API] All candidate models failed:", lastError?.message);
   throw new Error(
-    `Gagal menghubungi layanan Google AI Studio: ${lastError?.message || "Semua model sedang sibuk"}`
+    `Gagal menghubungi layanan NEBULA AI: ${lastError?.message || "Semua model sedang sibuk"}`
   );
 }

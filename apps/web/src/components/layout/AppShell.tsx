@@ -15,7 +15,7 @@ function hasRole(roles: string[], ...codes: string[]) {
   return codes.some((c) => set.has(c.toLowerCase()));
 }
 
-const ASISTEN_AI: NavItem = { to: "/guru/ai", label: "Asisten AI", icon: "auto_awesome" };
+const ASISTEN_AI: NavItem = { to: "/guru/ai", label: "NEBULA AI", icon: "auto_awesome" };
 const DASHBOARD: NavItem = { to: "/admin", label: "Dashboard", icon: "dashboard" };
 
 const NAV_MANAJEMEN_AKADEMIK: NavItem[] = [

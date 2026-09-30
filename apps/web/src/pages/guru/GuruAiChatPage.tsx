@@ -1283,7 +1283,7 @@ export function GuruAiChatPage() {
       }),
     })
       .then((res) => {
-        const replyText = res.data?.reply || "Tidak ada respon dari asisten AI.";
+        const replyText = res.data?.reply || "Tidak ada respon dari NEBULA AI.";
         const serverStoredFiles = res.data?.storedFiles || [];
 
         // Enrich userMessage attachments with persistent UUID storageUrl & storageKey
@@ -1356,11 +1356,11 @@ export function GuruAiChatPage() {
       .catch((err) => {
         console.error("[GuruAiChat] AI request failed:", err);
         const honorific = getHonorific(user);
-        const errMessage = err?.message || "Terjadi kesalahan saat berkomunikasi dengan server AI.";
+        const errMessage = err?.message || "Terjadi kesalahan saat berkomunikasi dengan server NEBULA AI.";
         const aiErrorResponse: Message = {
           id: `m-ai-${Date.now()}`,
           sender: "assistant",
-          text: `⚠️ Maaf ${honorific} ${user?.name || ""}, terjadi kendala saat memproses jawaban:\n\n*${errMessage}*\n\nPastikan koneksi internet stabil dan kunci Gemini API aktif di server.`,
+          text: `⚠️ Maaf ${honorific} ${user?.name || ""}, terjadi kendala saat memproses jawaban:\n\n*${errMessage}*\n\nPastikan koneksi internet stabil dan layanan NEBULA AI aktif di server.`,
           time: getFullDateTime(),
         };
 
@@ -1474,7 +1474,7 @@ export function GuruAiChatPage() {
             <span className="material-symbols-outlined text-[36px]">upload_file</span>
           </div>
           <div className="font-display font-bold text-lg text-[var(--accent)]">
-            Lepaskan file di sini untuk melampirkan ke Chat AI
+            Lepaskan file di sini untuk melampirkan ke NEBULA AI
           </div>
           <div className="text-xs text-[var(--fg)] mt-1 opacity-80">
             Mendukung gambar, video, PDF, Excel, Word & semua format dokumen (Maks. 50 MB per file, hingga 25 file)
@@ -1483,7 +1483,7 @@ export function GuruAiChatPage() {
       )}
 
       {/* =========================================================
-          SECONDARY SIDEBAR: RIWAYAT CHAT (GEMINI-STYLE SIDEBAR)
+          SECONDARY SIDEBAR: RIWAYAT CHAT (NEBULA AI SIDEBAR)
           Tetap berada di sebelah kanan sidebar utama SIMAK
           ========================================================= */}
       <aside
@@ -1506,7 +1506,7 @@ export function GuruAiChatPage() {
               <h2 className="text-sm font-bold font-display tracking-tight truncate text-[var(--fg)]">
                 Riwayat Obrolan
               </h2>
-              <span className="text-[11px] app-muted block truncate">SIMAK AI Assistant</span>
+              <span className="text-[11px] app-muted block truncate">NEBULA AI</span>
             </div>
           </div>
 
@@ -1695,7 +1695,7 @@ export function GuruAiChatPage() {
         <div className="p-3 border-t app-divider mt-auto shrink-0 flex items-center justify-between text-xs app-muted">
           <div className="flex items-center gap-2 min-w-0">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="truncate font-medium">Gemini 2.0 Flash</span>
+            <span className="truncate font-semibold">NEBULA AI</span>
           </div>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--hover)] font-mono">
             Multimodal 50MB
@@ -1703,7 +1703,7 @@ export function GuruAiChatPage() {
         </div>
       </aside>
 
-      {/* Floating 3-Dot Session Context Menu (Gemini-style) */}
+      {/* Floating 3-Dot Session Context Menu */}
       {sessionMenu && activeMenuSession && (
         <>
           <div
@@ -1758,7 +1758,7 @@ export function GuruAiChatPage() {
       )}
 
       {/* =========================================================
-          MAIN ROOM CHAT CANVAS (GEMINI-STYLE)
+          MAIN ROOM CHAT CANVAS (NEBULA AI)
           ========================================================= */}
       <main className="flex-1 flex flex-col h-full min-w-0 min-h-0 overflow-hidden bg-[var(--bg)]">
         {/* Chat Room Top Navigation Bar */}
@@ -1767,7 +1767,7 @@ export function GuruAiChatPage() {
           style={{ borderColor: "var(--divider)", background: "color-mix(in srgb, var(--bg) 95%, transparent)" }}
         >
           <div className="flex items-center gap-3 min-w-0">
-            {/* Toggle button to reopen Gemini History Sidebar if collapsed */}
+            {/* Toggle button to reopen NEBULA AI History Sidebar if collapsed */}
             {!isSidebarOpen && (
               <button
                 type="button"
@@ -1785,13 +1785,13 @@ export function GuruAiChatPage() {
                 <h1 className="text-sm font-bold truncate text-[var(--fg)]">
                   {activeSession?.title || "Percakapan Baru"}
                 </h1>
-                <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
                   <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                  Gemini Flash
+                  NEBULA AI
                 </span>
               </div>
               <p className="text-[11px] app-muted truncate hidden sm:block">
-                Konteks Guru: {user?.name} {user?.username ? `(${user.username})` : ""}
+                Konteks Pengguna: {user?.name} {user?.username ? `(${user.username})` : ""}
               </p>
             </div>
           </div>
@@ -1801,7 +1801,7 @@ export function GuruAiChatPage() {
         {/* Chat Messages Stream Area */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 py-6 space-y-6">
           {displayedMessages.length === 0 ? (
-            /* Gemini-style Empty Welcome State */
+            /* NEBULA AI Empty Welcome State */
             <div className="max-w-3xl mx-auto h-full flex flex-col justify-center items-center text-center py-10 px-4">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-rose-500 to-red-600 text-white flex items-center justify-center shadow-lg mb-6 ring-4 ring-red-500/20">
                 <span className="material-symbols-outlined text-[36px]">auto_awesome</span>
@@ -1811,7 +1811,7 @@ export function GuruAiChatPage() {
                 Sebaiknya kita mulai dari mana{user?.name ? `, ${getHonorific(user)} ${user.name}` : ""}?
               </h2>
               <p className="text-sm app-muted max-w-lg mb-8">
-                Unggah dokumen, Excel nilai, gambar, materi soal, atau video pembelajaran untuk dianalisis oleh Asisten AI SIMAK.
+                Unggah dokumen, Excel nilai, gambar, materi soal, atau video pembelajaran untuk dianalisis oleh <strong>NEBULA AI</strong>.
               </p>
 
               {/* Suggestion Prompt Chips Grid */}
@@ -1839,7 +1839,7 @@ export function GuruAiChatPage() {
                   type="button"
                   onClick={() =>
                     handleSendMessage(
-                      "Saya ingin mengunggah file media (gambar soal / dokumen / Excel). Bagaimana AI dapat membantu menganalisisnya?"
+                      "Saya ingin mengunggah file media (gambar soal / dokumen / Excel). Bagaimana NEBULA AI dapat membantu menganalisisnya?"
                     )
                   }
                   className="p-4 rounded-2xl border app-card hover:border-[var(--accent)] hover:shadow-md transition-all group cursor-pointer text-left"
@@ -1919,7 +1919,7 @@ export function GuruAiChatPage() {
                     <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce" style={{ animationDelay: "0ms" }} />
                     <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce" style={{ animationDelay: "150ms" }} />
                     <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-bounce" style={{ animationDelay: "300ms" }} />
-                    <span className="ml-1 text-[11px]">Menghubungkan ke Gemini AI...</span>
+                    <span className="ml-1 text-[11px]">Menghubungkan ke NEBULA AI...</span>
                   </div>
                 </div>
               )}

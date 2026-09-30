@@ -55,10 +55,6 @@ export async function fetchKehadiranRekap(): Promise<KehadiranRekap[]> {
   const url = `${cleanBase}/api/v1/rekap`;
   const apiKey = (env.KEHADIRAN_API_KEY || env.GDS_API_KEY || "sm_default_api_key_change_me").trim();
 
-  // Bypass TLS SSL verification for local/self-signed certs
-  const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
   try {
     const res = await fetch(url, {
       headers: {
@@ -67,7 +63,6 @@ export async function fetchKehadiranRekap(): Promise<KehadiranRekap[]> {
         Authorization: `Bearer ${apiKey}`,
       },
     });
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
 
     if (!res.ok) {
       throw new Error(`Kehadiran API HTTP ${res.status} (${url})`);
@@ -75,7 +70,6 @@ export async function fetchKehadiranRekap(): Promise<KehadiranRekap[]> {
     const json = (await res.json()) as { data?: KehadiranRekap[] };
     return json.data ?? [];
   } catch (err) {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
     throw err;
   }
 }
@@ -185,10 +179,6 @@ export async function unlockStudentScoreInPasti(
   const url = `${cleanBase}/api/v1/scores/unlock`;
   const apiKey = (env.KEHADIRAN_API_KEY || env.GDS_API_KEY || "sm_default_api_key_change_me").trim();
 
-  // Bypass TLS SSL verification for local/self-signed certs
-  const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -204,11 +194,9 @@ export async function unlockStudentScoreInPasti(
         keterangan,
       }),
     });
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
     const body = (await res.json().catch(() => ({}))) as any;
     return res.ok && body.success === true;
   } catch (err) {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
     console.error(`Gagal unlock score di PASTI (${jenis} untuk ${nisn}):`, err);
     return false;
   }
