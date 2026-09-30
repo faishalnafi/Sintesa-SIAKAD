@@ -49,10 +49,6 @@ export async function fetchGdsPoints(): Promise<GdsStudentPoint[]> {
   const url = `${cleanBase}/api/v1/points`;
   const apiKey = (env.GDS_API_KEY || env.KEHADIRAN_API_KEY || "sm_default_api_key_change_me").trim();
 
-  // Bypass TLS SSL verification for local/self-signed certs
-  const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
   try {
     const res = await fetch(url, {
       headers: {
@@ -61,7 +57,6 @@ export async function fetchGdsPoints(): Promise<GdsStudentPoint[]> {
         Authorization: `Bearer ${apiKey}`,
       },
     });
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
 
     if (!res.ok) {
       throw new Error(`GDS API HTTP ${res.status} (${url})`);
@@ -69,7 +64,6 @@ export async function fetchGdsPoints(): Promise<GdsStudentPoint[]> {
     const json = (await res.json()) as { data?: GdsStudentPoint[] };
     return json.data ?? [];
   } catch (err) {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
     throw err;
   }
 }

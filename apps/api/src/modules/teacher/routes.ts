@@ -29,9 +29,6 @@ import { broadcastRealtimeEvent } from "../../services/realtime.js";
 import { askGemini } from "../../services/gemini.js";
 import { uploadFile, deleteFile, deleteFolderPrefix } from "../../services/storage/storage.service.js";
 import type { StorageProviderType } from "../../services/storage/types.js";
-
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 export const teacherRoutes = new Hono<{ Variables: AuthVariables }>();
 
 teacherRoutes.use("*", requireAuth, requireRoles("guru", "walikelas", "admin", "superadmin"));
@@ -2047,8 +2044,13 @@ teacherRoutes.post("/ai/chat", async (c) => {
    - **Kasus 2 — Menghapus Data di Tempat Sampah / Soft Delete (\`PERMANENT_DELETE_TRASH\`):**
      - **Langkah 1 (Saat pengguna baru pertama kali meminta hapus data soft delete / kosongkan Tempat Sampah):** Tampilkan daftar data di Tempat Sampah saat ini, lalu **tanyakan konfirmasi kembali dengan peringatan keras** bahwa **data di Tempat Sampah (Soft Delete) yang dihapus lagi akan hilang secara PERMANEN dari database dan TIDAK BISA DIKEMBALIKAN LAGI!**
      - **Langkah 2 (Setelah pengguna menjawab konfirmasi seperti "Ya, yakin hapus permanen"):** Sertakan blok \`PERMANENT_DELETE_TRASH\` untuk menghapusnya secara permanen.
-   - **Kasus 3 — Memulihkan Data dari Tempat Sampah (\`RESTORE_TRASH\`):**
-     - Jika diminta memulihkan (*restore*) jurnal atau nilai dari Tempat Sampah, langsung sertakan blok \`RESTORE_TRASH\` untuk mengembalikannya ke daftar aktif.`
+   - **Kasus 3 — Memulihkan Data dari Tempat Sampah (\`RESTORE_TRASH\`) & Anti-Data Tumpuk:**
+      - Sebelum memulihkan jurnal dari Tempat Sampah, sistem dan AI **WAJIB** memastikan slot kelas, tanggal, dan jam mengajar tersebut belum terisi oleh jurnal baru.
+      - 🚫 **DILARANG KERAS MENUMPUK 2 JURNAL DI KELAS & JAM YANG SAMA!** Menumpuk data akan membuat tampilan antara Guru dan Admin Monitoring Jurnal tidak sinkron.
+      - Jika slot tersebut saat ini sudah terisi jurnal baru:
+        - AI **WAJIB** memberi tahu adanya bentrokan slot secara transparan (sebutkan isi data baru yang sedang aktif vs data lama di Tempat Sampah).
+        - Tanyakan apakah pengguna ingin mempertahankan data baru atau menimpa data baru tersebut dengan data lama (balas "Ya, timpa dengan data lama").
+      - Sertakan blok \`RESTORE_TRASH\` untuk mengeksekusi pemulihan data jika slot aman/kosong atau jika pengguna mengonfirmasi untuk menimpa.`
     : `## ⚠️ ATURAN WAJIB DI SEMUA MENU (MATRIX PERSETUJUAN, INPUT NILAI, JURNAL GURU):
 1. **JIKA SUDAH DIISI OLEH GURU LAIN (BUKAN MILIK SENDIRI):**
    - **JANGAN DIRUBAH / JANGAN DIHAPUS / JANGAN DITIMPA!**
@@ -3259,13 +3261,14 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     }
 
     // =========================================================
-    // HELPER 2D (MENU TEMPAT SAMPAH / RECYCLE BIN): Restore & Hapus Permanen (Verifikasi 2 Langkah)
+    // HELPER 2D (MENU TEMPAT SAMPAH / RECYCLE BIN): Restore & Hapus Permanen (Verifikasi 2 Langkah & Anti-Data Tumpuk)
     // =========================================================
     async function executeRestoreTrash(params: {
       tipe?: string;
       tanggal?: string;
       className?: string;
-    }): Promise<{ success: boolean; message: string; data?: any }> {
+      overwrite?: boolean;
+    }): Promise<{ success: boolean; step?: string; message: string; data?: any }> {
       if (!isAdminUser) {
         return {
           success: false,
@@ -3278,27 +3281,139 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       let restoredGradesCount = 0;
       const details: string[] = [];
 
+      const userWantsOverwrite =
+        Boolean(params.overwrite) ||
+        /\b(timpa|ganti|overwrite|replace|tindih|paksa\s+timpa|iya\s+timpa|ya\s+timpa|timpa\s+dengan\s+data\s+lama)\b/i.test(
+          lastUserLower
+        );
+
       if (tipe === "JURNAL" || tipe === "SEMUA" || tipe === "ALL") {
+        const trashedConditions = [isNotNull(teacherJournals.deletedAt)];
+        if (params.tanggal && params.tanggal !== "SEMUA") {
+          trashedConditions.push(eq(teacherJournals.date, params.tanggal));
+        }
+        if (params.className && params.className !== "SEMUA") {
+          trashedConditions.push(sql`LOWER(${teacherJournals.className}) = LOWER(${params.className})`);
+        }
+
         const trashedJ = await db
-          .select()
+          .select({
+            id: teacherJournals.id,
+            date: teacherJournals.date,
+            classId: teacherJournals.classId,
+            className: teacherJournals.className,
+            teachingHourId: teacherJournals.teachingHourId,
+            teachingHourLabel: teacherJournals.teachingHourLabel,
+            subjectId: teacherJournals.subjectId,
+            subjectName: teacherJournals.subjectName,
+            materi: teacherJournals.materi,
+            teacherUserId: teacherJournals.teacherUserId,
+            groupId: teacherJournals.groupId,
+            teacherName: users.name,
+          })
           .from(teacherJournals)
-          .where(isNotNull(teacherJournals.deletedAt));
+          .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+          .where(and(...trashedConditions));
 
         if (trashedJ.length > 0) {
+          // Cek apakah ada bentrokan dengan data jurnal aktif (deletedAt IS NULL) di kelas, tanggal, dan jam yang sama!
+          const activeJournals = await db
+            .select({
+              id: teacherJournals.id,
+              date: teacherJournals.date,
+              classId: teacherJournals.classId,
+              className: teacherJournals.className,
+              teachingHourId: teacherJournals.teachingHourId,
+              teachingHourLabel: teacherJournals.teachingHourLabel,
+              subjectName: teacherJournals.subjectName,
+              materi: teacherJournals.materi,
+              status: teacherJournals.status,
+              teacherName: users.name,
+            })
+            .from(teacherJournals)
+            .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+            .where(isNull(teacherJournals.deletedAt));
+
+          // Cari irisan slot yang bentrok (lintas semua guru di kelas tersebut)
+          const conflictingActiveList: typeof activeJournals = [];
+          const conflictReports: string[] = [];
+
+          for (const tj of trashedJ) {
+            const conflict = activeJournals.find(
+              (aj) =>
+                aj.date === tj.date &&
+                ((aj.classId && tj.classId && aj.classId === tj.classId) ||
+                  (aj.className && tj.className && aj.className.toLowerCase() === tj.className.toLowerCase())) &&
+                ((aj.teachingHourId && tj.teachingHourId && aj.teachingHourId === tj.teachingHourId) ||
+                  (aj.teachingHourLabel && tj.teachingHourLabel && aj.teachingHourLabel === tj.teachingHourLabel))
+            );
+
+            if (conflict && !conflictingActiveList.some((c) => c.id === conflict.id)) {
+              conflictingActiveList.push(conflict);
+              conflictReports.push(
+                `- ⚠️ **Slot Bentrok:** Kelas **${conflict.className}** | Tanggal **${conflict.date}** | **${conflict.teachingHourLabel || "Jam Mengajar"}**\n` +
+                `  - 🆕 **Data Baru yang Aktif Saat Ini:** Mapel **${conflict.subjectName || "-"}** oleh Guru **${conflict.teacherName || "-"}** — Materi: *"${conflict.materi || "-"}"* (Status: \`${conflict.status}\`)\n` +
+                `  - 📦 **Data Lama di Tempat Sampah:** Mapel **${tj.subjectName || "-"}** oleh Guru **${tj.teacherName || "-"}** — Materi: *"${tj.materi || "-"}"*`
+              );
+            }
+          }
+
+          // JIKA ADA BENTROKAN DAN PENGGUNA BELUM MEMINTA TIMPA (OVERWRITE):
+          if (conflictingActiveList.length > 0 && !userWantsOverwrite) {
+            return {
+              success: false,
+              step: "conflict_detected",
+              message:
+                `⚠️ **PERINGATAN: Bentrokan Data Terdeteksi (Data Tumpuk di Slot yang Sama)!**\n` +
+                `Data dari Tempat Sampah tidak dapat langsung dipulihkan begitu saja, karena slot kelas & jam mengajar tersebut **saat ini sudah terisi oleh jurnal baru**:\n\n` +
+                `${conflictReports.join("\n\n")}\n\n` +
+                `❌ **Risiko:** Jika data lama dipulihkan secara paksa, jadwal akan menumpuk dan menyebabkan tampilan antara **Guru** dan **Monitoring Jurnal Admin** menjadi cacat/tidak sinkron!\n\n` +
+                `👉 **Pilihan Solusi:**\n` +
+                `1. **Pertahankan Data Baru:** Batalkan pemulihan, biarkan data baru tetap aktif dan data lama tetap berada di Tempat Sampah.\n` +
+                `2. **Timpa dengan Data Lama:** Balas **"Ya, timpa dengan data lama"** agar data baru dipindahkan ke Tempat Sampah (*soft-delete*) dan data lama diaktifkan kembali.`,
+              data: {
+                conflicts: conflictReports,
+                trashedCount: trashedJ.length,
+              },
+            };
+          }
+
+          // JIKA USER MEMINTA TIMPA (OVERWRITE):
+          if (conflictingActiveList.length > 0 && userWantsOverwrite) {
+            const conflictIds = conflictingActiveList.map((c) => c.id);
+            await db
+              .update(teacherJournals)
+              .set({ deletedAt: new Date(), updatedAt: new Date() })
+              .where(inArray(teacherJournals.id, conflictIds));
+            details.push(
+              `- 🔄 **Data Baru yang Menempati Slot Dipindahkan ke Tempat Sampah (${conflictingActiveList.length} entri):** Mencegah data tumpuk/bentrok.`
+            );
+          }
+
+          // Eksekusi pemulihan data lama dari tempat sampah
           const ids = trashedJ.map((j) => j.id);
           await db
             .update(teacherJournals)
             .set({ deletedAt: null, updatedAt: new Date() })
             .where(inArray(teacherJournals.id, ids));
           restoredJournalsCount = trashedJ.length;
-          details.push(`- **Jurnal Mengajar Dipulihkan:** **${restoredJournalsCount} jam pelajaran** kembali aktif di menu Jurnal Guru & Monitoring Jurnal.`);
+          details.push(
+            `- ✅ **Jurnal Mengajar Lama Dipulihkan:** **${restoredJournalsCount} jam pelajaran** kembali aktif di menu Jurnal Guru & Monitoring Jurnal.`
+          );
           broadcastRealtimeEvent({ type: "journal_saved", actorId: user.id });
         }
       }
 
       if (tipe === "NILAI" || tipe === "GRADE" || tipe === "SEMUA" || tipe === "ALL") {
         const trashedG = await db
-          .select()
+          .select({
+            id: grades.id,
+            studentId: grades.studentId,
+            classId: grades.classId,
+            subjectId: grades.subjectId,
+            academicYear: grades.academicYear,
+            semester: grades.semester,
+          })
           .from(grades)
           .where(isNotNull(grades.deletedAt));
 
@@ -3323,7 +3438,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
       return {
         success: true,
-        message: `♻️ **Data Berhasil Dipulihkan (Restore) dari Tempat Sampah (\`/admin/trash\`)**\n${details.join("\n")}\n- ✨ **Status Saat Ini:** **Aktif Kembali**`,
+        message: `♻️ **Data Berhasil Dipulihkan (Restore) dari Tempat Sampah (\`/admin/trash\`)**\n${details.join("\n")}\n- ✨ **Status Saat Ini:** **Aktif Kembali (Sinkron & Tanpa Bentrokan)**`,
         data: { restoredJournalsCount, restoredGradesCount },
       };
     }

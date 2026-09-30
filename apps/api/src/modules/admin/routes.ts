@@ -3186,33 +3186,67 @@ adminRoutes.post("/trash/journals/:id/restore", requireRoles("superadmin"), asyn
       return c.json({ success: false, message: "Jurnal tidak ditemukan di tempat sampah" }, 404);
     }
 
-    // 1. Cek bentrokan dengan data jurnal aktif (deletedAt IS NULL) pada tanggal & jam mengajar yang sama
-    const activeConditions = [
-      eq(teacherJournals.teacherUserId, journal.teacherUserId),
-      eq(teacherJournals.date, journal.date),
-      isNull(teacherJournals.deletedAt),
-    ];
-    if (journal.teachingHourId) {
-      activeConditions.push(eq(teacherJournals.teachingHourId, journal.teachingHourId));
+    // 1. Ambil seluruh jam dalam satu paket (groupId jika ada, atau single id)
+    const packageItems = journal.groupId
+      ? await db
+          .select()
+          .from(teacherJournals)
+          .where(and(eq(teacherJournals.groupId, journal.groupId), isNotNull(teacherJournals.deletedAt)))
+      : [journal];
+
+    const packageHourIds = packageItems
+      .map((p) => p.teachingHourId)
+      .filter((hid): hid is string => Boolean(hid));
+
+    // 2. Cek bentrokan slot di kelas dan tanggal yang sama pada jam-jam tersebut (lintas semua guru!)
+    const activeClassConditions = [];
+    if (journal.classId) {
+      activeClassConditions.push(eq(teacherJournals.classId, journal.classId));
+    }
+    if (journal.className) {
+      activeClassConditions.push(eq(teacherJournals.className, journal.className));
     }
 
     const activeConflicts = await db
-      .select()
+      .select({
+        id: teacherJournals.id,
+        date: teacherJournals.date,
+        className: teacherJournals.className,
+        subjectName: teacherJournals.subjectName,
+        teachingHourLabel: teacherJournals.teachingHourLabel,
+        materi: teacherJournals.materi,
+        teacherName: users.name,
+      })
       .from(teacherJournals)
-      .where(and(...activeConditions));
+      .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+      .where(
+        and(
+          eq(teacherJournals.date, journal.date),
+          activeClassConditions.length > 0 ? or(...activeClassConditions) : sql`true`,
+          packageHourIds.length > 0
+            ? inArray(teacherJournals.teachingHourId, packageHourIds)
+            : journal.teachingHourId
+            ? eq(teacherJournals.teachingHourId, journal.teachingHourId)
+            : sql`true`,
+          isNull(teacherJournals.deletedAt)
+        )
+      );
 
     if (activeConflicts.length > 0 && !overwrite) {
+      const conflictDetails = activeConflicts
+        .map((ac) => `Jam ${ac.teachingHourLabel || "-"}: Mapel ${ac.subjectName || "-"} oleh ${ac.teacherName || "-"} ("${ac.materi || "-"}")`)
+        .join("; ");
       return c.json(
         {
           success: false,
           conflict: true,
-          message: "Sudah terdapat data jurnal baru yang diisi oleh guru pada tanggal & jam mengajar ini.",
+          message: `Sudah terdapat data jurnal baru yang aktif di kelas ini pada tanggal & jam mengajar yang sama: ${conflictDetails}`,
         },
         409
       );
     }
 
-    // 2. Jika overwrite = true, soft delete data baru yang bentrok
+    // 3. Jika overwrite = true, soft delete data baru yang bentrok agar tidak terjadi data tumpuk/desync
     if (activeConflicts.length > 0 && overwrite) {
       const conflictIds = activeConflicts.map((ac) => ac.id);
       await db
@@ -3221,7 +3255,7 @@ adminRoutes.post("/trash/journals/:id/restore", requireRoles("superadmin"), asyn
         .where(inArray(teacherJournals.id, conflictIds));
     }
 
-    // 3. Pulihkan data lama dari tempat sampah
+    // 4. Pulihkan data lama dari tempat sampah
     if (journal.groupId) {
       await db
         .update(teacherJournals)
