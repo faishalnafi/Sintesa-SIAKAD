@@ -590,6 +590,7 @@ export interface Message {
 
 export interface ChatSession {
   id: string;
+  userId?: string;
   title: string;
   updatedAt: string;
   isPinned?: boolean;
@@ -598,35 +599,47 @@ export interface ChatSession {
 
 const INITIAL_SESSIONS: ChatSession[] = [];
 
+function getUserStorageKey(userId?: string | null): string | null {
+  return userId ? `simak_ai_sessions_v2_${userId}` : null;
+}
+
+function loadUserSessionsFromLocal(userId?: string | null): ChatSession[] {
+  try {
+    // Purge legacy un-scoped global key so sessions never leak across user accounts
+    localStorage.removeItem("simak_ai_sessions");
+    const key = getUserStorageKey(userId);
+    if (!key || !userId) return INITIAL_SESSIONS;
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (s: any) =>
+            s?.userId === userId &&
+            !["session-1", "session-2", "session-3"].includes(s?.id) &&
+            s?.title !== "Percakapan Baru" &&
+            Array.isArray(s?.messages) &&
+            s.messages.some(
+              (m: any) =>
+                m?.sender === "assistant" && !String(m?.text || "").startsWith("⚠️")
+            )
+        );
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  return INITIAL_SESSIONS;
+}
+
 export function GuruAiChatPage() {
   const { user } = useAuthStore();
   const fileInputId = useId();
 
-  // Sessions state (only keep sessions that have received a valid AI response)
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    try {
-      const saved = localStorage.getItem("simak_ai_sessions");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter(
-            (s: any) =>
-              !["session-1", "session-2", "session-3"].includes(s?.id) &&
-              s?.title !== "Percakapan Baru" &&
-              Array.isArray(s?.messages) &&
-              s.messages.some(
-                (m: any) =>
-                  m?.sender === "assistant" && !String(m?.text || "").startsWith("⚠️")
-              )
-          );
-          return cleaned;
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return INITIAL_SESSIONS;
-  });
+  // Sessions state strictly scoped to the currently logged-in user.id
+  const [sessions, setSessions] = useState<ChatSession[]>(() =>
+    loadUserSessionsFromLocal(user?.id)
+  );
 
   // Always open on a fresh "new" chat screen without creating a sidebar room yet
   const [activeSessionId, setActiveSessionId] = useState<string>("new");
@@ -655,12 +668,15 @@ export function GuruAiChatPage() {
   const dragCounterRef = useRef<number>(0);
   const draftSessionIdRef = useRef<string>(`session-${Date.now()}`);
 
-  // Helper to persist a session to backend DB
+  // Helper to persist a session to backend DB (strictly bound to current user)
   const syncSessionToServer = (session: ChatSession) => {
+    if (!user?.id) return;
+    if (session.userId && session.userId !== user.id) return;
     api("/teacher/ai/sessions", {
       method: "POST",
       body: JSON.stringify({
         id: session.id,
+        userId: user.id,
         title: session.title,
         messages: session.messages,
       }),
@@ -669,30 +685,53 @@ export function GuruAiChatPage() {
     });
   };
 
-  // Load saved sessions from backend DB on mount and merge with localStorage
+  // Reload sessions whenever the logged-in user changes (prevents cross-user session leak)
   useEffect(() => {
+    const currentUserId = user?.id;
+    setActiveSessionId("new");
+    setPendingMessages([]);
+    setAttachedFiles([]);
+    setInputText("");
+    draftSessionIdRef.current = `session-${Date.now()}`;
+
+    if (!currentUserId) {
+      setSessions([]);
+      return;
+    }
+
+    const localForUser = loadUserSessionsFromLocal(currentUserId);
+    setSessions(localForUser);
+
+    let cancelled = false;
     api<ChatSession[]>("/teacher/ai/sessions")
       .then((res) => {
-        if (Array.isArray(res.data) && res.data.length > 0) {
-          setSessions((prev) => {
-            const byId = new Map<string, ChatSession>();
-            for (const s of res.data!) {
-              byId.set(s.id, s);
+        if (cancelled) return;
+        if (Array.isArray(res.data)) {
+          const serverSessions = res.data
+            .filter((s) => !s.userId || s.userId === currentUserId)
+            .map((s) => ({ ...s, userId: currentUserId }));
+
+          const byId = new Map<string, ChatSession>();
+          for (const s of serverSessions) {
+            byId.set(s.id, s);
+          }
+          for (const localS of localForUser) {
+            if (localS.userId === currentUserId && !byId.has(localS.id)) {
+              byId.set(localS.id, localS);
+              syncSessionToServer(localS);
             }
-            for (const localS of prev) {
-              if (!byId.has(localS.id)) {
-                byId.set(localS.id, localS);
-                syncSessionToServer(localS);
-              }
-            }
-            return Array.from(byId.values());
-          });
+          }
+          setSessions(Array.from(byId.values()));
         }
       })
       .catch(() => {
         // Ignore offline/initial fetch error
       });
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (renamingSessionId) {
@@ -719,28 +758,33 @@ export function GuruAiChatPage() {
     };
   }, []);
 
-  // Sync sessions to localStorage safely (strip heavy base64 dataUrl to avoid QuotaExceededError)
+  // Sync sessions to user-scoped localStorage safely (strip heavy base64 dataUrl to avoid QuotaExceededError)
   useEffect(() => {
     try {
-      const lightSessions = sessions.map((s) => ({
-        ...s,
-        messages: s.messages.map((m) => ({
-          ...m,
-          attachments: m.attachments?.map((att) => ({
-            ...att,
-            previewUrl: att.storageUrl || att.previewUrl,
-            dataUrl:
-              !att.storageUrl && att.dataUrl && att.dataUrl.length < 200_000
-                ? att.dataUrl
-                : undefined,
+      const storageKey = getUserStorageKey(user?.id);
+      if (!storageKey || !user?.id) return;
+      const lightSessions = sessions
+        .filter((s) => !s.userId || s.userId === user.id)
+        .map((s) => ({
+          ...s,
+          userId: user.id,
+          messages: s.messages.map((m) => ({
+            ...m,
+            attachments: m.attachments?.map((att) => ({
+              ...att,
+              previewUrl: att.storageUrl || att.previewUrl,
+              dataUrl:
+                !att.storageUrl && att.dataUrl && att.dataUrl.length < 200_000
+                  ? att.dataUrl
+                  : undefined,
+            })),
           })),
-        })),
-      }));
-      localStorage.setItem("simak_ai_sessions", JSON.stringify(lightSessions));
+        }));
+      localStorage.setItem(storageKey, JSON.stringify(lightSessions));
     } catch (e) {
       console.warn("Gagal menyimpan riwayat chat ke localStorage:", e);
     }
-  }, [sessions]);
+  }, [sessions, user?.id]);
 
   const activeSession =
     activeSessionId === "new"
@@ -1281,6 +1325,7 @@ export function GuruAiChatPage() {
           const enrichedPending = nextPending.map(applyStoredFiles);
           const newSession: ChatSession = {
             id: createdSessionId,
+            userId: user?.id,
             title: newTitle,
             updatedAt: "Baru saja",
             messages: [...enrichedPending, aiResponse],
@@ -1296,6 +1341,7 @@ export function GuruAiChatPage() {
               if (s.id === existingSessionId) {
                 const updatedSession: ChatSession = {
                   ...s,
+                  userId: user?.id,
                   updatedAt: "Baru saja",
                   messages: [...s.messages.map(applyStoredFiles), aiResponse],
                 };

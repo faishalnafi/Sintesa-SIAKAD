@@ -1324,14 +1324,68 @@ teacherRoutes.get("/ai/sessions", async (c) => {
   const user = c.get("user");
   try {
     const res = await db.execute(sql`
-      SELECT id, title, messages, updated_at
+      SELECT id, user_id, title, messages, updated_at
       FROM ai_chat_sessions
       WHERE user_id = ${user.id}
       ORDER BY updated_at DESC
     `);
-    const rows = (res as any).rows || res || [];
-    const formatted = rows.map((r: any) => ({
+    const rows = ((res as any).rows || res || []) as Array<any>;
+
+    // Pastikan jika ada sesi lama yang sempat ter-sync dari localStorage lintas-akun,
+    // dicek apakah sapaan AI di dalamnya menyebut nama guru lain (bukan user yang sedang login).
+    const currentFirstName = (user.name || "").trim().split(/\s+/)[0]?.toLowerCase() || "";
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users);
+
+    const validRows: Array<any> = [];
+    for (const r of rows) {
+      const msgs = Array.isArray(r.messages) ? r.messages : [];
+      const assistantTexts = msgs
+        .filter((m: any) => m?.sender === "assistant" && typeof m?.text === "string")
+        .map((m: any) => m.text as string)
+        .join("\n");
+
+      let leakedOwnerId: string | null = null;
+      if (assistantTexts && currentFirstName) {
+        const greetMatch = assistantTexts.match(/\b(?:Pak|Bu|Bapak\/Ibu|Bapak|Ibu)\s+([A-Z][a-zA-Z']+)/);
+        if (greetMatch && greetMatch[1]) {
+          const greetedName = greetMatch[1].toLowerCase();
+          if (
+            greetedName !== currentFirstName &&
+            !(user.name || "").toLowerCase().includes(greetedName)
+          ) {
+            const matchedOwner = allUsers.find(
+              (u) =>
+                u.id !== user.id &&
+                (u.name || "").toLowerCase().split(/\s+/)[0] === greetedName
+            );
+            if (matchedOwner) {
+              leakedOwnerId = matchedOwner.id;
+            }
+          }
+        }
+      }
+
+      if (leakedOwnerId) {
+        // Kembalikan kepemilikan roomchat ke user aslinya di database
+        await db.execute(sql`
+          UPDATE ai_chat_sessions
+          SET user_id = ${leakedOwnerId}
+          WHERE id = ${r.id} AND user_id = ${user.id}
+        `);
+        await db.execute(sql`
+          UPDATE ai_chat_files
+          SET user_id = ${leakedOwnerId}
+          WHERE session_id = ${r.id} AND user_id = ${user.id}
+        `);
+        continue;
+      }
+
+      validRows.push(r);
+    }
+
+    const formatted = validRows.map((r: any) => ({
       id: r.id,
+      userId: user.id,
       title: r.title,
       updatedAt: r.updated_at ? new Date(r.updated_at).toLocaleString("id-ID") : "Baru saja",
       messages: Array.isArray(r.messages) ? r.messages : [],
@@ -1346,14 +1400,18 @@ teacherRoutes.get("/ai/sessions", async (c) => {
 /**
  * POST /api/teacher/ai/sessions
  * Menyimpan/memperbarui sesi roomchat ke database agar riwayat pesan & file permanen
+ * dan terikat ketat dengan user_id masing-masing pengguna.
  */
 teacherRoutes.post("/ai/sessions", async (c) => {
   const user = c.get("user");
   try {
     const body = await c.req.json();
-    const { id, title, messages = [] } = body;
+    const { id, userId, title, messages = [] } = body;
     if (!id) {
       return c.json({ success: false, message: "Session ID wajib diisi" }, 400);
+    }
+    if (userId && userId !== user.id) {
+      return c.json({ success: false, message: "Sesi ini milik pengguna lain" }, 403);
     }
 
     // Simpan metadata lampiran dengan URL permanen tanpa membebani DB dengan raw base64 besar
@@ -1822,16 +1880,45 @@ teacherRoutes.post("/ai/chat", async (c) => {
     year: "numeric",
   });
 
+  const isAdminUser = user.roles.includes("admin") || user.roles.includes("superadmin");
+  const isSuperadmin = user.roles.includes("superadmin");
+  const roleAuthorityLabel = isSuperadmin
+    ? "SUPERADMIN (Otoritas Penuh Seluruh Sistem SIMAK)"
+    : isAdminUser
+      ? "ADMIN (Otoritas Manajemen Akademik)"
+      : `GURU / WALI KELAS (${user.roles.join(", ")})`;
+
+  const roleSpecificRulesText = isAdminUser
+    ? `## 👑 OTORITAS KHUSUS ROLE ANDA SAAT INI: ${roleAuthorityLabel}
+1. **HAK AKSES PENUH LINTAS GURU & KELAS (SESUAI OTORITAS SISTEM):**
+   - Karena ${ctx.honorific} ${user.name} login sebagai **${isSuperadmin ? "Superadmin" : "Admin"}**, Anda **DIIZINKAN SEPENUHNYA** untuk membuat, mengubah, menimpa (ke draft), membuka kunci (\`sent\`/\`submitted\`/\`approved\` ➔ \`draft\`), maupun **menghapus (soft-delete ke Tempat Sampah)** Jurnal Mengajar, Nilai Siswa, dan Matrix Persetujuan milik **GURU MANA PUN** dan di **KELAS MANA PUN**!
+   - **DILARANG** menolak permintaan ${ctx.honorific} ${user.name} dengan alasan "tidak memiliki otoritas terhadap data guru lain".
+2. **WAJIB AUTO-EXECUTE & LAPORKAN RINCIAN (BEFORE → AFTER):**
+   - Setiap kali diminta mengubah/menimpa nilai, jurnal, atau matrix (meskipun sebelumnya diisi oleh guru lain atau sudah berstatus terkirim), **WAJIB** sertakan blok \`\`\`action ...\`\`\` agar langsung tersimpan sebagai **draft** di database, dan informasikan **Data Sebelumnya (termasuk Nama Guru Pengisi Sebelumnya & Isi Lama)** serta **Diganti Menjadi Apa**.
+   - Setiap kali diminta **menghapus jurnal mengajar** (baik satu kelas maupun semua jurnal pada tanggal tertentu tanpa terkecuali), **WAJIB** sertakan blok \`\`\`action\\nDELETE_JOURNAL...\`\`\` tepat di baris pertama agar sistem langsung menghapusnya (soft-delete ke Tempat Sampah) dan melaporkan daftar jurnal yang berhasil dihapus!`
+    : `## ⚠️ ATURAN WAJIB DI SEMUA 3 MENU (MATRIX PERSETUJUAN, INPUT NILAI, JURNAL GURU):
+1. **JIKA SUDAH DIISI OLEH GURU LAIN (BUKAN MILIK SENDIRI):**
+   - **JANGAN DIRUBAH / JANGAN DIHAPUS / JANGAN DITIMPA!**
+   - Informasikan secara jelas kepada ${ctx.honorific} ${user.name.split(" ")[0]} bahwa data tersebut sudah diisi/diampu oleh **Guru Lain** (sebutkan nama gurunya, mapelnya, dan isi data yang sudah tercatat).
+2. **JIKA MILIK DIRI SENDIRI & SEBELUMNYA SUDAH ADA ISINYA (STATUS DRAFT):**
+   - **WAJIB AUTO-SAVE DRAFT!** Tetap sertakan blok \`\`\`action ...\`\`\` agar sistem langsung memperbarui draft di database secara otomatis tanpa perlu menunda.
+   - **WAJIB BERIKAN INFORMASI PERBANDINGAN (BEFORE → AFTER):** Jelaskan secara transparan bahwa slot/data tersebut sebelumnya sudah ada isinya, sebutkan **Data Sebelumnya terisi apa**, dan **Diganti Menjadi apa** sesuai permintaan terbaru!
+3. **JIKA MILIK DIRI SENDIRI TETAPI SUDAH TERKUNCI (\`sent\` / \`submitted\` / \`approved\`):**
+   - **JANGAN DIRUBAH / JANGAN DIHAPUS!** Informasikan isi data sebelumnya dan jelaskan bahwa statusnya sudah terkunci (arahkan ke Wali Kelas untuk buka kunci ke Draft di Matrix Persetujuan atau hubungi Admin).
+4. **JIKA BELUM ADA ISINYA (DATA BARU):**
+   - **WAJIB AUTO-SAVE DRAFT!** Sertakan blok \`\`\`action ...\`\`\` agar langsung tersimpan sebagai **draft** di database.`;
+
   const systemInstruction = `Anda adalah Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA).
 
 ## 🗓️ INFORMASI WAKTU SERVER SAAT INI (WAJIB DIGUNAKAN)
 - **Hari & Tanggal Hari Ini:** ${todayReadable}
 - **Format Tanggal ISO Hari Ini (YYYY-MM-DD):** \`${todayIso}\`
-- ⚠️ **PENTING:** Setiap kali pengguna menyebut "hari ini", "sekarang", atau tidak menyebutkan tanggal spesifik saat mencatat jurnal mengajar, Anda **WAJIB** menggunakan tanggal **\`${todayIso}\`** (${todayReadable}). **DILARANG KERAS** menebak atau mengarang tahun 2024/2025 atau tanggal lain!
+- ⚠️ **PENTING:** Setiap kali pengguna menyebut "hari ini", "sekarang", atau tidak menyebutkan tanggal spesifik saat mencatat/menghapus jurnal mengajar, Anda **WAJIB** menggunakan tanggal **\`${todayIso}\`** (${todayReadable}). **DILARANG KERAS** menebak atau mengarang tahun 2024/2025 atau tanggal lain!
 
 ## Identitas Pengguna yang Sedang Login
 - Nama Lengkap: ${user.name}
 - User ID: ${user.id}
+- Role & Otoritas Sistem: **${roleAuthorityLabel}**
 - Sapaan: ${ctx.honorific} ${user.name} (jenis kelamin: ${ctx.genderLabel}) — WAJIB konsisten menggunakan "${ctx.honorific}"
 - NIP: ${ctx.teacher?.nip || "Tidak tercatat"}
 - Mata Pelajaran Resmi yang Diampu: ${ctx.subjectNames}
@@ -1868,29 +1955,19 @@ ${teachingHoursText}
 |---|---|---|---|---|---|---|
 ${recentJournalsText}
 
-## 🚫 Slot Jurnal Mengajar yang Sudah Diisi oleh Guru Lain
+## 📋 Slot Jurnal Mengajar yang Diisi oleh Guru Lain
 | Tanggal | Kelas | Jam Mengajar | Diisi Oleh Guru | Mapel | Materi | Status |
 |---|---|---|---|---|---|---|
 ${otherTeachersJournalsText}
 
 ## 🗺️ 3 Menu Utama Guru & Wali Kelas di SIMAK
-1. **Matrix Persetujuan** (\`/walikelas\`) — Persetujuan raport & koreksi ulang nilai oleh Wali Kelas.
-2. **Input Nilai** (\`/guru\`) — Pengisian nilai komponen siswa (\`UH1, T1, STS, UH2, T2\`) oleh Guru Mapel.
-3. **Jurnal Guru** (\`/guru/jurnal\`) — Pencatatan jurnal mengajar harian per kelas & jam pelajaran.
+1. **Matrix Persetujuan** (\`/walikelas\`) — Persetujuan raport & koreksi ulang nilai oleh Wali Kelas / Superadmin.
+2. **Input Nilai** (\`/guru\`) — Pengisian nilai komponen siswa (\`UH1, T1, STS, UH2, T2\`) oleh Guru Mapel / Superadmin.
+3. **Jurnal Guru** (\`/guru/jurnal\`) — Pencatatan & pengelolaan jurnal mengajar harian per kelas & jam pelajaran.
 
-## ⚠️ ATURAN WAJIB DI SEMUA 3 MENU (MATRIX PERSETUJUAN, INPUT NILAI, JURNAL GURU):
-1. **JIKA SUDAH DIISI OLEH GURU LAIN (BUKAN MILIK SENDIRI):**
-   - **JANGAN DIRUBAH / JANGAN DITIMPA!**
-   - Informasikan secara jelas kepada ${ctx.honorific} ${user.name.split(" ")[0]} bahwa data tersebut sudah diisi/diampu oleh **Guru Lain** (sebutkan nama gurunya, mapelnya, dan isi data yang sudah tercatat).
-2. **JIKA MILIK DIRI SENDIRI & SEBELUMNYA SUDAH ADA ISINYA (STATUS DRAFT):**
-   - **WAJIB AUTO-SAVE DRAFT!** Tetap sertakan blok \`\`\`action ...\`\`\` agar sistem langsung memperbarui draft di database secara otomatis tanpa perlu menunda.
-   - **WAJIB BERIKAN INFORMASI PERBANDINGAN (BEFORE → AFTER):** Jelaskan secara transparan bahwa slot/data tersebut sebelumnya sudah ada isinya, sebutkan **Data Sebelumnya terisi apa**, dan **Diganti Menjadi apa** sesuai permintaan terbaru!
-3. **JIKA MILIK DIRI SENDIRI TETAPI SUDAH TERKUNCI (\`sent\` / \`submitted\` / \`approved\`):**
-   - **JANGAN DIRUBAH!** Informasikan isi data sebelumnya dan jelaskan bahwa statusnya sudah terkunci (arahkan ke Wali Kelas untuk buka kunci ke Draft di Matrix Persetujuan atau hubungi Admin).
-4. **JIKA BELUM ADA ISINYA (DATA BARU):**
-   - **WAJIB AUTO-SAVE DRAFT!** Sertakan blok \`\`\`action ...\`\`\` agar langsung tersimpan sebagai **draft** di database.
+${roleSpecificRulesText}
 
-## 🔍 FORMAT ACTION BLOCK UNTUK 3 MENU (AUTO-SAVE DRAFT)
+## 🔍 FORMAT ACTION BLOCK UNTUK EKSEKUSI DATABASE (WAJIB SERTAKAN BLOK INI)
 
 ### A. Menu 2: Input Nilai (\`SAVE_GRADE_DRAFT\`)
 - Jika identitas siswa tunggal & data lengkap, buat ACTION BLOCK:
@@ -1907,8 +1984,8 @@ ${otherTeachersJournalsText}
   \`\`\`
 - Jika siswa ambigu (lebih dari 1 nama cocok), tanyakan konfirmasi NIS/Kelas terlebih dahulu.
 
-### B. Menu 3: Jurnal Guru (\`SAVE_JOURNAL_DRAFT\`)
-- Jika kelas, mapel, jam, materi, dan presensi sudah disebutkan (dan slot tidak diisi oleh guru lain), **WAJIB** buat ACTION BLOCK tepat di baris pertama (baik untuk jurnal baru maupun mengganti draft milik sendiri):
+### B. Menu 3: Simpan / Ubah Jurnal Guru (\`SAVE_JOURNAL_DRAFT\`)
+- Jika kelas, mapel, jam, materi, dan presensi sudah disebutkan, **WAJIB** buat ACTION BLOCK tepat di baris pertama:
   \`\`\`action
   SAVE_JOURNAL_DRAFT
   tanggal: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
@@ -1920,7 +1997,17 @@ ${otherTeachersJournalsText}
   presensi: <Informasi kehadiran siswa>
   \`\`\`
 
-### C. Menu 1: Matrix Persetujuan (\`SAVE_MATRIX_DRAFT\`)
+### C. Menu 3: Hapus Jurnal Mengajar (\`DELETE_JOURNAL\`)
+- Ketika pengguna meminta **menghapus jurnal mengajar** (baik untuk kelas/jam tertentu maupun **semua jurnal** pada tanggal tersebut):
+  \`\`\`action
+  DELETE_JOURNAL
+  tanggal: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
+  kelas: <Nama Kelas seperti X-1, atau "SEMUA" jika menghapus semua kelas>
+  jam_awal_id: <Angka urutan jam / UUID, atau "SEMUA" jika semua jam>
+  jam_akhir_id: <Angka urutan jam / UUID, atau "SEMUA" jika semua jam>
+  \`\`\`
+
+### D. Menu 1: Matrix Persetujuan (\`SAVE_MATRIX_DRAFT\`)
 - Ketika pengguna meminta mengubah status nilai siswa/kelas di **Matrix Persetujuan** kembali ke **Draft** (koreksi ulang / revisi catatan matrix):
   \`\`\`action
   SAVE_MATRIX_DRAFT
@@ -1931,8 +2018,8 @@ ${otherTeachersJournalsText}
   \`\`\`
 
 ## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE
-- **JANGAN PERNAH** mengklaim data tersimpan tanpa menyertakan blok \`\`\`action ...\`\`\`.
-- **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai atau gambar tabel nilai untuk mapel yang diampunya (${ctx.subjectNames}), **WAJIB proses/simpan nilainya** menggunakan \`SAVE_GRADE_DRAFT\`.
+- **JANGAN PERNAH** mengklaim data tersimpan/terhapus tanpa menyertakan blok \`\`\`action ...\`\`\`.
+- **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai atau gambar tabel nilai, **WAJIB proses/simpan nilainya** menggunakan \`SAVE_GRADE_DRAFT\`.
 
 ## 👤 Daftar Admin Aktif SIMAK
 ${adminList}

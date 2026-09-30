@@ -71,6 +71,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await api("/auth/logout", { method: "POST" });
     } finally {
+      try {
+        localStorage.removeItem("simak_ai_sessions");
+      } catch {
+        // ignore storage errors
+      }
       set({ user: null });
     }
   },
