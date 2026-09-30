@@ -1,18 +1,20 @@
 {
-  "version": "1.5.0",
-  "version_code": 150,
-  "db_version": "1.0.0",
-  "title": "SIAKAD v1.5.0 — Redesain Halaman Login Split-Screen & Responsif",
-  "release_date": "2026-08-28",
-  "force_update": false,
-  "changelog": [
-    "Redesain Halaman Login (Split-Screen): Tampilan masuk kini menyerupai Cloudflare dengan panel form di kiri dan panel hero branding biru akademis premium di kanan",
-    "Responsivitas Penuh: Tampilan adaptif di semua ukuran layar (Mobile, Tablet, Desktop) dengan auto-collapsing panel hero di perangkat mobile/tablet",
-    "UI Glassmorphism: Ditambahkan ornamen visual grid futuristik, ambient glow, serta panel mockup real-time status Poin GDS dan Presensi BK"
-  ],
-  "min_supported_version": "1.0.0",
-  "schema_changes": [
-    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
-    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
-  ]
+    "version":  "1.5.3",
+    "version_code":  153,
+    "db_version":  "1.0.0",
+    "title":  "SIAKAD v1.5.3 — Impor Nilai Excel, Simpan Draft \u0026 Perbaikan Sidebar",
+    "release_date":  "2026-09-30",
+    "force_update":  false,
+    "changelog":  [
+                      "Fitur Baru: Unduh \u0026 Unggah Template Nilai Excel (.xlsx) untuk Guru lengkap dengan validasi pengampu \u0026 tanda tangan digital sheet",
+                      "UX Unggah Nilai: Animasi loading saat impor Excel serta popup konfirmasi jumlah siswa berhasil diimpor dengan pengingat Simpan Draft",
+                      "Perbaikan: Tombol Simpan Draft nilai guru kini berfungsi normal untuk nilai kosong (null) maupun pembaruan nilai existing",
+                      "Perbaikan UI: Tombol Keluar (Logout) dan tooltip menu saat sidebar diminimize kini tampil rapi dan presisi",
+                      "Optimasi: Kecepatan dan keandalan koneksi SSO Kredensia ditingkatkan dengan paralelisasi update database \u0026 timeout eksplisit"
+                  ],
+    "min_supported_version":  "1.0.0",
+    "schema_changes":  [
+                           "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
+                           "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
+                       ]
 }
