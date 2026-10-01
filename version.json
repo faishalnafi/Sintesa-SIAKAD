@@ -1,8 +1,8 @@
 {
-    "version":  "1.6.0",
-    "version_code":  160,
-    "db_version":  "1.0.0",
-    "title":  "SIAKAD v1.6.0 — Menu Pusat Unduhan \u0026 Perbaikan Fitur Nilai",
+    "version":  "01.06.00",
+    "version_code":  10600,
+    "db_version":  "01.00.00",
+    "title":  "SIAKAD v01.06.00 — Menu Pusat Unduhan \u0026 Perbaikan Fitur Nilai",
     "release_date":  "2026-10-02",
     "force_update":  false,
     "changelog":  [
@@ -12,7 +12,7 @@
                       "Perbaikan: Tombol Simpan Draft nilai guru kini berfungsi normal untuk nilai kosong (null) maupun pembaruan nilai existing",
                       "Perbaikan UI: Tombol Keluar (Logout) dan tooltip menu saat sidebar diminimize kini tampil rapi dan presisi"
                   ],
-    "min_supported_version":  "1.0.0",
+    "min_supported_version":  "01.00.00",
     "schema_changes":  [
                            "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
                            "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
