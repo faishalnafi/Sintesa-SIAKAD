@@ -24,6 +24,7 @@ const NAV_MANAJEMEN_AKADEMIK: NavItem[] = [
   { to: "/admin/classes", label: "Data Rombel", icon: "class" },
   { to: "/admin/subjects", label: "Mapel & Penugasan", icon: "menu_book" },
   { to: "/admin/monitoring-jurnal", label: "Monitoring Jurnal", icon: "analytics" },
+  { to: "/admin/downloads", label: "Pusat Unduhan", icon: "folder_open" },
 ];
 
 const NAV_PEMBELAJARAN_KELAS: NavItem[] = [
@@ -38,9 +39,15 @@ const NAV_PENGATURAN_SUPERADMIN: NavItem[] = [
   { to: "/admin/trash", label: "Tempat Sampah", icon: "delete_sweep" },
 ];
 
+const NAV_GURU_ADMIN: NavItem[] = [
+  { to: "/guru", label: "Input Nilai", icon: "grade" },
+  { to: "/guru/jurnal", label: "Jurnal Guru", icon: "auto_stories" },
+];
+
 const NAV_GURU: NavItem[] = [
   { to: "/guru", label: "Input Nilai", icon: "grade" },
   { to: "/guru/jurnal", label: "Jurnal Guru", icon: "auto_stories" },
+  { to: "/guru/downloads", label: "Pusat Unduhan", icon: "folder_open" },
 ];
 
 /**
@@ -62,13 +69,17 @@ function navGroupsForRoles(roles: string[]): NavGroup[] {
     return [
       { title: "Utama", items: [DASHBOARD, PROFIL] },
       { title: "Manajemen Akademik", items: NAV_MANAJEMEN_AKADEMIK },
-      { title: "Pembelajaran & Kelas", items: NAV_GURU },
+      { title: "Pembelajaran & Kelas", items: NAV_GURU_ADMIN },
     ];
   }
 
   if (hasRole(roles, "walikelas")) {
     const items: NavItem[] = [{ to: "/walikelas", label: "Matrix Persetujuan", icon: "fact_check" }];
-    if (hasRole(roles, "guru")) items.push(...NAV_GURU);
+    if (hasRole(roles, "guru")) {
+      items.push(...NAV_GURU);
+    } else {
+      items.push({ to: "/guru/downloads", label: "Pusat Unduhan", icon: "folder_open" });
+    }
     return [
       { title: "Utama", items: [PROFIL] },
       { title: "Pembelajaran & Kelas", items },

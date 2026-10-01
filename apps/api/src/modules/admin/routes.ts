@@ -53,7 +53,13 @@ import { broadcastRealtimeEvent } from "../../services/realtime.js";
 export const adminRoutes = new Hono<{ Variables: AuthVariables }>();
 
 adminRoutes.use("*", requireAuth, (c, next) => {
-  if (c.req.path.endsWith("/sso/kelas") || c.req.path.endsWith("/sso/tahun-pelajaran")) {
+  if (
+    c.req.path.endsWith("/sso/kelas") ||
+    c.req.path.endsWith("/sso/tahun-pelajaran") ||
+    c.req.path.endsWith("/journals/export") ||
+    c.req.path.endsWith("/grades/export") ||
+    c.req.path.endsWith("/assignments/export")
+  ) {
     return next();
   }
   return requireRoles("admin", "superadmin")(c, next);
@@ -1079,6 +1085,495 @@ adminRoutes.get("/journals/monitoring", async (c) => {
     });
 
     return c.json({ success: true, data });
+  } catch (e) {
+    return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 500);
+  }
+});
+
+/**
+ * GET /admin/journals/export?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&classId=...&teacherId=...
+ * Mengambil seluruh data jam mengajar dan jurnal dalam rentang tanggal untuk keperluan ekspor Excel pemberkasan fisik.
+ */
+adminRoutes.get("/journals/export", async (c) => {
+  const user = c.get("user");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+
+  const startDate = c.req.query("startDate")?.trim();
+  const endDate = c.req.query("endDate")?.trim();
+  const classId = c.req.query("classId")?.trim();
+  const classNameParam = c.req.query("className")?.trim();
+  const teacherId = isAdmin ? c.req.query("teacherId")?.trim() : user.id;
+  const teacherNameParam = c.req.query("teacherName")?.trim().toLowerCase();
+
+  try {
+    const hours = await db
+      .select()
+      .from(teachingHours)
+      .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
+
+    const conditions = [isNull(teacherJournals.deletedAt)];
+
+    if (startDate) {
+      conditions.push(sql`${teacherJournals.date} >= ${startDate}`);
+    }
+    if (endDate) {
+      conditions.push(sql`${teacherJournals.date} <= ${endDate}`);
+    }
+
+    if (classId) {
+      const isRawUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(classId);
+      const cleanIdName = classId.replace(/^kelas\s+/i, "").trim();
+      const clsConds = [
+        sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${classId}))`,
+        sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanIdName}))`,
+      ];
+      if (isRawUuid) {
+        clsConds.push(eq(teacherJournals.classId, classId));
+        const [foundCls] = await db.select({ name: classes.name }).from(classes).where(eq(classes.id, classId)).limit(1);
+        if (foundCls?.name) {
+          const cleanFound = foundCls.name.replace(/^kelas\s+/i, "").trim();
+          clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${foundCls.name}))`);
+          clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanFound}))`);
+        }
+      }
+      if (classNameParam) {
+        const cleanParam = classNameParam.replace(/^kelas\s+/i, "").trim();
+        clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${classNameParam}))`);
+        clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanParam}))`);
+      }
+      conditions.push(or(...clsConds)!);
+    }
+
+    if (teacherId) {
+      const isTeacherUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(teacherId);
+      const tConds = [];
+      let resolvedTeacherName = teacherNameParam || "";
+
+      if (isTeacherUuid) {
+        tConds.push(eq(teacherJournals.teacherUserId, teacherId));
+        const [tRow] = await db
+          .select({ userId: teachers.userId, name: teachers.name })
+          .from(teachers)
+          .where(or(eq(teachers.id, teacherId), eq(teachers.userId, teacherId)))
+          .limit(1);
+        if (tRow?.userId) tConds.push(eq(teacherJournals.teacherUserId, tRow.userId));
+        if (tRow?.name && !resolvedTeacherName) resolvedTeacherName = tRow.name.trim().toLowerCase();
+      }
+
+      const userLookupConds = [eq(users.ssoId, teacherId)];
+      if (isTeacherUuid) userLookupConds.push(eq(users.id, teacherId));
+      const [uRow] = await db
+        .select({ id: users.id, name: users.name })
+        .from(users)
+        .where(or(...userLookupConds))
+        .limit(1);
+      if (uRow?.id) tConds.push(eq(teacherJournals.teacherUserId, uRow.id));
+      if (uRow?.name && !resolvedTeacherName) resolvedTeacherName = uRow.name.trim().toLowerCase();
+
+      if (resolvedTeacherName) {
+        const sameNameUsers = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(sql`LOWER(TRIM(${users.name})) = ${resolvedTeacherName}`);
+        for (const su of sameNameUsers) {
+          tConds.push(eq(teacherJournals.teacherUserId, su.id));
+        }
+      }
+
+      if (tConds.length > 0) {
+        conditions.push(or(...tConds)!);
+      }
+    }
+
+    const journals = await db
+      .select({
+        id: teacherJournals.id,
+        date: teacherJournals.date,
+        classId: teacherJournals.classId,
+        className: teacherJournals.className,
+        teachingHourId: teacherJournals.teachingHourId,
+        teachingHourLabel: teacherJournals.teachingHourLabel,
+        subjectId: teacherJournals.subjectId,
+        subjectName: teacherJournals.subjectName,
+        materi: teacherJournals.materi,
+        presenceInfo: teacherJournals.presenceInfo,
+        status: teacherJournals.status,
+        teacherUserId: teacherJournals.teacherUserId,
+        teacherName: users.name,
+        createdAt: teacherJournals.createdAt,
+      })
+      .from(teacherJournals)
+      .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+      .where(and(...conditions))
+      .orderBy(teacherJournals.date, teacherJournals.className);
+
+    return c.json({
+      success: true,
+      data: {
+        hours,
+        journals,
+      },
+    });
+  } catch (e) {
+    return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 500);
+  }
+});
+
+/**
+ * GET /admin/grades/export?classId=...&subjectId=...&status=...
+ * Mengambil seluruh siswa di kelas terpilih (termasuk rekap presensi & poin GDS),
+ * komponen penilaian aktif, daftar mata pelajaran, dan seluruh nilai (grades)
+ * untuk keperluan ekspor Excel Leger Kelas, Rekap Nilai per Mapel, maupun Rekap Presensi & GDS.
+ */
+adminRoutes.get("/grades/export", async (c) => {
+  const user = c.get("user");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+
+  const rawClassId = c.req.query("classId")?.trim();
+  const classNameQuery = c.req.query("className")?.trim();
+  const subjectId = c.req.query("subjectId")?.trim();
+  const statusFilter = c.req.query("status")?.trim();
+
+  if (!rawClassId) {
+    return c.json({ success: false, message: "classId wajib diisi" }, 400);
+  }
+
+  try {
+    // 1. Pastikan kelas tersedia di lokal (sinkronkan dari SSO bila perlu)
+    const ensuredClassId = await ensureTargetClassExists(rawClassId);
+    const isRawUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawClassId);
+    const isEnsuredUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ensuredClassId);
+    const cleanRawName = (classNameQuery || rawClassId).replace(/^kelas\s+/i, "").trim();
+
+    const classConds = [
+      eq(classes.name, rawClassId),
+      eq(classes.name, cleanRawName),
+      sql`LOWER(TRIM(${classes.name})) = LOWER(TRIM(${rawClassId}))`,
+      sql`LOWER(TRIM(${classes.name})) = LOWER(TRIM(${cleanRawName}))`,
+    ];
+    if (isRawUuid) classConds.push(eq(classes.id, rawClassId));
+    if (isEnsuredUuid) classConds.push(eq(classes.id, ensuredClassId));
+
+    const [targetClass] = await db
+      .select()
+      .from(classes)
+      .where(or(...classConds))
+      .limit(1);
+
+    const resolvedClassId = targetClass?.id ?? ensuredClassId;
+    const className = (targetClass?.name ?? classNameQuery ?? cleanRawName).replace(/^kelas\s+/i, "").trim();
+
+    // 2. Ambil daftar siswa aktif di kelas tersebut (beserta presensi & poin GDS)
+    const buildStudentConds = () => {
+      const conds = [
+        eq(students.kelasLabel, className),
+        sql`LOWER(TRIM(${students.kelasLabel})) = LOWER(TRIM(${className}))`,
+        sql`LOWER(TRIM(${students.kelasLabel})) = LOWER(TRIM(${`Kelas ${className}`}))`,
+      ];
+      if (isRawUuid) conds.push(eq(students.classId, rawClassId));
+      if (isEnsuredUuid || targetClass?.id) conds.push(eq(students.classId, resolvedClassId));
+      return conds;
+    };
+
+    const studentSelectShape = {
+      id: students.id,
+      name: students.name,
+      nis: students.nis,
+      nisn: students.nisn,
+      gender: students.gender,
+      sakit: students.sakit,
+      izin: students.izin,
+      alpa: students.alpa,
+      catatanKehadiran: students.catatanKehadiran,
+      poinGds: students.poinGds,
+      catatanGds: students.catatanGds,
+    };
+
+    let roster = await db
+      .select(studentSelectShape)
+      .from(students)
+      .where(and(eq(students.isActive, true), or(...buildStudentConds())))
+      .orderBy(students.name);
+
+    // Fallback sinkronisasi otomatis dari SSO apabila roster kelas belum ada di DB lokal
+    if (roster.length === 0 && env.SSO_API_KEY && env.SSO_API_BASE_URL) {
+      try {
+        let ssoClassId = rawClassId;
+        try {
+          const ssoClasses = await ssoListKelas();
+          if (ssoClasses.data && Array.isArray(ssoClasses.data)) {
+            const matched = ssoClasses.data.find(
+              (k) =>
+                k.id === rawClassId ||
+                k.id === resolvedClassId ||
+                k.nama_kelas.toLowerCase() === className.toLowerCase()
+            );
+            if (matched) ssoClassId = matched.id;
+          }
+        } catch (_) {}
+
+        const url = `${env.SSO_API_BASE_URL}/kelas/${ssoClassId}`;
+        const ssoRes = await fetch(url, {
+          headers: {
+            "X-API-Key": env.SSO_API_KEY,
+            Origin: env.FRONTEND_URL || "https://siakad.sman3mjk.sch.id",
+          },
+        });
+        const json = (await ssoRes.json()) as any;
+        if (json?.success && Array.isArray(json?.data?.siswa) && json.data.siswa.length > 0) {
+          for (const s of json.data.siswa) {
+            try {
+              const ssoMemberId = s.id || null;
+              const nis = s.nip_nis || s.nis || null;
+              const name = s.nama_lengkap;
+              const findConds = [];
+              if (ssoMemberId) findConds.push(eq(students.ssoMemberId, ssoMemberId));
+              if (nis) findConds.push(eq(students.nis, nis));
+              if (name) findConds.push(eq(students.name, name));
+
+              const existing = findConds.length > 0
+                ? (await db.select().from(students).where(or(...findConds)).limit(1))[0]
+                : null;
+
+              const validClsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resolvedClassId);
+              if (existing) {
+                await db
+                  .update(students)
+                  .set({
+                    classId: validClsUuid ? resolvedClassId : existing.classId,
+                    kelasLabel: className,
+                    ssoMemberId: ssoMemberId || existing.ssoMemberId,
+                    isActive: true,
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(students.id, existing.id));
+              } else if (name) {
+                await db
+                  .insert(students)
+                  .values({
+                    name,
+                    nis,
+                    ssoMemberId,
+                    classId: validClsUuid ? resolvedClassId : null,
+                    kelasLabel: className,
+                    isActive: true,
+                    memberStatus: "siswa",
+                  })
+                  .onConflictDoNothing();
+              }
+            } catch (_) {}
+          }
+          roster = await db
+            .select(studentSelectShape)
+            .from(students)
+            .where(and(eq(students.isActive, true), or(...buildStudentConds())))
+            .orderBy(students.name);
+        }
+      } catch (e) {
+        console.error("[/grades/export] SSO roster fallback error:", e);
+      }
+    }
+
+    // 3. Ambil wali kelas jika ada & cek apakah user saat ini adalah wali kelas dari kelas ini
+    let homeroomTeacherName: string | null = null;
+    let isHomeroomForThisClass = false;
+    if (targetClass?.id) {
+      const hrRows = await db
+        .select({ userId: homeroomAssignments.userId, teacherName: users.name })
+        .from(homeroomAssignments)
+        .innerJoin(users, eq(homeroomAssignments.userId, users.id))
+        .where(eq(homeroomAssignments.classId, targetClass.id));
+      homeroomTeacherName = hrRows[0]?.teacherName ?? null;
+      isHomeroomForThisClass = hrRows.some((hr) => hr.userId === user.id);
+    }
+
+    // 4. Ambil daftar mata pelajaran aktif beserta guru pengampunya
+    let allSubjects = await db
+      .select({
+        id: subjects.id,
+        code: subjects.code,
+        name: subjects.name,
+        type: subjects.type,
+      })
+      .from(subjects)
+      .where(eq(subjects.isActive, true))
+      .orderBy(subjects.name);
+
+    // Jika bukan admin/superadmin dan bukan wali kelas dari kelas ini, tampilkan mapel yang diampu/diisi guru tersebut
+    if (!isAdmin && !isHomeroomForThisClass) {
+      const assignedRows = await db
+        .select({ subjectId: teacherSubjects.subjectId })
+        .from(teacherSubjects)
+        .where(eq(teacherSubjects.userId, user.id));
+      const journalSubjRows = await db
+        .selectDistinct({ subjectId: teacherJournals.subjectId })
+        .from(teacherJournals)
+        .where(and(eq(teacherJournals.teacherUserId, user.id), isNull(teacherJournals.deletedAt)));
+      const assignedIds = new Set<string>();
+      for (const r of assignedRows) if (r.subjectId) assignedIds.add(r.subjectId);
+      for (const r of journalSubjRows) if (r.subjectId) assignedIds.add(r.subjectId);
+
+      if (assignedIds.size > 0) {
+        allSubjects = allSubjects.filter((s) => assignedIds.has(s.id));
+      }
+    }
+
+    // Ambil pemetaan guru mapel
+    const subjectTeachersRows = await db
+      .select({
+        subjectId: teacherSubjects.subjectId,
+        teacherName: users.name,
+      })
+      .from(teacherSubjects)
+      .innerJoin(users, eq(teacherSubjects.userId, users.id));
+
+    const subjectTeacherMap = new Map<string, string[]>();
+    for (const st of subjectTeachersRows) {
+      const arr = subjectTeacherMap.get(st.subjectId) ?? [];
+      if (!arr.includes(st.teacherName)) arr.push(st.teacherName);
+      subjectTeacherMap.set(st.subjectId, arr);
+    }
+
+    // 5. Ambil komponen penilaian (auto-seed bila masih kosong)
+    let components = await db
+      .select()
+      .from(assessmentComponents)
+      .orderBy(asc(assessmentComponents.sortOrder), asc(assessmentComponents.createdAt));
+
+    if (components.length === 0) {
+      await db
+        .insert(assessmentComponents)
+        .values([
+          { code: "uh1", name: "UH1", type: "UJIAN", status: "active", sortOrder: 1 },
+          { code: "t1", name: "T1", type: "TUGAS", status: "active", sortOrder: 2 },
+          { code: "sts", name: "STS", type: "UJIAN", status: "active", sortOrder: 3 },
+          { code: "uh2", name: "UH2", type: "UJIAN", status: "disabled", sortOrder: 4 },
+          { code: "t2", name: "T2", type: "TUGAS", status: "disabled", sortOrder: 5 },
+        ])
+        .onConflictDoNothing();
+      components = await db
+        .select()
+        .from(assessmentComponents)
+        .orderBy(asc(assessmentComponents.sortOrder), asc(assessmentComponents.createdAt));
+    }
+
+    // 6. Ambil nilai (grades) untuk kelas tersebut (atau untuk siswa di roster)
+    const studentIds = roster.map((s) => s.id);
+    const gradeConds = [isNull(grades.deletedAt)];
+
+    if (studentIds.length > 0 && targetClass?.id) {
+      gradeConds.push(or(eq(grades.classId, targetClass.id), inArray(grades.studentId, studentIds))!);
+    } else if (targetClass?.id) {
+      gradeConds.push(eq(grades.classId, targetClass.id));
+    } else if (studentIds.length > 0) {
+      gradeConds.push(inArray(grades.studentId, studentIds));
+    } else {
+      gradeConds.push(sql`1=0`);
+    }
+
+    const allowedSubjectIds = allSubjects.map((s) => s.id);
+    if (subjectId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subjectId)) {
+      gradeConds.push(eq(grades.subjectId, subjectId));
+    } else if (!isAdmin && !isHomeroomForThisClass && allowedSubjectIds.length > 0) {
+      gradeConds.push(inArray(grades.subjectId, allowedSubjectIds));
+    }
+
+    if (statusFilter && statusFilter !== "all") {
+      gradeConds.push(eq(grades.status, statusFilter));
+    }
+
+    const gradeRows = await db
+      .select({
+        id: grades.id,
+        studentId: grades.studentId,
+        classId: grades.classId,
+        subjectId: grades.subjectId,
+        uh1: grades.uh1,
+        t1: grades.t1,
+        sts: grades.sts,
+        uh2: grades.uh2,
+        t2: grades.t2,
+        status: grades.status,
+        updatedAt: grades.updatedAt,
+      })
+      .from(grades)
+      .where(and(...gradeConds));
+
+    return c.json({
+      success: true,
+      data: {
+        classInfo: {
+          id: resolvedClassId,
+          name: className,
+          homeroomTeacherName,
+        },
+        roster,
+        subjects: allSubjects.map((s) => ({
+          ...s,
+          teacherNames: (subjectTeacherMap.get(s.id) ?? []).join(", ") || null,
+        })),
+        components,
+        grades: gradeRows,
+      },
+    });
+  } catch (e) {
+    return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 500);
+  }
+});
+
+/**
+ * GET /admin/assignments/export
+ * Mengambil daftar pembagian tugas mengajar guru mata pelajaran, penugasan wali kelas,
+ * dan daftar jam pelajaran aktif untuk ekspor SK / Rekap Penugasan Akademik.
+ */
+adminRoutes.get("/assignments/export", async (c) => {
+  try {
+    const [subjectAssignments, homerooms, hours] = await Promise.all([
+      db
+        .select({
+          id: teacherSubjects.id,
+          userId: teacherSubjects.userId,
+          teacherName: users.name,
+          teacherNip: users.username,
+          teacherEmail: users.email,
+          subjectId: teacherSubjects.subjectId,
+          subjectName: subjects.name,
+          subjectCode: subjects.code,
+          subjectType: subjects.type,
+        })
+        .from(teacherSubjects)
+        .innerJoin(users, eq(teacherSubjects.userId, users.id))
+        .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+        .orderBy(users.name, subjects.name),
+      db
+        .select({
+          id: homeroomAssignments.id,
+          userId: homeroomAssignments.userId,
+          teacherName: users.name,
+          teacherNip: users.username,
+          classId: homeroomAssignments.classId,
+          className: classes.name,
+          gradeLevel: classes.gradeLevel,
+          academicYear: classes.academicYear,
+        })
+        .from(homeroomAssignments)
+        .innerJoin(users, eq(homeroomAssignments.userId, users.id))
+        .innerJoin(classes, eq(homeroomAssignments.classId, classes.id))
+        .orderBy(classes.name, users.name),
+      db
+        .select()
+        .from(teachingHours)
+        .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime),
+    ]);
+
+    return c.json({
+      success: true,
+      data: {
+        subjectAssignments,
+        homerooms,
+        hours,
+      },
+    });
   } catch (e) {
     return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 500);
   }

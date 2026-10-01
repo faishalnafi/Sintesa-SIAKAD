@@ -20,6 +20,7 @@ import { TrashPage } from "@/pages/admin/TrashPage";
 import { AppUpdatePage } from "@/pages/admin/AppUpdatePage";
 import { AlumniPage } from "@/pages/admin/AlumniPage";
 import { KeluarPage } from "@/pages/admin/KeluarPage";
+import { DownloadCenterPage } from "@/pages/admin/DownloadCenterPage";
 import { GuruNilaiPage } from "@/pages/guru/GuruNilaiPage";
 import { GuruJurnalPage } from "@/pages/guru/GuruJurnalPage";
 import { WalikelasMatrixPage } from "@/pages/walikelas/WalikelasMatrixPage";
@@ -83,6 +84,7 @@ export default function App() {
               <Route path="/admin/monitoring-jurnal" element={<AdminMonitoringJurnalPage />} />
               <Route path="/admin/alumni" element={<AlumniPage />} />
               <Route path="/admin/keluar" element={<KeluarPage />} />
+              <Route path="/admin/downloads" element={<DownloadCenterPage />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={["superadmin"]} />}>
@@ -96,6 +98,7 @@ export default function App() {
             <Route element={<ProtectedRoute roles={["guru", "walikelas", "admin", "superadmin"]} />}>
               <Route path="/guru" element={<GuruNilaiPage />} />
               <Route path="/guru/jurnal" element={<GuruJurnalPage />} />
+              <Route path="/guru/downloads" element={<DownloadCenterPage />} />
             </Route>
 
             <Route element={<ProtectedRoute roles={["walikelas", "admin", "superadmin"]} />}>

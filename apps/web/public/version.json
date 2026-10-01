@@ -1,16 +1,16 @@
 {
-    "version":  "1.5.3",
-    "version_code":  153,
+    "version":  "1.5.4",
+    "version_code":  154,
     "db_version":  "1.0.0",
-    "title":  "SIAKAD v1.5.3 — Impor Nilai Excel, Simpan Draft \u0026 Perbaikan Sidebar",
-    "release_date":  "2026-09-30",
+    "title":  "SIAKAD v1.5.4 — Menu Pusat Unduhan \u0026 Perbaikan Fitur Nilai",
+    "release_date":  "2026-10-01",
     "force_update":  false,
     "changelog":  [
+                      "Fitur Baru: Menu Pusat Unduhan (/admin/downloads \u0026 /guru/downloads) untuk ekspor Excel (.xlsx) Rekap Monitoring Jurnal Guru serta Buku Leger \u0026 Rekap Nilai Mapel",
                       "Fitur Baru: Unduh \u0026 Unggah Template Nilai Excel (.xlsx) untuk Guru lengkap dengan validasi pengampu \u0026 tanda tangan digital sheet",
                       "UX Unggah Nilai: Animasi loading saat impor Excel serta popup konfirmasi jumlah siswa berhasil diimpor dengan pengingat Simpan Draft",
                       "Perbaikan: Tombol Simpan Draft nilai guru kini berfungsi normal untuk nilai kosong (null) maupun pembaruan nilai existing",
-                      "Perbaikan UI: Tombol Keluar (Logout) dan tooltip menu saat sidebar diminimize kini tampil rapi dan presisi",
-                      "Optimasi: Kecepatan dan keandalan koneksi SSO Kredensia ditingkatkan dengan paralelisasi update database \u0026 timeout eksplisit"
+                      "Perbaikan UI: Tombol Keluar (Logout) dan tooltip menu saat sidebar diminimize kini tampil rapi dan presisi"
                   ],
     "min_supported_version":  "1.0.0",
     "schema_changes":  [
