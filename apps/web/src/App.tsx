@@ -87,7 +87,7 @@ export default function App() {
             </Route>
 
             <Route element={<ProtectedRoute roles={["superadmin"]} />}>
-              <Route path="/admin/app-update" element={<AppUpdatePage />} />
+              <Route path="/admin/app-update" element={<Navigate to="/admin/integrations?section=update" replace />} />
               <Route path="/admin/integrations" element={<IntegrationsPage />} />
               <Route path="/admin/backup-restore" element={<BackupRestorePage />} />
               <Route path="/admin/trash" element={<TrashPage />} />

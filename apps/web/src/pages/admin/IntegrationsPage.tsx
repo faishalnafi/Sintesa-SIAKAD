@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -6,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ObjectStorageSection } from "@/components/admin/ObjectStorageSection";
+import { AppUpdatePage } from "@/pages/admin/AppUpdatePage";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 export type SsoProviderItem = {
@@ -1502,6 +1504,13 @@ function SyncSourceConfigModal({
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export function IntegrationsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeSection = (searchParams.get("section") || "integrations") as "integrations" | "update";
+
+  const setSection = (s: "integrations" | "update") => {
+    setSearchParams(s === "integrations" ? {} : { section: s }, { replace: true });
+  };
+
   const [enterpriseProviders, setEnterpriseProviders] = useState<SsoProviderItem[]>(INITIAL_ENTERPRISE_PROVIDERS);
   const [openSourceProviders, setOpenSourceProviders] = useState<SsoProviderItem[]>(INITIAL_OPENSOURCE_PROVIDERS);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
@@ -1776,11 +1785,44 @@ export function IntegrationsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Ecosystem"
-        title="Integrations"
-        description="Single Sign-On (SSO) providers, third-party API keys, and data synchronization."
+        eyebrow="Pengaturan Sistem"
+        title="Update & Integrasi"
+        description="Kelola pembaruan aplikasi, backup data, Single Sign-On (SSO), API keys, dan sinkronisasi data."
       />
 
+      {/* ─── Section Tab Navigation ─── */}
+      <div
+        className="flex gap-1 p-1 rounded-xl border w-fit"
+        style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
+      >
+        {(
+          [
+            { key: "integrations", label: "Integrasi", icon: "hub" },
+            { key: "update", label: "Update & Backup", icon: "system_update" },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setSection(tab.key)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              activeSection === tab.key
+                ? "bg-[var(--bg)] shadow-sm text-[var(--accent)]"
+                : "app-muted hover:text-[var(--fg)]"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Update & Backup Tab ─── */}
+      {activeSection === "update" && <AppUpdatePage />}
+
+      {/* ─── Integrasi Tab ─── */}
+      {activeSection === "integrations" && (
+        <>
       {message && (
         <div
           className="rounded-2xl px-4 py-3 text-sm flex items-center justify-between gap-3 shadow-xs"
@@ -2253,6 +2295,8 @@ export function IntegrationsPage() {
             </div>
           </form>
         </div>
+      )}
+        </>
       )}
     </div>
   );

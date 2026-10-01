@@ -33,8 +33,7 @@ const NAV_PEMBELAJARAN_SUPERADMIN: NavItem[] = [
 ];
 
 const NAV_PENGATURAN_SUPERADMIN: NavItem[] = [
-  { to: "/admin/app-update", label: "Update & Backup", icon: "system_update" },
-  { to: "/admin/integrations", label: "Integrasi", icon: "hub" },
+  { to: "/admin/integrations", label: "Update & Integrasi", icon: "hub" },
   { to: "/admin/trash", label: "Tempat Sampah", icon: "delete_sweep" },
 ];
 
