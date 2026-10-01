@@ -1,10 +1,16 @@
 param(
-    [string]$OutputPath = ".\deploy.zip"
+    [string]$OutputPath = ""
 )
 
 $root = $PSScriptRoot
+$manifest = Get-Content (Join-Path $root "version.json") | ConvertFrom-Json
+$version = $manifest.version
 
-Write-Host "=== SIAKAD Deploy ZIP Builder ===" -ForegroundColor Cyan
+if (-not $OutputPath) {
+    $OutputPath = Join-Path $root "update_siakad_v${version}.zip"
+}
+
+Write-Host "=== SIAKAD Deploy ZIP Builder (v$version) ===" -ForegroundColor Cyan
 
 $apiDist = Join-Path $root "apps\api\dist"
 $webDist = Join-Path $root "apps\web\dist"
@@ -39,20 +45,26 @@ function Add-DirToZip {
 
 Write-Host "Menambahkan file ke ZIP..." -ForegroundColor Yellow
 
-$versionJsonPath = Join-Path $root "apps\api\version.json"
-if (Test-Path $versionJsonPath) {
-    Add-FileToZip -zipArchive $zip -filePath $versionJsonPath -entryName "version.json"
+$rootVersionJson = Join-Path $root "version.json"
+if (Test-Path $rootVersionJson) {
+    Add-FileToZip -zipArchive $zip -filePath $rootVersionJson -entryName "version.json"
     Write-Host "  + version.json"
 }
 
-Add-DirToZip -zipArchive $zip -dirPath "$apiDist\" -zipPrefix "apps/api/dist"
-Add-DirToZip -zipArchive $zip -dirPath "$webDist\" -zipPrefix "apps/web/dist"
+$apiVersionJson = Join-Path $root "apps\api\version.json"
+if (Test-Path $apiVersionJson) {
+    Add-FileToZip -zipArchive $zip -filePath $apiVersionJson -entryName "apps/api/version.json"
+    Write-Host "  + apps/api/version.json"
+}
 
 $webPublicVersion = Join-Path $root "apps\web\public\version.json"
 if (Test-Path $webPublicVersion) {
     Add-FileToZip -zipArchive $zip -filePath $webPublicVersion -entryName "apps/web/public/version.json"
     Write-Host "  + apps/web/public/version.json"
 }
+
+Add-DirToZip -zipArchive $zip -dirPath "$apiDist\" -zipPrefix "apps/api/dist"
+Add-DirToZip -zipArchive $zip -dirPath "$webDist\" -zipPrefix "apps/web/dist"
 
 $zip.Dispose()
 

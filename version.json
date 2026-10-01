@@ -1,9 +1,9 @@
 {
-    "version":  "1.5.4",
-    "version_code":  154,
+    "version":  "1.6.0",
+    "version_code":  160,
     "db_version":  "1.0.0",
-    "title":  "SIAKAD v1.5.4 — Menu Pusat Unduhan \u0026 Perbaikan Fitur Nilai",
-    "release_date":  "2026-10-01",
+    "title":  "SIAKAD v1.6.0 — Menu Pusat Unduhan \u0026 Perbaikan Fitur Nilai",
+    "release_date":  "2026-10-02",
     "force_update":  false,
     "changelog":  [
                       "Fitur Baru: Menu Pusat Unduhan (/admin/downloads \u0026 /guru/downloads) untuk ekspor Excel (.xlsx) Rekap Monitoring Jurnal Guru serta Buku Leger \u0026 Rekap Nilai Mapel",
