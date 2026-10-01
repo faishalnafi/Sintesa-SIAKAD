@@ -60,11 +60,11 @@ export function WelcomeToastModal() {
   if (!isStudentOnly) {
     if (jk === "L") salutation = "Bapak";
     else if (jk === "P") salutation = "Ibu";
-    else salutation = "Bapak/Ibu";
+    else salutation = "Kakak";
   } else {
     if (jk === "L") salutation = "Mas";
     else if (jk === "P") salutation = "Mbak";
-    else salutation = "Mas/Mbak";
+    else salutation = "Kakak";
   }
 
   const fullTitle = `${timeGreeting}, ${salutation} ${user.name}! ✨`;

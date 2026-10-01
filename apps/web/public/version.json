@@ -1,20 +1,20 @@
 {
-  "version": "1.6.0",
-  "version_code": 160,
+  "version": "1.7.0",
+  "version_code": 170,
   "db_version": "1.0.0",
-  "title": "SIMAK v1.6.0 — Asisten AI Guru (Multimodal & Drag-Drop) + Cloud Object Storage",
-  "release_date": "2026-09-30",
+  "title": "SIMAK v1.7.0 — Pusat Unduhan & Pemberkasan (Rekap Jurnal & Buku Leger Nilai) + Penjadwalan AI",
+  "release_date": "2026-10-02",
   "force_update": false,
   "changelog": [
-    "Fitur Baru: Room Chat Asisten AI Guru (/guru/ai) dengan desain Dual-Sidebar (Sidebar Utama SIMAK + Sidebar Riwayat Obrolan ala Gemini) dan pengalihan otomatis ke Asisten AI saat login",
-    "Dukungan Multimodal & Drag-and-Drop: Unggah gambar, video, PDF, Excel nilai, atau dokumen langsung via Drag & Drop maupun Paste (Ctrl+V) di kolom chat hingga 50 MB/file (maks. 25 file) dengan integrasi Gemini 3.1 Flash",
-    "Fitur Baru: Konfigurasi Cloud Object Storage terpadu di halaman Integrasi Admin (mendukung Google Cloud Storage, Amazon S3, Cloudflare R2, dan Generic S3-Compatible seperti MinIO/Wasabi/DO Spaces)",
-    "Otomasi Penyimpanan Cloud: Saat toggle Object Storage aktif, seluruh file unggahan otomatis tersimpan ke Cloud Object Storage dan beralih ke penyimpanan lokal jika dinonaktifkan",
-    "PENTING: Rilis ini menambahkan dependency @aws-sdk/client-s3 di apps/api — jalankan `pnpm install` di server produksi jika mengaktifkan Object Storage"
+    "Fitur Baru: Pusat Unduhan terintegrasi di menu Kelas, Siswa & Pemberkasan untuk Guru Pribadi maupun Admin/Superadmin",
+    "Modul #1 — Rekap Monitoring Jurnal Mengajar Guru: Ekspor Excel (.xlsx) resmi siap cetak dengan kop surat sekolah, filter preset tanggal (Hari Ini, 1 Pekan, 1 Bulan, Semua Tanggal, Rentang Kustom), pratinjau langsung, dan lembar tanda tangan pengesahan",
+    "Modul #2 — Buku Leger & Rekap Nilai Akademik: Ekspor Excel (.xlsx) Buku Leger Kelas (matriks nilai akhir & predikat seluruh mapel, rata-rata, dan peringkat otomatis) maupun Rekap Detail Komponen Nilai per Mata Pelajaran",
+    "Fitur Baru: Ekspor Excel & Penjadwalan Otomatis (AI Scheduler) langsung dari Asisten AI Guru (/guru/ai)",
+    "Peningkatan: Sinkronisasi normalisasi nama kelas SSO/lokal dan resolusi identitas guru lintas tabel agar filter jurnal & nilai akurat 100%"
   ],
   "min_supported_version": "1.0.0",
   "schema_changes": [
-    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_gds text;",
-    "ALTER TABLE students ADD COLUMN IF NOT EXISTS catatan_kehadiran text;"
+    "CREATE TABLE IF NOT EXISTS ai_scheduled_jobs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID REFERENCES users(id) ON DELETE CASCADE, action_type VARCHAR(50) NOT NULL, payload JSONB DEFAULT '{}'::jsonb NOT NULL, scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL, status VARCHAR(20) DEFAULT 'pending' NOT NULL, attempts INTEGER DEFAULT 0 NOT NULL, max_attempts INTEGER DEFAULT 3 NOT NULL, last_error TEXT, result JSONB, executed_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL, updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL);",
+    "CREATE INDEX IF NOT EXISTS ai_scheduled_jobs_status_sched_idx ON ai_scheduled_jobs (status, scheduled_at, id);"
   ]
 }

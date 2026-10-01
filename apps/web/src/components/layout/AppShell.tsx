@@ -20,16 +20,14 @@ const DASHBOARD: NavItem = { to: "/admin", label: "Dashboard", icon: "dashboard"
 
 const NAV_MANAJEMEN_AKADEMIK: NavItem[] = [
   { to: "/admin/students", label: "Siswa & Pengguna", icon: "group" },
-  { to: "/admin/academic-years", label: "Tahun Pelajaran", icon: "calendar_month" },
-  { to: "/admin/classes", label: "Data Rombel", icon: "class" },
+  { to: "/admin/classes", label: "Rombel & Tahun Pelajaran", icon: "class" },
   { to: "/admin/subjects", label: "Mapel & Penugasan", icon: "menu_book" },
-  { to: "/admin/monitoring-jurnal", label: "Monitoring Jurnal", icon: "analytics" },
+  { to: "/admin/monitoring-jurnal", label: "Monitoring & Unduhan", icon: "analytics" },
 ];
 
 const NAV_PEMBELAJARAN_SUPERADMIN: NavItem[] = [
   { to: "/walikelas", label: "Matrix Persetujuan", icon: "fact_check" },
-  { to: "/guru", label: "Input Nilai", icon: "grade" },
-  { to: "/guru/jurnal", label: "Jurnal Guru", icon: "auto_stories" },
+  { to: "/guru", label: "Jurnal, Nilai & Unduhan", icon: "auto_stories" },
 ];
 
 const NAV_PENGATURAN_SUPERADMIN: NavItem[] = [
@@ -38,8 +36,7 @@ const NAV_PENGATURAN_SUPERADMIN: NavItem[] = [
 ];
 
 const NAV_GURU: NavItem[] = [
-  { to: "/guru", label: "Input Nilai", icon: "grade" },
-  { to: "/guru/jurnal", label: "Jurnal Guru", icon: "auto_stories" },
+  { to: "/guru", label: "Jurnal, Nilai & Unduhan", icon: "auto_stories" },
 ];
 
 /**
@@ -69,7 +66,11 @@ function navGroupsForRoles(roles: string[]): NavGroup[] {
 
   if (hasRole(roles, "walikelas")) {
     const items: NavItem[] = [{ to: "/walikelas", label: "Matrix Persetujuan", icon: "fact_check" }];
-    if (hasRole(roles, "guru")) items.push(...NAV_GURU);
+    if (hasRole(roles, "guru")) {
+      items.push(...NAV_GURU);
+    } else {
+      items.push({ to: "/guru?section=unduhan", label: "Pusat Unduhan", icon: "folder_open" });
+    }
     return [
       { title: "Asisten AI", items: [ASISTEN_AI] },
       { title: "Pembelajaran & Kelas", items },

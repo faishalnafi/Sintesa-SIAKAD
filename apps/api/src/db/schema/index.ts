@@ -478,6 +478,30 @@ export const assessmentComponents = pgTable("assessment_components", {
 
 export type AssessmentComponent = typeof assessmentComponents.$inferSelect;
 
+export const aiScheduledJobs = pgTable(
+  "ai_scheduled_jobs",
+  {
+    id: id(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    actionType: varchar("action_type", { length: 50 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    status: varchar("status", { length: 20 }).default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(3).notNull(),
+    lastError: text("last_error"),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    executedAt: timestamp("executed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("ai_scheduled_jobs_status_sched_idx").on(t.status, t.scheduledAt, t.id),
+  ]
+);
+
+export type AiScheduledJob = typeof aiScheduledJobs.$inferSelect;
+
+
 
 
 

@@ -139,6 +139,24 @@ import {
       );
       CREATE INDEX IF NOT EXISTS ai_chat_files_session_idx ON ai_chat_files (session_id);
 
+      CREATE TABLE IF NOT EXISTS ai_scheduled_jobs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        action_type VARCHAR(50) NOT NULL,
+        payload JSONB DEFAULT '{}'::jsonb NOT NULL,
+        scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+        attempts INTEGER DEFAULT 0 NOT NULL,
+        max_attempts INTEGER DEFAULT 3 NOT NULL,
+        last_error TEXT,
+        result JSONB,
+        executed_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ai_scheduled_jobs_status_sched_idx ON ai_scheduled_jobs (status, scheduled_at, id);
+
+
       UPDATE teacher_journals
       SET date = TO_CHAR(NOW() AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD'),
           updated_at = NOW()
@@ -573,6 +591,10 @@ app.get("/api/uploads/*", async (c) => {
 
   c.header("Content-Type", fileObj.contentType || mimeTypes[ext] || "application/octet-stream");
   c.header("Cache-Control", "public, max-age=86400");
+  const origName = c.req.query("filename") || path.basename(safePath);
+  if (ext === ".xlsx" || ext === ".xls" || ext === ".csv" || c.req.query("download") === "1") {
+    c.header("Content-Disposition", `attachment; filename="${encodeURIComponent(origName)}"`);
+  }
   return c.body(new Uint8Array(fileObj.buffer));
 });
 

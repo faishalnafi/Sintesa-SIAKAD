@@ -3,6 +3,7 @@ import { app } from "./app.js";
 import { env } from "./env.js";
 import { syncGds } from "./services/integrations/gds.js";
 import { syncKehadiran } from "./services/integrations/kehadiran.js";
+import { startSchedulerWorker, stopSchedulerWorker } from "./services/scheduler.js";
 
 process.on("uncaughtException", (err) => {
   console.error("[Process Error] Uncaught Exception:", err);
@@ -12,8 +13,23 @@ process.on("unhandledRejection", (reason) => {
   console.error("[Process Error] Unhandled Rejection:", reason);
 });
 
+process.on("SIGTERM", async () => {
+  await stopSchedulerWorker();
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  await stopSchedulerWorker();
+  process.exit(0);
+});
+
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`SINTESA API listening on http://localhost:${info.port}`);
+
+  // Setup background scheduler worker (dual-mode: in-process DB or Redis)
+  startSchedulerWorker().catch((err) => {
+    console.error("[Scheduler Startup Error]:", err);
+  });
 
   // Setup background synchronization for external integrations (GDS & Kehadiran)
   // Run on startup (with a slight delay to allow server initialization)

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -7,6 +8,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { AcademicYearsPage } from "@/pages/admin/AcademicYearsPage";
 
 type TahunPelajaranRef = {
   id: string;
@@ -77,6 +79,13 @@ function matchesTingkat(
 }
 
 export function ClassesPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeSection = (searchParams.get("section") || "rombel") as "rombel" | "tahun-pelajaran";
+
+  const setSection = (s: "rombel" | "tahun-pelajaran") => {
+    setSearchParams(s === "rombel" ? {} : { section: s }, { replace: true });
+  };
+
   const [data, setData] = useState<Kelas[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -174,11 +183,43 @@ export function ClassesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Dari SSO Kredensia"
-        title="Data Rombel"
-        description="Data rombongan belajar (kelas) diimpor langsung dari portal SSO. Kelola melalui portal Kredensia."
+        eyebrow="Manajemen Akademik"
+        title="Rombel & Tahun Pelajaran"
+        description="Data rombongan belajar dan tahun pelajaran diimpor dari portal SSO Kredensia."
       />
 
+      {/* ─── Section Tab Navigation ─── */}
+      <div
+        className="flex gap-1 p-1 rounded-xl border w-fit"
+        style={{ background: "var(--hover)", borderColor: "var(--divider)" }}
+      >
+        {(
+          [
+            { key: "rombel", label: "Data Rombel", icon: "class" },
+            { key: "tahun-pelajaran", label: "Tahun Pelajaran", icon: "calendar_month" },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setSection(tab.key)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              activeSection === tab.key
+                ? "bg-[var(--bg)] shadow-sm text-[var(--accent)]"
+                : "app-muted hover:text-[var(--fg)]"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Tahun Pelajaran Tab ─── */}
+      {activeSection === "tahun-pelajaran" && <AcademicYearsPage />}
+
+      {/* ─── Data Rombel Tab ─── */}
+      {activeSection === "rombel" && (<>
       {error && (
         <div
           className="rounded-2xl px-4 py-3 text-sm flex items-center gap-2"
@@ -373,6 +414,7 @@ export function ClassesPage() {
           />
         </Card>
       )}
+      </>)}
     </div>
   );
 }

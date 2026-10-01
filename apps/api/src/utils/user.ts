@@ -28,7 +28,30 @@ export async function getUserWithRoles(userIdOrIdentifier: string) {
     jenisKelamin = t.jk;
   } else {
     const [s] = await db.select({ jk: students.jenisKelamin }).from(students).where(eq(students.userId, userId)).limit(1);
-    if (s?.jk) jenisKelamin = s.jk;
+    if (s?.jk) {
+      jenisKelamin = s.jk;
+    } else {
+      // 1. Coba cari dari NIP/NIS yang cocok dengan username
+      if (user.username) {
+        const [tByNip] = await db.select({ jk: teachers.jenisKelamin }).from(teachers).where(eq(teachers.nip, user.username)).limit(1);
+        if (tByNip?.jk) jenisKelamin = tByNip.jk;
+        if (!jenisKelamin) {
+          const [sByNis] = await db.select({ jk: students.jenisKelamin }).from(students).where(eq(students.nis, user.username)).limit(1);
+          if (sByNis?.jk) jenisKelamin = sByNis.jk;
+        }
+      }
+      // 2. Coba cari dari kemiripan nama di teachers atau students jika ada
+      if (!jenisKelamin && user.name) {
+        const cleanName = user.name.replace(/['`]/g, "").trim().toLowerCase();
+        const teachersList = await db.select({ name: teachers.name, jk: teachers.jenisKelamin }).from(teachers);
+        const matchedT = teachersList.find((item) => {
+          if (!item.name || !item.jk) return false;
+          const itemClean = item.name.replace(/['`]/g, "").trim().toLowerCase();
+          return cleanName.includes(itemClean) || itemClean.includes(cleanName);
+        });
+        if (matchedT?.jk) jenisKelamin = matchedT.jk;
+      }
+    }
   }
 
   return {

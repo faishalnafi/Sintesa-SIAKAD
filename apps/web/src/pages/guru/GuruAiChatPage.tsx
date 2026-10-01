@@ -12,6 +12,17 @@ marked.setOptions({
   gfm: true,
 });
 
+marked.use({
+  renderer: {
+    link({ href, title, text }) {
+      const isDownload = Boolean(href && (href.includes("/api/uploads/") || href.includes("filename=")));
+      const titleAttr = title ? `title="${title}"` : "";
+      const downloadAttr = isDownload ? "download" : "";
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer" ${downloadAttr} ${titleAttr} class="text-[var(--accent)] underline font-semibold hover:opacity-80">${text}</a>`;
+    },
+  },
+});
+
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 export const MAX_FILES_PER_UPLOAD = 25;
 
@@ -65,6 +76,43 @@ export function getFileCategory(name: string, mime?: string): FileCategory {
   return "file";
 }
 
+export const SUPPORTED_FILE_EXTENSIONS = [
+  // Spreadsheets
+  "xlsx", "xls", "csv", "ods",
+  // Documents & Text
+  "pdf", "doc", "docx", "txt", "rtf", "odt",
+  // Images
+  "jpg", "jpeg", "png", "webp", "gif", "bmp", "svg", "ico", "heic", "heif",
+  // Audio
+  "mp3", "wav", "m4a", "ogg", "aac", "flac", "wma",
+  // Video
+  "mp4", "webm", "mov", "mkv", "avi", "wmv", "flv", "3gp",
+  // Presentations
+  "pptx", "ppt", "odp",
+  // Code & Data
+  "json", "md", "sql", "html", "css", "js", "ts", "tsx", "jsx", "py", "xml", "yaml", "yml",
+];
+
+export function isSupportedChatFile(name: string, mime?: string): boolean {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (SUPPORTED_FILE_EXTENSIONS.includes(ext)) return true;
+  const m = (mime || "").toLowerCase();
+  if (
+    m.startsWith("image/") ||
+    m.startsWith("video/") ||
+    m.startsWith("audio/") ||
+    m.startsWith("text/") ||
+    m === "application/pdf" ||
+    m.includes("spreadsheet") ||
+    m.includes("excel") ||
+    m.includes("word") ||
+    m.includes("presentation")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function getFileCategoryTheme(category: FileCategory): {
   icon: string;
   textClass: string;
@@ -93,11 +141,26 @@ export function getFileCategoryTheme(category: FileCategory): {
   }
 }
 
-export function getHonorific(user?: { jenisKelamin?: string | null; name?: string | null } | null): string {
-  const jk = user?.jenisKelamin?.toUpperCase();
-  if (jk === "L" || jk === "LAKI-LAKI" || jk === "M") return "Pak";
-  if (jk === "P" || jk === "PEREMPUAN" || jk === "F") return "Bu";
-  return "Bapak/Ibu";
+export function getHonorific(
+  user?: { jenisKelamin?: string | null; name?: string | null; roles?: string[] } | null,
+  options?: { formal?: boolean; short?: boolean }
+): string {
+  const jk = user?.jenisKelamin?.trim()?.toUpperCase();
+  const roles = (user?.roles || []).map((r) => r.toLowerCase());
+  const isStudent = roles.length > 0 && roles.every((r) => r === "siswa" || r === "alumni");
+
+  if (jk === "L" || jk === "LAKI-LAKI" || jk === "M") {
+    if (isStudent) return "Mas";
+    return options?.formal ? "Bapak" : (options?.short ? "Pak" : "Bapak");
+  }
+
+  if (jk === "P" || jk === "PEREMPUAN" || jk === "F") {
+    if (isStudent) return "Mbak";
+    return options?.formal ? "Ibu" : (options?.short ? "Bu" : "Ibu");
+  }
+
+  // Sapaan general ramah jika JK tidak diketahui: Kakak / Kak
+  return options?.formal ? "Kakak" : (options?.short ? "Kak" : "Kakak");
 }
 
 /**
@@ -139,7 +202,8 @@ function MarkdownContent({ content }: { content: string }) {
         [&_td]:border [&_td]:border-[var(--card-border)] [&_td]:p-2
         [&_h1]:text-base [&_h1]:font-bold [&_h1]:mb-2
         [&_h2]:text-sm [&_h2]:font-bold [&_h2]:mb-1.5
-        [&_h3]:text-xs [&_h3]:font-bold [&_h3]:mb-1"
+        [&_h3]:text-xs [&_h3]:font-bold [&_h3]:mb-1
+        [&_a]:text-[var(--accent)] [&_a]:underline [&_a]:font-semibold hover:[&_a]:opacity-80"
       dangerouslySetInnerHTML={{ __html: parsedHtml as string }}
     />
   );
@@ -898,10 +962,15 @@ export function GuruAiChatPage() {
 
     const filesToProcess: File[] = [];
     const oversizedFiles: string[] = [];
+    const unsupportedFiles: string[] = [];
     let excessCount = 0;
 
     for (let i = 0; i < incoming.length; i++) {
       const file = incoming[i];
+      if (!isSupportedChatFile(file.name, file.type)) {
+        unsupportedFiles.push(file.name);
+        continue;
+      }
       if (file.size > MAX_FILE_SIZE) {
         oversizedFiles.push(`${file.name} (${formatFileSize(file.size)})`);
         continue;
@@ -911,6 +980,27 @@ export function GuruAiChatPage() {
       } else {
         excessCount++;
       }
+    }
+
+    if (unsupportedFiles.length > 0) {
+      Swal.fire({
+        title: "Format Berkas Tidak Didukung",
+        html: `NEBULA AI tidak dapat memproses berkas berikut karena formatnya belum didukung:<br/><br/>
+        <div class="text-left text-xs bg-red-50 dark:bg-red-950/30 p-2.5 rounded-lg max-h-36 overflow-y-auto font-mono text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 mb-3">
+          ${unsupportedFiles.map((f) => `• ${f}`).join("<br/>")}
+        </div>
+        <div class="text-xs text-slate-600 dark:text-slate-300 text-left space-y-1">
+          <p class="font-semibold text-slate-700 dark:text-slate-200">Format berkas yang didukung NEBULA AI:</p>
+          <ul class="list-disc pl-4 space-y-0.5">
+            <li><strong>Spreadsheet:</strong> Excel (.xlsx, .xls), CSV (.csv)</li>
+            <li><strong>Dokumen:</strong> PDF (.pdf), Word (.docx, .doc), Teks (.txt)</li>
+            <li><strong>Gambar:</strong> JPG, PNG, WebP, GIF, SVG</li>
+            <li><strong>Media:</strong> Audio (MP3, WAV), Video (MP4, WebM)</li>
+          </ul>
+        </div>`,
+        icon: "warning",
+        confirmButtonColor: "#EA4335",
+      });
     }
 
     if (oversizedFiles.length > 0) {
@@ -1273,6 +1363,18 @@ export function GuruAiChatPage() {
         cloudUrl?: string;
         provider: string;
       }>;
+      generatedFiles?: Array<{
+        id: string;
+        name: string;
+        size: number;
+        type: string;
+        category?: FileCategory;
+        url: string;
+        cloudUrl?: string;
+        provider: string;
+        key: string;
+        storedName: string;
+      }>;
     }>("/teacher/ai/chat", {
       method: "POST",
       body: JSON.stringify({
@@ -1285,6 +1387,7 @@ export function GuruAiChatPage() {
       .then((res) => {
         const replyText = res.data?.reply || "Tidak ada respon dari NEBULA AI.";
         const serverStoredFiles = res.data?.storedFiles || [];
+        const serverGeneratedFiles = res.data?.generatedFiles || [];
 
         // Enrich userMessage attachments with persistent UUID storageUrl & storageKey
         const applyStoredFiles = (msg: Message): Message => {
@@ -1293,7 +1396,7 @@ export function GuruAiChatPage() {
             ...msg,
             attachments: msg.attachments.map((att) => {
               const matched = serverStoredFiles.find(
-                (sf) => sf.clientId === att.id || sf.originalName === att.name
+                (sf: any) => sf.clientId === att.id || sf.originalName === att.name
               );
               if (matched) {
                 return {
@@ -1312,11 +1415,27 @@ export function GuruAiChatPage() {
           };
         };
 
+        const generatedAttachments: ChatAttachment[] = (serverGeneratedFiles || []).map((gf) => ({
+          id: gf.id || `gen-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          name: gf.name,
+          size: gf.size || 0,
+          type: gf.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          category: (gf.category as FileCategory) || "spreadsheet",
+          url: gf.url,
+          cloudUrl: gf.cloudUrl,
+          provider: gf.provider,
+          storageUrl: gf.url,
+          previewUrl: gf.url,
+          storageKey: gf.key,
+          storedName: gf.storedName || gf.name,
+        }));
+
         const aiResponse: Message = {
           id: `m-ai-${Date.now()}`,
           sender: "assistant",
           text: replyText,
           time: getFullDateTime(),
+          attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined,
         };
 
         if (!existingSessionId) {
@@ -1355,7 +1474,7 @@ export function GuruAiChatPage() {
       })
       .catch((err) => {
         console.error("[GuruAiChat] AI request failed:", err);
-        const honorific = getHonorific(user);
+        const honorific = getHonorific(user, { short: true });
         const errMessage = err?.message || "Terjadi kesalahan saat berkomunikasi dengan server NEBULA AI.";
         const aiErrorResponse: Message = {
           id: `m-ai-${Date.now()}`,
@@ -1808,7 +1927,7 @@ export function GuruAiChatPage() {
               </div>
 
               <h2 className="text-2xl md:text-3xl font-display font-extrabold tracking-tight text-[var(--fg)] mb-2">
-                Sebaiknya kita mulai dari mana{user?.name ? `, ${getHonorific(user)} ${user.name}` : ""}?
+                Sebaiknya kita mulai dari mana{user?.name ? `, ${getHonorific(user, { formal: true })} ${user.name}` : ""}?
               </h2>
               <p className="text-sm app-muted max-w-lg mb-8">
                 Unggah dokumen, Excel nilai, gambar, materi soal, atau video pembelajaran untuk dianalisis oleh <strong>NEBULA AI</strong>.

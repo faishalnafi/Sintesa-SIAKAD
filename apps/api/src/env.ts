@@ -68,6 +68,16 @@ const envSchema = z.object({
 
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().default(20),
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(600_000),
+
+  // --- Background Scheduler & Redis Worker ---
+  SCHEDULER_DRIVER: z.preprocess(
+    emptyToUndefined,
+    z.enum(["auto", "db", "redis"]).default("auto"),
+  ),
+  REDIS_URL: z.preprocess(emptyToUndefined, z.string().optional()),
+  REDIS_HOST: z.preprocess(emptyToUndefined, z.string().default("127.0.0.1")),
+  REDIS_PORT: z.coerce.number().default(6379),
+  REDIS_PASSWORD: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -179,6 +189,21 @@ export const env = {
   },
   get GEMINI_MODEL() {
     return (process.env.GEMINI_MODEL || parsed.GEMINI_MODEL || "gemini-2.0-flash").trim();
+  },
+  get SCHEDULER_DRIVER(): "auto" | "db" | "redis" {
+    return (process.env.SCHEDULER_DRIVER as "auto" | "db" | "redis") || parsed.SCHEDULER_DRIVER || "auto";
+  },
+  get REDIS_URL() {
+    return (process.env.REDIS_URL || parsed.REDIS_URL || "").trim();
+  },
+  get REDIS_HOST() {
+    return (process.env.REDIS_HOST || parsed.REDIS_HOST || "127.0.0.1").trim();
+  },
+  get REDIS_PORT() {
+    return Number(process.env.REDIS_PORT || parsed.REDIS_PORT || 6379);
+  },
+  get REDIS_PASSWORD() {
+    return (process.env.REDIS_PASSWORD || parsed.REDIS_PASSWORD || "").trim();
   },
 };
 

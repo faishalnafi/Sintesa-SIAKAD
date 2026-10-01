@@ -23,11 +23,20 @@ import {
 import { requireAuth, type AuthVariables } from "../../middlewares/auth.js";
 import { requireRoles } from "../../middlewares/rbac.js";
 import { computeAverage, isValidScore } from "../../utils/grades.js";
+import { getUserWithRoles } from "../../utils/user.js";
 import { env } from "../../env.js";
 import { ssoListKelas } from "../../services/sso-api-client.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
 import { askGemini } from "../../services/gemini.js";
+import path from "node:path";
 import { uploadFile, deleteFile, deleteFolderPrefix } from "../../services/storage/storage.service.js";
+import { scheduleJob, cancelJob, getPendingJobs, getSchedulerInfo } from "../../services/scheduler.js";
+import {
+  exportJournalRecapExcel,
+  exportGradeLegerExcel,
+  exportGradeTemplateExcel,
+  type ExportReportResult,
+} from "../../services/exports/report-exporter.js";
 import type { StorageProviderType } from "../../services/storage/types.js";
 export const teacherRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -1113,9 +1122,31 @@ teacherRoutes.post("/journals/bulk-send", async (c) => {
 /**
  * Helper untuk menyusun konteks lengkap profil guru, mapel, dan kelas
  */
-async function getTeacherAiContext(userId: string, userName: string) {
+async function getTeacherAiContext(userId: string, userName: string, userObj?: any) {
+  let currentUser = userObj;
+  if (!currentUser) {
+    currentUser = await getUserWithRoles(userId);
+  }
+
   // 1. Ambil data guru
-  const [teacher] = await db.select().from(teachers).where(eq(teachers.userId, userId)).limit(1);
+  let teacher: typeof teachers.$inferSelect | undefined = (
+    await db.select().from(teachers).where(eq(teachers.userId, userId)).limit(1)
+  )[0];
+  if (!teacher) {
+    const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (u?.username) {
+      teacher = (await db.select().from(teachers).where(eq(teachers.nip, u.username)).limit(1))[0];
+    }
+    if (!teacher && userName) {
+      const cleanName = userName.replace(/['`]/g, "").trim().toLowerCase();
+      const allT = await db.select().from(teachers);
+      teacher = allT.find((t) => {
+        if (!t.name) return false;
+        const cn = t.name.replace(/['`]/g, "").trim().toLowerCase();
+        return cleanName.includes(cn) || cn.includes(cleanName);
+      });
+    }
+  }
 
   // 2. Ambil mapel yang diampu guru ini
   const assignedSubjects = await db
@@ -1329,16 +1360,25 @@ async function getTeacherAiContext(userId: string, userName: string) {
     totalMapel: allSubjects.filter((s) => s.isActive).length,
   };
 
-  // 9. Tentukan sapaan berdasarkan jenis kelamin
-  let honorific = "Bapak/Ibu";
-  let genderLabel = "Tidak Diketahui";
-  const jk = teacher?.jenisKelamin?.toUpperCase();
-  if (jk === "L" || jk === "LAKI-LAKI" || jk === "M") {
-    honorific = "Pak";
+  // 9. Tentukan sapaan berdasarkan jenis kelamin & peran
+  const rawJk = (currentUser?.jenisKelamin || teacher?.jenisKelamin)?.toString()?.trim()?.toUpperCase();
+  const userRolesList: string[] = currentUser?.roles || [];
+  const isStudent =
+    userRolesList.includes("siswa") &&
+    !userRolesList.some((r) => ["guru", "walikelas", "admin", "superadmin", "tendik"].includes(r));
+
+  let honorific = "Kakak";
+  let honorificShort = "Kak";
+  let genderLabel = "Tidak Diketahui (Sapaan: Kakak)";
+
+  if (rawJk === "L" || rawJk === "LAKI-LAKI" || rawJk === "M") {
     genderLabel = "Laki-laki";
-  } else if (jk === "P" || jk === "PEREMPUAN" || jk === "F") {
-    honorific = "Bu";
+    honorific = isStudent ? "Mas" : "Bapak";
+    honorificShort = isStudent ? "Mas" : "Pak";
+  } else if (rawJk === "P" || rawJk === "PEREMPUAN" || rawJk === "F") {
     genderLabel = "Perempuan";
+    honorific = isStudent ? "Mbak" : "Ibu";
+    honorificShort = isStudent ? "Mbak" : "Bu";
   }
 
   const subjectNames =
@@ -1357,6 +1397,7 @@ async function getTeacherAiContext(userId: string, userName: string) {
     activeClasses,
     studentRoster,
     honorific,
+    honorificShort,
     genderLabel,
     subjectNames,
     classNames,
@@ -1378,7 +1419,7 @@ async function getTeacherAiContext(userId: string, userName: string) {
  */
 teacherRoutes.get("/ai/context", async (c) => {
   const user = c.get("user");
-  const ctx = await getTeacherAiContext(user.id, user.name);
+  const ctx = await getTeacherAiContext(user.id, user.name, user);
 
   return c.json({
     success: true,
@@ -1386,6 +1427,7 @@ teacherRoutes.get("/ai/context", async (c) => {
       name: user.name,
       nip: ctx.teacher?.nip || null,
       honorific: ctx.honorific,
+      honorificShort: ctx.honorificShort,
       gender: ctx.genderLabel,
       subjects: ctx.assignedSubjects,
       subjectNames: ctx.subjectNames,
@@ -1534,6 +1576,43 @@ teacherRoutes.post("/ai/sessions", async (c) => {
   }
 });
 
+const SUPPORTED_INPUT_EXTENSIONS = new Set([
+  // Spreadsheets
+  "xlsx", "xls", "csv", "ods",
+  // Documents & Text
+  "pdf", "doc", "docx", "txt", "rtf", "odt",
+  // Images
+  "jpg", "jpeg", "png", "webp", "gif", "bmp", "svg", "ico", "heic", "heif",
+  // Audio
+  "mp3", "wav", "m4a", "ogg", "aac", "flac", "wma",
+  // Video
+  "mp4", "webm", "mov", "mkv", "avi", "wmv", "flv", "3gp",
+  // Presentations
+  "pptx", "ppt", "odp",
+  // Code & Data
+  "json", "md", "sql", "html", "css", "js", "ts", "tsx", "jsx", "py", "xml", "yaml", "yml",
+]);
+
+function isSupportedInputFile(name: string, mime?: string): boolean {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (SUPPORTED_INPUT_EXTENSIONS.has(ext)) return true;
+  const m = (mime || "").toLowerCase();
+  if (
+    m.startsWith("image/") ||
+    m.startsWith("video/") ||
+    m.startsWith("audio/") ||
+    m.startsWith("text/") ||
+    m === "application/pdf" ||
+    m.includes("spreadsheet") ||
+    m.includes("excel") ||
+    m.includes("word") ||
+    m.includes("presentation")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * POST /api/teacher/ai/upload
  * Mengunggah file lampiran roomchat secara langsung:
@@ -1567,10 +1646,21 @@ teacherRoutes.post("/ai/upload", async (c) => {
 
     for (const f of files) {
       if (!f.base64) continue;
-      const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
-      const buf = Buffer.from(cleanB64, "base64");
       const origName = f.name || `file-${Date.now()}`;
       const mime = f.type || "application/octet-stream";
+
+      if (!isSupportedInputFile(origName, mime)) {
+        return c.json(
+          {
+            success: false,
+            message: `Format berkas "${origName}" tidak didukung oleh NEBULA AI. Format yang didukung: Spreadsheet (Excel, CSV), Dokumen (PDF, Word, TXT), Gambar (JPG, PNG, WebP), Audio (MP3, WAV), dan Video (MP4).`,
+          },
+          400
+        );
+      }
+
+      const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
+      const buf = Buffer.from(cleanB64, "base64");
 
       const uploaded = await uploadFile({
         buffer: buf,
@@ -1756,7 +1846,7 @@ teacherRoutes.post("/ai/chat", async (c) => {
   const { sessionId = "default", messages = [], userPrompt, systemPromptExtra, files = [] } = body;
   const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "") || "default";
 
-  const ctx = await getTeacherAiContext(user.id, user.name);
+  const ctx = await getTeacherAiContext(user.id, user.name, user);
 
   // Buat daftar admin berformat teks dari DB
   const adminList = ctx.adminUsers.length > 0
@@ -2013,10 +2103,17 @@ teacherRoutes.post("/ai/chat", async (c) => {
           .join(", ")
       : "UH1, T1, STS, UH2, T2";
 
-  // Hitung tanggal & waktu server saat ini dalam zona waktu WIB (Asia/Jakarta)
-  const nowWib = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
-  const todayIso = `${nowWib.getFullYear()}-${String(nowWib.getMonth() + 1).padStart(2, "0")}-${String(nowWib.getDate()).padStart(2, "0")}`;
-  const todayReadable = nowWib.toLocaleDateString("id-ID", {
+  // Waktu Server Lokal (Single Source of Truth yang Valid) — WIB / UTC+7
+  const serverNow = new Date();
+  const padZero = (n: number) => String(n).padStart(2, "0");
+  const hoursServer = padZero(serverNow.getHours());
+  const minutesServer = padZero(serverNow.getMinutes());
+  const secondsServer = padZero(serverNow.getSeconds());
+  const currentTimeWib = `${hoursServer}:${minutesServer} WIB (UTC+7)`;
+  const currentTimeWibExact = `${hoursServer}:${minutesServer}:${secondsServer} WIB (UTC+7)`;
+  const nowWib = serverNow;
+  const todayIso = `${serverNow.getFullYear()}-${padZero(serverNow.getMonth() + 1)}-${padZero(serverNow.getDate())}`;
+  const todayReadable = serverNow.toLocaleDateString("id-ID", {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -2066,16 +2163,31 @@ teacherRoutes.post("/ai/chat", async (c) => {
   const systemInstruction = `Anda adalah **NEBULA AI**, Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA) yang memiliki pengetahuan menyeluruh atas **SELURUH FITUR & MENU SIMAK**.
 - **NAMA RESMI ANDA ADALAH: NEBULA AI** (bukan Gemini!). Jika ditanya siapa Anda atau apa nama AI ini, selalu perkenalkan diri sebagai **NEBULA AI**, Asisten Cerdas Resmi SIMAK SMA Negeri 3 Mojokerto.
 
-## 🗓️ INFORMASI WAKTU SERVER SAAT INI (WAJIB DIGUNAKAN)
+## 🗓️ INFORMASI WAKTU, TANGGAL & JAM SERVER REAL-TIME (SERVER LOKAL / WIB / UTC+7)
+- **Sumber Waktu Valid:** Jam Server Lokal (Single Source of Truth yang Valid)
+- **Zona Waktu Resmi:** WIB (Waktu Indonesia Barat) / UTC+7
 - **Hari & Tanggal Hari Ini:** ${todayReadable}
 - **Format Tanggal ISO Hari Ini (YYYY-MM-DD):** \`${todayIso}\`
-- ⚠️ **PENTING:** Setiap kali pengguna menyebut "hari ini", "sekarang", atau tidak menyebutkan tanggal spesifik saat mencatat/menghapus jurnal mengajar, Anda **WAJIB** menggunakan tanggal **\`${todayIso}\`** (${todayReadable}). **DILARANG KERAS** menebak atau mengarang tahun 2024/2025 atau tanggal lain!
+- **Waktu / Jam / Pukul Server Lokal Saat Ini:** **${currentTimeWib}** (${currentTimeWibExact})
+- ⏰ **SINKRONISASI JAM & PUKUL REAL-TIME:**
+  - Waktu server lokal saat ini persis menunjukkan pukul **${currentTimeWib}** (${currentTimeWibExact}).
+  - Jam server lokal adalah acuan mutlak dan valid bagi seluruh sistem SIMAK. Keterangan waktu wajib selalu menyertakan zona: **WIB (UTC+7)**.
+  - Jika pengguna menanyakan jam berapa sekarang, pukul berapa saat ini, jamnya, atau menanyakan waktu, Anda **WAJIB MENJAWAB DENGAN TEPAT & LUGAS** bahwa waktu server lokal saat ini adalah pukul **${currentTimeWib}** (atau ${currentTimeWibExact}) pada hari **${todayReadable}**.
+  - **DILARANG KERAS** menjawab 00:00 atau mengarang waktu lain! Jam server lokal saat ini adalah **${currentTimeWib}**.
+- ⚠️ **PENTING TANGGAL:** Setiap kali pengguna menyebut "hari ini", "sekarang", atau tidak menyebutkan tanggal spesifik saat mencatat/menghapus jurnal mengajar, Anda **WAJIB** menggunakan tanggal \`${todayIso}\` (${todayReadable}). **DILARANG KERAS** menebak atau mengarang tahun 2024/2025 atau tanggal lain!
 
 ## Identitas Pengguna yang Sedang Login
 - Nama Lengkap: ${user.name}
 - User ID: ${user.id}
 - Role & Otoritas Sistem: **${roleAuthorityLabel}**
-- Sapaan: ${ctx.honorific} ${user.name} (jenis kelamin: ${ctx.genderLabel}) — WAJIB konsisten menggunakan "${ctx.honorific}"
+- Sapaan Resmi: **${ctx.honorific} ${user.name}** (Sapaan singkat/akrab: **${ctx.honorificShort} ${user.name.split(" ")[0]}**)
+- Data Jenis Kelamin Terdaftar: **${ctx.genderLabel}**
+- ⚠️ **ATURAN MUTLAK SAPAAN PENGGUNA:**
+  - Wajib selalu menyapa pengguna menggunakan sapaan resmi: **${ctx.honorific}** atau sapaan singkat: **${ctx.honorificShort}** (misalnya: "${ctx.honorific} ${user.name}" atau "${ctx.honorificShort} ${user.name.split(" ")[0]}").
+  - **DILARANG KERAS** menggunakan format garis miring seperti "Bapak/Ibu" atau "Mas/Mbak"! Sapaan telah ditentukan secara otomatis oleh sistem berdasarkan jenis kelamin:
+    * Laki-laki: "Bapak" / "Pak" (atau "Mas" jika siswa)
+    * Perempuan: "Ibu" / "Bu" (atau "Mbak" jika siswa)
+    * Jika Jenis Kelamin Tidak Diketahui: gunakan sapaan umum/ramah: "Kakak" atau "Kak" (misal: "Kakak ${user.name}" atau "Kak ${user.name.split(" ")[0]}")
 - NIP: ${ctx.teacher?.nip || "Tidak tercatat"}
 - Mata Pelajaran Resmi yang Diampu: ${ctx.subjectNames}
 
@@ -2219,8 +2331,69 @@ ${roleSpecificRulesText}
   kelas: <Nama Kelas atau "SEMUA">
   \`\`\`
 
-## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE
-- **JANGAN PERNAH** mengklaim data tersimpan/terhapus/dipulihkan tanpa menyertakan blok \`\`\`action ...\`\`\`.
+### H. Menu Jurnal Guru — Kirim Resmi Draft Jurnal Mengajar (\`SEND_JOURNAL_DRAFT\`)
+- Ketika pengguna meminta mengirim resmi / men-submit draft jurnal (mengubah status dari \`draft\` menjadi \`sent\` seperti tombol "Kirim Masal Draft"):
+  \`\`\`action
+  SEND_JOURNAL_DRAFT
+  tanggal: <YYYY-MM-DD atau "hari ini">
+  kelas: <Nama Kelas atau "SEMUA">
+  mapel: <Nama Mapel atau "SEMUA">
+  \`\`\`
+
+### I. Penjadwalan Otomatis (NEBULA Task Scheduler) — Kirim di Waktu Tertentu (\`SCHEDULE_ACTION\`)
+- Ketika pengguna meminta menjadwalkan pengiriman draft atau tugas di jam tertentu (contoh: "kirim draft jam 13:18 wib", "kirim draft nanti pukul 15:00", "jadwalkan kirim jurnal kelas X-1 jam 14:30"):
+  \`\`\`action
+  SCHEDULE_ACTION
+  action: SEND_JOURNAL_DRAFT
+  waktu: <Format HH:mm, contoh: 13:18 atau 15:00>
+  tanggal: <YYYY-MM-DD atau "hari ini">
+  kelas: <Nama Kelas atau "SEMUA">
+  mapel: <Nama Mapel atau "SEMUA">
+  \`\`\`
+
+### J. Pusat Unduhan — Ekspor Berkas Laporan Resmi (.xlsx) (\`EXPORT_REPORT\`)
+- **PENTING — KEMAMPUAN EKSPOR BERKAS EXCEL:** Anda memiliki kemampuan mengekspor data laporan resmi langsung menjadi file Excel (.xlsx) dengan struktur dan template yang **SAMA PERSIS** dengan menu **Pusat Unduhan** (\`/admin/downloads\` atau \`/guru/downloads\`), lalu menyimpannya di server lokal atau Cloud Object Storage dan menyediakannya untuk diunduh langsung oleh pengguna.
+- Ketika pengguna menanyakan apakah bisa mengakses template unduhan, meminta mengunduh, mengekspor, merekap, atau membuat berkas:
+  1. **Rekap Monitoring Jurnal Mengajar Guru (.xlsx)** (format resmi KBM harian, status keterisian jam 1-11, materi, presensi, kop sekolah, dan blok tanda tangan pemberkasan fisik):
+     \`\`\`action
+     EXPORT_REPORT
+     jenis: REKAP_JURNAL
+     kelas: <Nama Kelas seperti X-1, atau SEMUA>
+     tanggal_mulai: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
+     tanggal_selesai: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
+     guru: <Nama Guru atau SEMUA>
+     sertakan_kosong: true
+     \`\`\`
+  2. **Buku Leger & Rekap Nilai Akademik Kelas (.xlsx)** (rekapitulasi roster siswa x seluruh mata pelajaran, rata-rata, dan detail komponen nilai):
+     \`\`\`action
+     EXPORT_REPORT
+     jenis: LEGER_NILAI
+     kelas: <Nama Kelas, contoh: X-1>
+     mapel: <Nama Mapel atau SEMUA>
+     status: <SEMUA | APPROVED | SUBMITTED | DRAFT>
+     \`\`\`
+  3. **Template Resmi Input Nilai Guru (.xlsx)** (template terkunci dengan token keamanan digital untuk diisi guru offline lalu diunggah kembali):
+     \`\`\`action
+     EXPORT_REPORT
+     jenis: TEMPLATE_NILAI
+     kelas: <Nama Kelas, contoh: X-1>
+     mapel: <Nama Mapel, contoh: DKV>
+     \`\`\`
+- **ATURAN WAJIB FORMAT EKSPOR LAPORAN RESMI (SANGAT PENTING):**
+  - Pusat Unduhan SIMAK **HANYA MENDUKUNG format Microsoft Excel (.xlsx)**.
+  - SIMAK **TIDAK MENDUKUNG ekspor langsung ke PDF, Word/DOCX, CSV, atau format lainnya** untuk berkas Rekap Jurnal Mengajar dan Leger Nilai.
+  - **JIKA PENGGUNA MEMINTA EKSPOR DALAM FORMAT PDF ATAU FORMAT LAIN YANG TIDAK DIDUKUNG:**
+    1. **JANGAN PERNAH mengeksekusi \`EXPORT_REPORT\`** dengan mengabaikan format yang diminta.
+    2. **JANGAN PERNAH membuat link unduhan palsu/halusinasi ke file PDF** (misalnya \`[Unduh PDF](...)\` atau tautan buatan sendiri).
+    3. **WAJIB informasikan secara jujur, ramah, dan solutif:**
+       - Sampaikan bahwa ekspor langsung ke format **PDF saat ini belum didukung** oleh server SIMAK.
+       - Beritahu bahwa format resmi yang tersedia adalah **Microsoft Excel (.xlsx)** yang sudah diformat rapi standar A4 Landscape, kop sekolah resmi, dan kolom tanda tangan siap cetak.
+       - Tawarkan untuk membuat berkas Excel (.xlsx), di mana pengguna dapat menyimpannya sebagai PDF melalui fitur Cetak (Print to PDF) di aplikasi Excel atau Google Sheets.
+- **ATURAN WAJIB UNTUK PERMINTAAN VALID:** Setiap kali pengguna meminta unduhan/ekspor rekap jurnal, leger nilai, atau template nilai (format Excel), **WAJIB sertakan blok \`EXPORT_REPORT\`**. Sistem akan langsung mengeksekusi pembuatan file Excel asli yang tersimpan aman di server lokal atau Cloud Object Storage dan dapat diunduh langsung.
+
+## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE & BERKAS
+- **JANGAN PERNAH** mengklaim data tersimpan/terhapus/dipulihkan/diekspor tanpa menyertakan blok \`\`\`action ...\`\`\`.
+- **DILARANG MENGARANG LINK BERKAS:** Jangan pernah menulis URL atau tautan unduhan buatan sendiri (misalnya \`/api/uploads/exports/...pdf\`). Seluruh berkas unduhan yang sah akan dilampirkan oleh sistem SIMAK secara otomatis.
 - **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai atau gambar tabel nilai, **WAJIB proses/simpan nilainya** menggunakan \`SAVE_GRADE_DRAFT\`.
 
 ## 👤 Daftar Admin Aktif SIMAK
@@ -2301,6 +2474,19 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       provider: string;
     }> = [];
 
+    const generatedFiles: Array<{
+      id: string;
+      name: string;
+      size: number;
+      type: string;
+      category: "spreadsheet" | "document" | "file";
+      url: string;
+      cloudUrl?: string;
+      provider: StorageProviderType;
+      key: string;
+      storedName: string;
+    }> = [];
+
     if (Array.isArray(files) && files.length > 0) {
       for (const f of files) {
         if (f.storageKey && f.storageUrl) {
@@ -2316,10 +2502,14 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           });
         } else if (f.base64) {
           try {
-            const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
-            const buf = Buffer.from(cleanB64, "base64");
             const origName = f.name || `file-${Date.now()}`;
             const mime = f.type || "application/octet-stream";
+            if (!isSupportedInputFile(origName, mime)) {
+              console.warn(`[Teacher AI Chat] Skipping unsupported file: ${origName} (${mime})`);
+              continue;
+            }
+            const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
+            const buf = Buffer.from(cleanB64, "base64");
 
             const uploaded = await uploadFile({
               buffer: buf,
@@ -2364,7 +2554,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       idx === chatMessages.length - 1
         ? {
             ...m,
-            text: `${m.text}\n\n[Catatan Sistem: Tanggal hari ini di server adalah ${todayIso} (${todayReadable}). Jika pengguna meminta jurnal/data hari ini, WAJIB gunakan tanggal ${todayIso}, jangan gunakan tahun 2024/2025.]`,
+            text: `${m.text}\n\n[Catatan Sistem: Waktu server lokal yang valid saat ini persis adalah pukul ${currentTimeWib} (${currentTimeWibExact}) pada hari ${todayReadable} (${todayIso}). Jika pengguna menanyakan jam berapa sekarang, pukul berapa, atau waktu saat ini, jawab secara langsung pukul ${currentTimeWib}. Keterangan waktu selalu gunakan WIB (UTC+7).]`,
           }
         : m
     );
@@ -3692,6 +3882,210 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       };
     }
 
+    // =========================================================
+    // HELPER 4 (MENU JURNAL GURU): Kirim Resmi Draft Jurnal Mengajar (Draft -> Sent)
+    // =========================================================
+    async function executeSendJournalDraft(params: {
+      tanggal?: string;
+      className?: string;
+      subjectName?: string;
+      ids?: string[];
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      let tanggal = (params.tanggal || "").trim();
+      const lastUserText = (userPrompt || (chatMessages[chatMessages.length - 1]?.text) || "").toLowerCase();
+      const userAskedToday = lastUserText.includes("hari ini") || lastUserText.includes("sekarang");
+
+      if (userAskedToday || !tanggal || tanggal.toLowerCase().includes("hari ini")) {
+        tanggal = todayIso;
+      }
+
+      const conditions = [
+        eq(teacherJournals.status, "draft"),
+        isNull(teacherJournals.deletedAt),
+      ];
+
+      if (!isAdminUser) {
+        conditions.push(eq(teacherJournals.teacherUserId, user.id));
+      }
+
+      if (Array.isArray(params.ids) && params.ids.length > 0) {
+        conditions.push(inArray(teacherJournals.id, params.ids));
+      } else if (tanggal && !["semua", "all", "*"].includes(tanggal.toLowerCase())) {
+        conditions.push(eq(teacherJournals.date, tanggal));
+      }
+
+      const rawClass = (params.className || "SEMUA").trim();
+      if (rawClass && !["semua", "all", "*"].includes(rawClass.toLowerCase())) {
+        const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
+        conditions.push(
+          sql`LOWER(TRIM(REPLACE(REPLACE(${teacherJournals.className}, '-', ''), ' ', ''))) = ${cleanClass}`
+        );
+      }
+
+      const rawSubject = (params.subjectName || "SEMUA").trim();
+      if (rawSubject && !["semua", "all", "*"].includes(rawSubject.toLowerCase())) {
+        conditions.push(
+          sql`LOWER(TRIM(${teacherJournals.subjectName})) LIKE LOWER(TRIM(${'%' + rawSubject + '%'}))`
+        );
+      }
+
+      const drafts = await db
+        .select({
+          id: teacherJournals.id,
+          date: teacherJournals.date,
+          className: teacherJournals.className,
+          subjectName: teacherJournals.subjectName,
+          teachingHourLabel: teacherJournals.teachingHourLabel,
+          materi: teacherJournals.materi,
+          presenceInfo: teacherJournals.presenceInfo,
+          teacherUserId: teacherJournals.teacherUserId,
+        })
+        .from(teacherJournals)
+        .where(and(...conditions));
+
+      if (drafts.length === 0) {
+        return {
+          success: false,
+          message: `ℹ️ Tidak ada draft jurnal mengajar yang perlu dikirim untuk tanggal **\`${tanggal}\`**${rawClass.toLowerCase() !== "semua" ? ` di kelas **${rawClass}**` : ""}. Seluruh jurnal mungkin sudah berstatus **Sent (Terkirim)** atau belum diinput.`,
+        };
+      }
+
+      // Validasi materi tidak boleh kosong
+      const emptyMateri = drafts.find((d) => !d.materi || !d.materi.trim());
+      if (emptyMateri) {
+        return {
+          success: false,
+          message: `⚠️ **Gagal Mengirim Jurnal:** Materi pembelajaran pada jam **${emptyMateri.teachingHourLabel || ""}** (${emptyMateri.className} - ${emptyMateri.subjectName}) masih kosong. Silakan lengkapi materi terlebih dahulu sebelum dikirim.`,
+        };
+      }
+
+      const idsToSend = drafts.map((d) => d.id);
+      await db
+        .update(teacherJournals)
+        .set({ status: "sent", updatedAt: new Date() })
+        .where(inArray(teacherJournals.id, idsToSend));
+
+      broadcastRealtimeEvent({ type: "journal_saved", actorId: user.id });
+
+      const hourLabels = drafts.map((d) => d.teachingHourLabel || "-").filter(Boolean);
+      const uniqueClasses = [...new Set(drafts.map((d) => d.className || "-"))].join(", ");
+      const uniqueSubjects = [...new Set(drafts.map((d) => d.subjectName || "-"))].join(", ");
+
+      return {
+        success: true,
+        message: `🚀 **Jurnal Mengajar Berhasil Dikirim Resmi ke Sistem (Status: SENT)**\n- **Menu Terkait:** Jurnal Guru (\`/guru/jurnal\`) & Monitoring Jurnal (\`/admin/monitoring-jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- **Kelas:** **${uniqueClasses}** | **Mapel:** **${uniqueSubjects}**\n- **Total Jurnal Terkirim:** **${drafts.length} jam pelajaran** (${hourLabels.join(", ")})\n- ✨ **Status Saat Ini:** **Sent (Terkirim Resmi)** — Data jurnal telah terkunci dan tersinkronisasi ke pemantauan admin.`,
+        data: { sentCount: drafts.length, ids: idsToSend },
+      };
+    }
+
+    // =========================================================
+    // HELPER 5 (PENJADWALAN OTOMATIS AI): Jadwalkan tugas di waktu tertentu (In-Process DB / Redis)
+    // =========================================================
+    async function executeScheduleAction(params: {
+      action: string;
+      waktu: string;
+      tanggal?: string;
+      className?: string;
+      subjectName?: string;
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      const actionType = (params.action || "SEND_JOURNAL_DRAFT").toUpperCase();
+      let rawTime = (params.waktu || "").trim().toLowerCase();
+      let rawDate = (params.tanggal || "").trim();
+
+      const timeMatch = rawTime.match(/(\d{1,2})[:.](\d{2})/);
+      if (!timeMatch) {
+        return {
+          success: false,
+          message: `⚠️ Format waktu penjadwalan "${params.waktu}" tidak valid. Harap gunakan format jam seperti **13:18** atau **15:00**.`,
+        };
+      }
+
+      const targetHours = parseInt(timeMatch[1], 10);
+      const targetMinutes = parseInt(timeMatch[2], 10);
+      if (targetHours < 0 || targetHours > 23 || targetMinutes < 0 || targetMinutes > 59) {
+        return { success: false, message: `Jam ${targetHours}:${targetMinutes} di luar rentang waktu yang valid.` };
+      }
+
+      const targetTimeStr = `${String(targetHours).padStart(2, "0")}:${String(targetMinutes).padStart(2, "0")}`;
+
+      if (!rawDate || rawDate.toLowerCase().includes("hari ini") || rawDate.toLowerCase().includes("sekarang")) {
+        rawDate = todayIso;
+      }
+
+      const [yearStr, monthStr, dayStr] = rawDate.split("-");
+      const targetDateObj = new Date(
+        parseInt(yearStr, 10),
+        parseInt(monthStr, 10) - 1,
+        parseInt(dayStr, 10),
+        targetHours,
+        targetMinutes,
+        0
+      );
+
+      const now = new Date();
+      const diffMs = targetDateObj.getTime() - now.getTime();
+
+      // Jika waktu yang diminta sudah lewat lebih dari 1 menit yang lalu pada hari ini:
+      if (diffMs < -60000) {
+        const immediateRes = await executeSendJournalDraft({
+          tanggal: rawDate,
+          className: params.className,
+          subjectName: params.subjectName,
+        });
+
+        if (immediateRes.success) {
+          return {
+            success: true,
+            message: `⏰ **Waktu Pukul ${targetTimeStr} WIB Telah Terlewat (Waktu Server Saat Ini: ${currentTimeWib})**\nKarena jam target telah terlewati, NEBULA AI langsung mengeksekusi pengiriman draft sekarang:\n\n${immediateRes.message}`,
+            data: immediateRes.data,
+          };
+        } else {
+          return {
+            success: false,
+            message: `⏰ Waktu yang Anda minta (**${targetTimeStr} WIB**) sudah terlewat dari jam server saat ini (**${currentTimeWib}**).\n${immediateRes.message}`,
+          };
+        }
+      }
+
+      // Jika waktu sudah tiba atau tersisa < 10 detik, eksekusi langsung
+      if (diffMs <= 10000) {
+        return executeSendJournalDraft({
+          tanggal: rawDate,
+          className: params.className,
+          subjectName: params.subjectName,
+        });
+      }
+
+      const schedRes = await scheduleJob({
+        userId: user.id,
+        actionType,
+        payload: {
+          userId: user.id,
+          date: rawDate,
+          className: params.className || "SEMUA",
+          subjectName: params.subjectName || "SEMUA",
+          targetTimeStr,
+        },
+        scheduledAt: targetDateObj,
+      });
+
+      if (!schedRes.success) {
+        return { success: false, message: `Gagal membuat jadwal otomatis: ${schedRes.message}` };
+      }
+
+      const diffMinutes = Math.ceil(diffMs / 60000);
+      const schedInfo = getSchedulerInfo();
+      const driverBadge = schedInfo.isRedis
+        ? "⚡ **Redis Queue Worker**"
+        : "🍃 **In-Process DB Worker (PostgreSQL)**";
+
+      return {
+        success: true,
+        message: `⏰ **Penjadwalan Otomatis Berhasil Dibuat (NEBULA AI Scheduler)**\n- **Aksi Terjadwal:** Kirim Jurnal Mengajar (Draft ➔ Sent)\n- **Waktu Eksekusi:** Pukul **${targetTimeStr} WIB (UTC+7)** *(sekitar ${diffMinutes} menit lagi)*\n- **Tanggal Target:** **${rawDate}**\n- **Kelas & Mapel:** Kelas **${params.className || "Semua"}** | Mapel **${params.subjectName || "Semua"}**\n- **Driver Antrean:** ${driverBadge}\n- 🟢 **Status:** **Terjadwal (Pending)** — Server akan otomatis memproses pengiriman jurnal tepat saat jam server menunjukkan pukul **${targetTimeStr} WIB** tanpa perlu membuka aplikasi kembali.`,
+        data: schedRes.job,
+      };
+    }
+
     const aiActions: Array<{
       type: string;
       payload: Record<string, unknown>;
@@ -3836,6 +4230,36 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         }
       }
 
+      if (actionType === "SEND_JOURNAL_DRAFT") {
+        const params = parseParams();
+        const tanggal     = params["tanggal"] || params["date"] || todayIso;
+        const className   = params["kelas"] || params["class"] || "SEMUA";
+        const subjectName = params["mapel"] || params["subject"] || "SEMUA";
+
+        const dedupKey = `SEND_JOURNAL|${tanggal}|${className}|${subjectName}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeSendJournalDraft({ tanggal, className, subjectName });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "SCHEDULE_ACTION") {
+        const params = parseParams();
+        const action      = params["action"] || "SEND_JOURNAL_DRAFT";
+        const waktu       = params["waktu"] || params["jam"] || params["time"] || "";
+        const tanggal     = params["tanggal"] || params["date"] || todayIso;
+        const className   = params["kelas"] || params["class"] || "SEMUA";
+        const subjectName = params["mapel"] || params["subject"] || "SEMUA";
+
+        const dedupKey = `SCHEDULE|${action}|${waktu}|${tanggal}|${className}`.toLowerCase();
+        if (waktu && !executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeScheduleAction({ action, waktu, tanggal, className, subjectName });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
       if (actionType === "SAVE_MATRIX_DRAFT") {
         const params = parseParams();
         const className       = params["kelas"] || params["class"] || "";
@@ -3855,12 +4279,353 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           aiActions.push({ type: actionType, payload: params, result: res });
         }
       }
+
+      if (actionType === "EXPORT_REPORT" || actionType === "DOWNLOAD_REPORT") {
+        const params = parseParams();
+        const jenisRaw = (params["jenis"] || params["type"] || params["laporan"] || "REKAP_JURNAL").toUpperCase();
+        const className = params["kelas"] || params["class"] || "";
+        const subjectName = params["mapel"] || params["subject"] || "";
+        let startDate = params["tanggal_mulai"] || params["start_date"] || params["tanggal"] || todayIso;
+        let endDate = params["tanggal_selesai"] || params["end_date"] || startDate || todayIso;
+        if (startDate === "hari ini") startDate = todayIso;
+        if (endDate === "hari ini") endDate = todayIso;
+        const rawTeacherParam = params["guru"] || params["teacher"] || "";
+        const includeEmpty = params["sertakan_kosong"] !== "false";
+        const statusFilter = (params["status"] || "all").toLowerCase();
+
+        const rawFormat = (
+          params["format"] ||
+          params["ext"] ||
+          params["ekstensi"] ||
+          params["tipe"] ||
+          ""
+        ).toLowerCase().trim();
+
+        // Validasi Format: Tolak jika diminta PDF, Word, atau format yang tidak didukung
+        const isPdfExplicit = rawFormat === "pdf" || jenisRaw.includes("PDF");
+        const isUnsupportedFormat = Boolean(rawFormat && !["xlsx", "excel", "spreadsheet"].includes(rawFormat));
+
+        if (isPdfExplicit || isUnsupportedFormat) {
+          const badFormat = isPdfExplicit ? "PDF" : rawFormat.toUpperCase();
+          aiActions.push({
+            type: "EXPORT_REPORT",
+            payload: params,
+            result: {
+              success: false,
+              message: `⚠️ **Format Ekspor "${badFormat}" Belum Didukung**\n\nSistem Pusat Unduhan SIMAK saat ini **hanya mendukung ekspor laporan resmi dalam format Microsoft Excel (.xlsx)**. Format ${badFormat} belum didukung secara langsung oleh server.\n\n💡 *Solusi Cetak PDF:* Laporan Excel (.xlsx) resmi SIMAK sudah diformat dengan tata letak standar A4 Landscape, kop surat resmi, dan blok tanda tangan. Anda dapat mengunduh berkas Excel (.xlsx) lalu menyimpannya sebagai ${badFormat} melalui menu **Cetak (Print to PDF)** di Excel atau browser.`,
+            },
+          });
+          continue;
+        }
+
+        let targetTeacherUserId: string | undefined = undefined;
+        let targetTeacherName: string | null = null;
+
+        const isTeacherRole = user.roles.includes("guru") || user.roles.includes("teacher");
+        if (rawTeacherParam.toUpperCase() === "SEMUA") {
+          targetTeacherName = null;
+          targetTeacherUserId = undefined;
+        } else if (rawTeacherParam) {
+          const tClean = rawTeacherParam.toLowerCase().replace(/['`]/g, "").trim();
+          const uClean = user.name.toLowerCase().replace(/['`]/g, "").trim();
+          if (
+            uClean === tClean ||
+            uClean.includes(tClean) ||
+            tClean.includes("saya") ||
+            tClean.includes("pribadi")
+          ) {
+            targetTeacherUserId = user.id;
+            targetTeacherName = user.name;
+          } else {
+            targetTeacherName = rawTeacherParam;
+          }
+        } else if (isTeacherRole) {
+          // Default ke guru yang sedang login
+          targetTeacherUserId = user.id;
+          targetTeacherName = user.name;
+        }
+
+        const dedupKey = `EXPORT|${jenisRaw}|${className}|${subjectName}|${startDate}|${endDate}|${targetTeacherUserId || targetTeacherName || "ALL"}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          try {
+            let exportResult: ExportReportResult;
+            if (jenisRaw.includes("LEGER") || (jenisRaw.includes("NILAI") && !jenisRaw.includes("TEMPLATE"))) {
+              exportResult = await exportGradeLegerExcel({
+                classQuery: className || ctx.classNames.split(",")[0] || "X-1",
+                subjectQuery: subjectName,
+                statusFilter,
+                printedBy: user.name,
+              });
+            } else if (jenisRaw.includes("TEMPLATE")) {
+              exportResult = await exportGradeTemplateExcel({
+                user: { id: user.id, name: user.name },
+                classQuery: className || ctx.classNames.split(",")[0] || "X-1",
+                subjectQuery: subjectName || (ctx.assignedSubjects[0]?.name || "Umum"),
+              });
+            } else {
+              // Default: Rekap Monitoring Jurnal Mengajar Guru
+              exportResult = await exportJournalRecapExcel({
+                startDate,
+                endDate,
+                classQuery: className || "SEMUA",
+                teacherUserId: targetTeacherUserId,
+                teacherQuery: targetTeacherName,
+                includeEmptySlots: includeEmpty,
+                printedBy: user.name,
+              });
+            }
+
+            // Catat di ai_chat_files untuk riwayat roomchat
+            await db.execute(sql`
+              INSERT INTO ai_chat_files (
+                session_id, user_id, original_name, stored_name, storage_key, storage_provider, storage_url, mime_type, size_bytes
+              ) VALUES (
+                ${safeSessionId},
+                ${user.id},
+                ${exportResult.fileName},
+                ${path.basename(exportResult.storageKey)},
+                ${exportResult.storageKey},
+                ${exportResult.provider},
+                ${exportResult.url},
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ${exportResult.size}
+              )
+            `);
+
+            generatedFiles.push({
+              id: `gen-file-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              name: exportResult.fileName,
+              size: exportResult.size,
+              type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              category: "spreadsheet",
+              url: exportResult.url,
+              cloudUrl: exportResult.cloudUrl,
+              provider: exportResult.provider,
+              key: exportResult.storageKey,
+              storedName: path.basename(exportResult.storageKey),
+            });
+
+            const storageProviderLabel = exportResult.provider === "local"
+              ? "Penyimpanan Server Lokal (`/uploads`)"
+              : `Cloud Object Storage [${exportResult.provider.toUpperCase()}]`;
+
+            const downloadUrlWithFilename = `${exportResult.url}?filename=${encodeURIComponent(exportResult.fileName)}`;
+
+            let detailMsg = "";
+            if (exportResult.exportType === "rekap_jurnal") {
+              detailMsg = `- **Tipe Berkas:** Rekapitulasi Monitoring Jurnal Mengajar Guru (.xlsx)\n` +
+                `- **Cakupan:** ${exportResult.scopeDescription}\n` +
+                `- **Statistik Data:** Total Baris: **${exportResult.totalRows ?? 0}** | Terisi: **${exportResult.filledCount ?? 0}** (Terkirim: **${exportResult.sentCount ?? 0}**, Draft: **${exportResult.draftCount ?? 0}**) | Kosong: **${exportResult.emptyCount ?? 0}**\n` +
+                `- **Lokasi Simpan:** ${storageProviderLabel}\n` +
+                `- **Ukuran Berkas:** ${(exportResult.size / 1024).toFixed(1)} KB\n\n` +
+                `📥 **[Klik di Sini untuk Mengunduh Berkas Excel: ${exportResult.fileName}](${downloadUrlWithFilename})**`;
+            } else if (exportResult.exportType === "leger_nilai") {
+              detailMsg = `- **Tipe Berkas:** Buku Leger & Rekap Nilai Akademik Kelas (.xlsx)\n` +
+                `- **Cakupan:** ${exportResult.scopeDescription}\n` +
+                `- **Lokasi Simpan:** ${storageProviderLabel}\n` +
+                `- **Ukuran Berkas:** ${(exportResult.size / 1024).toFixed(1)} KB\n\n` +
+                `📥 **[Klik di Sini untuk Mengunduh Berkas Leger Excel: ${exportResult.fileName}](${downloadUrlWithFilename})**`;
+            } else {
+              detailMsg = `- **Tipe Berkas:** Template Resmi Input Nilai Guru (.xlsx)\n` +
+                `- **Cakupan:** ${exportResult.scopeDescription}\n` +
+                `- **Lokasi Simpan:** ${storageProviderLabel}\n` +
+                `- **Ukuran Berkas:** ${(exportResult.size / 1024).toFixed(1)} KB\n\n` +
+                `📥 **[Klik di Sini untuk Mengunduh Template Nilai: ${exportResult.fileName}](${downloadUrlWithFilename})**`;
+            }
+
+            aiActions.push({
+              type: "EXPORT_REPORT",
+              payload: { ...params, exportResult },
+              result: {
+                success: true,
+                message: `📊 **Ekspor Laporan Resmi Berhasil Dibuat (Sesuai Template Pusat Unduhan SIMAK)**\n${detailMsg}`,
+                data: exportResult,
+              },
+            });
+          } catch (e: any) {
+            aiActions.push({
+              type: "EXPORT_REPORT",
+              payload: params,
+              result: {
+                success: false,
+                message: `⚠️ Gagal mengekspor laporan: ${e.message || String(e)}`,
+              },
+            });
+          }
+        }
+      }
     }
 
     // =========================================================
-    // LAYER 1B: Fallback cerdas untuk Verifikasi 2 Langkah (Langkah 1 & Langkah 2)
+    // LAYER 1B: Fallback cerdas untuk Verifikasi 2 Langkah (Langkah 1 & Langkah 2) & Ekspor Berkas
     // =========================================================
     const promptToCheck = lastUserLower;
+
+    // Jika user meminta EKSPOR / UNDUH REKAPITULASI JURNAL ATAU LEGER NILAI
+    const isExportIntent = (
+      promptToCheck.includes("rekap jurnal") ||
+      promptToCheck.includes("template unduhan") ||
+      promptToCheck.includes("pusat unduhan") ||
+      (promptToCheck.includes("unduhan") && (promptToCheck.includes("jurnal") || promptToCheck.includes("nilai") || promptToCheck.includes("template") || promptToCheck.includes("akses"))) ||
+      (promptToCheck.includes("export") && (promptToCheck.includes("jurnal") || promptToCheck.includes("nilai") || promptToCheck.includes("rekap") || promptToCheck.includes("template"))) ||
+      (promptToCheck.includes("unduh") && (promptToCheck.includes("jurnal") || promptToCheck.includes("rekap") || promptToCheck.includes("leger") || promptToCheck.includes("template"))) ||
+      (promptToCheck.includes("download") && (promptToCheck.includes("jurnal") || promptToCheck.includes("rekap") || promptToCheck.includes("leger") || promptToCheck.includes("template")))
+    );
+
+    if (aiActions.length === 0 && isExportIntent) {
+      const isPdfRequested = promptToCheck.includes("pdf");
+      const isWordRequested = promptToCheck.includes("word") || promptToCheck.includes("docx");
+
+      if (isPdfRequested || isWordRequested) {
+        const requestedBadFormat = isPdfRequested ? "PDF" : "Word/DOCX";
+        aiActions.push({
+          type: "EXPORT_REPORT",
+          payload: { format: requestedBadFormat, prompt: promptToCheck },
+          result: {
+            success: false,
+            message: `⚠️ **Format Ekspor "${requestedBadFormat}" Belum Didukung**\n\nSistem Pusat Unduhan SIMAK saat ini **hanya mendukung ekspor laporan resmi dalam format Microsoft Excel (.xlsx)**. Berkas Rekap Jurnal Mengajar dan Leger Nilai belum didukung untuk ekspor langsung ke format ${requestedBadFormat}.\n\n💡 *Solusi Cetak PDF:* Laporan Excel (.xlsx) resmi SIMAK sudah diformat dengan tata letak standar A4 Landscape, kop sekolah resmi, dan kolom tanda tangan. Anda dapat meminta saya untuk membuat berkas **Excel (.xlsx)**, lalu memilih menu **File > Cetak / Simpan sebagai PDF** di Excel atau browser.`,
+          },
+        });
+      } else {
+        const classMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+        const targetClass = classMatch ? classMatch[1].trim() : (ctx.classNames.split(",")[0]?.trim() || "SEMUA");
+        const isLeger = promptToCheck.includes("leger") || (promptToCheck.includes("nilai") && !promptToCheck.includes("jurnal"));
+        const isTemplate = promptToCheck.includes("template nilai") || (promptToCheck.includes("template") && promptToCheck.includes("nilai"));
+
+        try {
+          let exportResult: ExportReportResult;
+          if (isTemplate) {
+            exportResult = await exportGradeTemplateExcel({
+              user: { id: user.id, name: user.name },
+              classQuery: targetClass,
+              subjectQuery: ctx.assignedSubjects[0]?.name || "Umum",
+            });
+          } else if (isLeger) {
+            exportResult = await exportGradeLegerExcel({
+              classQuery: targetClass === "SEMUA" ? "X-1" : targetClass,
+              printedBy: user.name,
+            });
+          } else {
+            const isTeacherRole = user.roles.includes("guru") || user.roles.includes("teacher");
+            exportResult = await exportJournalRecapExcel({
+              startDate: todayIso,
+              endDate: todayIso,
+              classQuery: targetClass,
+              teacherUserId: isTeacherRole ? user.id : undefined,
+              teacherQuery: isTeacherRole ? user.name : null,
+              includeEmptySlots: true,
+              printedBy: user.name,
+            });
+          }
+
+          await db.execute(sql`
+            INSERT INTO ai_chat_files (
+              session_id, user_id, original_name, stored_name, storage_key, storage_provider, storage_url, mime_type, size_bytes
+            ) VALUES (
+              ${safeSessionId},
+              ${user.id},
+              ${exportResult.fileName},
+              ${path.basename(exportResult.storageKey)},
+              ${exportResult.storageKey},
+              ${exportResult.provider},
+              ${exportResult.url},
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              ${exportResult.size}
+            )
+          `);
+
+          generatedFiles.push({
+            id: `gen-file-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            name: exportResult.fileName,
+            size: exportResult.size,
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            category: "spreadsheet",
+            url: exportResult.url,
+            cloudUrl: exportResult.cloudUrl,
+            provider: exportResult.provider,
+            key: exportResult.storageKey,
+            storedName: path.basename(exportResult.storageKey),
+          });
+
+          const storageProviderLabel = exportResult.provider === "local"
+            ? "Penyimpanan Server Lokal (`/uploads`)"
+            : `Cloud Object Storage [${exportResult.provider.toUpperCase()}]`;
+
+          const downloadUrlWithFilename = `${exportResult.url}?filename=${encodeURIComponent(exportResult.fileName)}`;
+
+          aiActions.push({
+            type: "EXPORT_REPORT",
+            payload: { from: "export_intent_fallback", targetClass },
+            result: {
+              success: true,
+              message: `📊 **Berkas Laporan Resmi Berhasil Diekspor Langsung (Sesuai Template Pusat Unduhan SIMAK)**\n` +
+                `- **Nama Berkas:** \`${exportResult.fileName}\`\n` +
+                `- **Cakupan:** ${exportResult.scopeDescription}\n` +
+                `- **Penyimpanan:** ${storageProviderLabel}\n` +
+                `- **Ukuran Berkas:** ${(exportResult.size / 1024).toFixed(1)} KB\n\n` +
+                `📥 **[Klik di Sini untuk Mengunduh Berkas Excel: ${exportResult.fileName}](${downloadUrlWithFilename})**`,
+              data: exportResult,
+            },
+          });
+        } catch (err: any) {
+          aiActions.push({
+            type: "EXPORT_REPORT",
+            payload: { from: "export_intent_fallback" },
+            result: {
+              success: false,
+              message: `⚠️ Gagal mengekspor berkas: ${err.message || String(err)}`,
+            },
+          });
+        }
+      }
+    }
+
+    // Jika user meminta KIRIM DRAFT DENGAN JADWAL JAM TERTENTU (misal: "kirim draft 13:18 wib", "kirim draft jam 13:18", "jadwalkan kirim draft 15:00")
+    const scheduleMatch = promptToCheck.match(/(?:kirim\s+draft|kirim\s+jurnal|jadwalkan).*?(?:jam|pukul)?\s*(\d{1,2}[:.]\d{2})/i) ||
+      promptToCheck.match(/(?:jam|pukul)\s*(\d{1,2}[:.]\d{2}).*?(?:kirim\s+draft|kirim\s+jurnal)/i);
+
+    if (aiActions.length === 0 && scheduleMatch) {
+      const waktuExtracted = scheduleMatch[1];
+      const classMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+      const subjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk)\b/i);
+      const targetClass = classMatch ? classMatch[1].trim() : "SEMUA";
+      const targetSubject = subjectMatch ? subjectMatch[1].trim() : "SEMUA";
+
+      const res = await executeScheduleAction({
+        action: "SEND_JOURNAL_DRAFT",
+        waktu: waktuExtracted,
+        tanggal: todayIso,
+        className: targetClass,
+        subjectName: targetSubject,
+      });
+
+      aiActions.push({
+        type: "SCHEDULE_ACTION",
+        payload: { from: "prompt_schedule_fallback", waktu: waktuExtracted, className: targetClass },
+        result: res,
+      });
+    }
+
+    // Jika user meminta KIRIM DRAFT SEKARANG (tanpa jam masa depan, misal: "kirim draft", "kirim jurnal sekarang", "submit draft jurnal")
+    if (aiActions.length === 0 && (promptToCheck.includes("kirim draft") || promptToCheck.includes("submit draft") || promptToCheck.includes("kirim jurnal")) && !promptToCheck.includes("hapus")) {
+      const classMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+      const subjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk)\b/i);
+      const targetClass = classMatch ? classMatch[1].trim() : "SEMUA";
+      const targetSubject = subjectMatch ? subjectMatch[1].trim() : "SEMUA";
+
+      const res = await executeSendJournalDraft({
+        tanggal: todayIso,
+        className: targetClass,
+        subjectName: targetSubject,
+      });
+
+      aiActions.push({
+        type: "SEND_JOURNAL_DRAFT",
+        payload: { from: "prompt_send_fallback", className: targetClass },
+        result: res,
+      });
+    }
 
     // Jika ini adalah balasan konfirmasi Langkah 2 ("Ya", "Yakin", dll.) dan Gemini tidak membuat blok action:
     if (aiActions.length === 0 && isTwoStepConfirmed) {
@@ -4092,6 +4857,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
     // Bersihkan blok action dari teks reply yang ditampilkan ke pengguna
     // Serta koreksi tanggal halusinasi 2023/2024/2025 di teks narasi AI menjadi tanggal server hari ini
+    // Dan bersihkan halusinasi 00:00 atau 00:00 WIB menjadi jam server lokal yang valid
     let cleanReply = rawReply
       .replace(actionBlockRegex, "")
       .replace(/\bGoogle\s+Gemini\b/gi, "NEBULA AI")
@@ -4099,8 +4865,37 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       .replace(/\bGemini\b/gi, "NEBULA AI")
       .replace(/\b202[345]-\d{2}-\d{2}\b/g, todayIso)
       .replace(/\b\d{1,2}\s+(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+202[345]\b/gi, todayReadable)
+      .replace(/\b00:00(?:\s*WIB)?\b/gi, currentTimeWib)
       .replace(/\s*\(pukul\s+(\d{2}:\d{2})\s*-\s*\1\)/gi, "")
       .trim();
+
+    // Deteksi jika user bertanya mengenai jam / pukul / waktu sekarang (Pastikan jam server lokal valid selalu tertera)
+    const isAskingTime = /\b(pukul\s*berapa|jam\s*berapa|waktu\s*sekarang|jam\s*sekarang|pukul\s*sekarang|jamnya|pukulnya|sekarang\s*pukul|sekarang\s*jam)\b/i.test(
+      userPrompt || (chatMessages[chatMessages.length - 1]?.text || "")
+    );
+    if (isAskingTime && !cleanReply.includes(currentTimeWib)) {
+      cleanReply = `Saat ini waktu server lokal menunjukkan pukul **${currentTimeWib}** (${currentTimeWibExact}) pada hari **${todayReadable}**.\n\n${cleanReply}`.trim();
+    }
+
+    // Bersihkan link unduhan palsu/halusinasi dari model (misalnya tautan PDF atau berkas ekspor fiktif)
+    const validGeneratedUrls = new Set([
+      ...generatedFiles.map((gf) => gf.url),
+      ...generatedFiles.map((gf) => `${gf.url}?filename=${encodeURIComponent(gf.name)}`),
+    ]);
+    cleanReply = cleanReply.replace(
+      /\[([^\]]*?)\]\(((\/api\/uploads\/exports\/[^\s)]+?)|(https?:\/\/[^\s)]+?\.pdf[^\s)]*)|([^\s)]+?\.pdf[^\s)]*))\)/gi,
+      (match, linkText, url) => {
+        const base = url.split("?")[0];
+        const isPdf = /\.pdf(\?.*)?$/i.test(url);
+        if (isPdf) {
+          return `⚠️ *(Tautan unduh "${linkText}" dinonaktifkan karena ekspor langsung ke format PDF belum didukung sistem SIMAK — silakan gunakan format resmi Excel .xlsx yang telah disediakan)*`;
+        }
+        if (![...validGeneratedUrls].some((u) => u.includes(base) || base.includes(u.split("?")[0]))) {
+          return `⚠️ *(Tautan unduh "${linkText}" dinonaktifkan)*`;
+        }
+        return match;
+      }
+    );
 
     // SANGAT PENTING: Lampirkan konfirmasi aksi database atau Verifikasi 2 Langkah langsung ke teks balasan chat.
     let finalReply = cleanReply;
@@ -4136,6 +4931,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         gender: ctx.genderLabel,
         teacherName: user.name,
         storedFiles,
+        generatedFiles,
       },
     });
   } catch (err: any) {
