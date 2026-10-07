@@ -1,16 +1,15 @@
 {
-  "version": "01.07.00",
-  "version_code": 170,
+  "version": "01.07.01",
+  "version_code": 171,
   "db_version": "01.00.00",
-  "title": "SIMAK v01.07.00 — Pusat Unduhan & Pemberkasan (Rekap Jurnal & Buku Leger Nilai) + Penjadwalan AI",
-  "release_date": "2026-10-02",
+  "title": "SIMAK v01.07.01 — Integrasi 9Router AI Gateway, Monitoring Jurnal Per Guru/Kelas & Optimasi SSO",
+  "release_date": "2026-10-08",
   "force_update": false,
   "changelog": [
-    "Fitur Baru: Pusat Unduhan terintegrasi di menu Kelas, Siswa & Pemberkasan untuk Guru Pribadi maupun Admin/Superadmin",
-    "Modul #1 — Rekap Monitoring Jurnal Mengajar Guru: Ekspor Excel (.xlsx) resmi siap cetak dengan kop surat sekolah, filter preset tanggal (Hari Ini, 1 Pekan, 1 Bulan, Semua Tanggal, Rentang Kustom), pratinjau langsung, dan lembar tanda tangan pengesahan",
-    "Modul #2 — Buku Leger & Rekap Nilai Akademik: Ekspor Excel (.xlsx) Buku Leger Kelas (matriks nilai akhir & predikat seluruh mapel, rata-rata, dan peringkat otomatis) maupun Rekap Detail Komponen Nilai per Mata Pelajaran",
-    "Fitur Baru: Ekspor Excel & Penjadwalan Otomatis (AI Scheduler) langsung dari Asisten AI Guru (/guru/ai)",
-    "Peningkatan: Sinkronisasi normalisasi nama kelas SSO/lokal dan resolusi identitas guru lintas tabel agar filter jurnal & nilai akurat 100%"
+    "Fitur Baru: Monitoring Jurnal Mengajar mendukung mode filter Per Kelas maupun Per Guru secara penuh beserta tampilan seluruh jam mengajar tanpa menimpa baris ganda",
+    "Peningkatan AI: Integrasi 9Router Gateway LLM API, penyempurnaan Asisten NEBULA AI Guru (/guru/ai), dan peningkatan Report Exporter",
+    "Peningkatan Auth & UI: Optimasi ekstraksi klaim JWT SSO Kredensia serta perbaikan tampilan tombol Keluar saat sidebar di-minimize",
+    "Pusat Unduhan & Pemberkasan: Rekap Monitoring Jurnal Mengajar & Buku Leger Nilai Akademik Kelas (.xlsx)"
   ],
   "min_supported_version": "01.00.00",
   "schema_changes": [

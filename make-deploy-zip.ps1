@@ -1,10 +1,16 @@
 param(
-    [string]$OutputPath = ".\deploy.zip"
+    [string]$OutputPath = ""
 )
 
 $root = $PSScriptRoot
+$manifest = Get-Content (Join-Path $root "version.json") | ConvertFrom-Json
+$version = $manifest.version
 
-Write-Host "=== SIMAK Deploy ZIP Builder ===" -ForegroundColor Cyan
+if (-not $OutputPath) {
+    $OutputPath = Join-Path $root "update_simak_v${version}.zip"
+}
+
+Write-Host "=== SIMAK Deploy ZIP Builder (v$version) ===" -ForegroundColor Cyan
 
 $apiDist = Join-Path $root "apps\api\dist"
 $webDist = Join-Path $root "apps\web\dist"
@@ -42,6 +48,7 @@ Write-Host "Menambahkan file ke ZIP..." -ForegroundColor Yellow
 $rootFiles = @(
     @{ Path = "version.json"; Entry = "version.json" },
     @{ Path = "apps\api\version.json"; Entry = "apps/api/version.json" },
+    @{ Path = "apps\web\public\version.json"; Entry = "apps/web/public/version.json" },
     @{ Path = "package.json"; Entry = "package.json" },
     @{ Path = "pnpm-lock.yaml"; Entry = "pnpm-lock.yaml" },
     @{ Path = "apps\api\package.json"; Entry = "apps/api/package.json" },
@@ -58,12 +65,6 @@ foreach ($rf in $rootFiles) {
 
 Add-DirToZip -zipArchive $zip -dirPath "$apiDist\" -zipPrefix "apps/api/dist"
 Add-DirToZip -zipArchive $zip -dirPath "$webDist\" -zipPrefix "apps/web/dist"
-
-$webPublicVersion = Join-Path $root "apps\web\public\version.json"
-if (Test-Path $webPublicVersion) {
-    Add-FileToZip -zipArchive $zip -filePath $webPublicVersion -entryName "apps/web/public/version.json"
-    Write-Host "  + apps/web/public/version.json"
-}
 
 $zip.Dispose()
 
