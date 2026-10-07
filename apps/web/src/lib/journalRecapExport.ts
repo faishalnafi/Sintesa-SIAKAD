@@ -80,6 +80,17 @@ function getDateListBetween(startStr: string, endStr: string, skipSunday = true)
   return result;
 }
 
+export function formatTeachingHourLabel(raw?: string | null): string {
+  if (!raw) return "—";
+  const withoutTime = raw
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/^jam\s+jam\s+/i, "Jam ")
+    .trim();
+  if (!withoutTime) return "—";
+  if (/^\d+$/.test(withoutTime)) return `Jam ke-${withoutTime}`;
+  return withoutTime;
+}
+
 function sanitizeSheetName(name: string): string {
   return name.replace(/[\\/?*[\]:]/g, "-").slice(0, 31) || "Rekap";
 }
@@ -127,7 +138,6 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
     rowsData: Array<{
       date: string;
       hourLabel: string;
-      timeRange: string;
       className: string;
       teacherName: string;
       subjectName: string;
@@ -156,7 +166,6 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
         "No",
         "Hari, Tanggal",
         "Jam Ke",
-        "Waktu KBM",
         "Kelas / Rombel",
         "Nama Guru Pengajar",
         "Mata Pelajaran",
@@ -172,7 +181,6 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
         1,
         periodText,
         "—",
-        "—",
         selectedClass?.name || "Semua Kelas",
         selectedTeacher?.name || "Semua Guru",
         "—",
@@ -187,7 +195,6 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
           idx + 1,
           formatIndoDate(r.date),
           r.hourLabel,
-          r.timeRange,
           r.className || "—",
           r.teacherName || "—",
           r.subjectName || "—",
@@ -207,11 +214,10 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
       month: "long",
       year: "numeric",
     });
-    aoa.push(["", "Mengetahui,", "", "", "", "", "", `Mojokerto, ${signDate}`]);
+    aoa.push(["", "Mengetahui,", "", "", "", "", `Mojokerto, ${signDate}`]);
     aoa.push([
       "",
       "Kepala Sekolah / Waka Kurikulum",
-      "",
       "",
       "",
       "",
@@ -228,7 +234,6 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
       "",
       "",
       "",
-      "",
       `( ${selectedTeacher ? selectedTeacher.name : "................................................."} )`,
     ]);
 
@@ -238,8 +243,7 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
     ws["!cols"] = [
       { wch: 5 },  // No
       { wch: 24 }, // Hari, Tanggal
-      { wch: 10 }, // Jam Ke
-      { wch: 14 }, // Waktu KBM
+      { wch: 12 }, // Jam Ke
       { wch: 14 }, // Kelas
       { wch: 26 }, // Guru Pengajar
       { wch: 22 }, // Mata Pelajaran
@@ -251,9 +255,9 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
 
     // Merge judul kop di baris atas
     ws["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 10 } },
-      { s: { r: 5, c: 1 }, e: { r: 5, c: 10 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
+      { s: { r: 5, c: 1 }, e: { r: 5, c: 9 } },
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(sheetTitle));
@@ -277,8 +281,7 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
           const j = jMap.get(`${dt}|${h.id}`);
           rowsData.push({
             date: dt,
-            hourLabel: `Jam ${h.label}`,
-            timeRange: `${h.startTime} - ${h.endTime}`,
+            hourLabel: formatTeachingHourLabel(h.label),
             className: selectedClass.name,
             teacherName: j?.teacherName ?? "—",
             subjectName: j?.subjectName ?? "—",
@@ -293,8 +296,7 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
         const h = hourMap.get(j.teachingHourId);
         rowsData.push({
           date: j.date,
-          hourLabel: `Jam ${j.teachingHourLabel || h?.label || "-"}`,
-          timeRange: h ? `${h.startTime} - ${h.endTime}` : "—",
+          hourLabel: formatTeachingHourLabel(j.teachingHourLabel || h?.label),
           className: j.className || selectedClass.name,
           teacherName: j.teacherName ?? "—",
           subjectName: j.subjectName ?? "—",
@@ -316,8 +318,7 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
       const h = hourMap.get(j.teachingHourId);
       return {
         date: j.date,
-        hourLabel: `Jam ${j.teachingHourLabel || h?.label || "-"}`,
-        timeRange: h ? `${h.startTime} - ${h.endTime}` : "—",
+        hourLabel: formatTeachingHourLabel(j.teachingHourLabel || h?.label),
         className: j.className || "—",
         teacherName: j.teacherName || selectedTeacher.name,
         subjectName: j.subjectName || "—",
@@ -338,8 +339,7 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
       const h = hourMap.get(j.teachingHourId);
       return {
         date: j.date,
-        hourLabel: `Jam ${j.teachingHourLabel || h?.label || "-"}`,
-        timeRange: h ? `${h.startTime} - ${h.endTime}` : "—",
+        hourLabel: formatTeachingHourLabel(j.teachingHourLabel || h?.label),
         className: j.className || "—",
         teacherName: j.teacherName || "—",
         subjectName: j.subjectName || "—",
@@ -363,8 +363,7 @@ export function downloadJournalRecapExcel(params: ExportJournalParams): { fileNa
             const j = jMap.get(`${dt}|${h.id}`);
             clsRows.push({
               date: dt,
-              hourLabel: `Jam ${h.label}`,
-              timeRange: `${h.startTime} - ${h.endTime}`,
+              hourLabel: formatTeachingHourLabel(h.label),
               className: cls.name,
               teacherName: j?.teacherName ?? "—",
               subjectName: j?.subjectName ?? "—",

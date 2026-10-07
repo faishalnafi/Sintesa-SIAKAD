@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { useAuthStore } from "@/store/auth";
 import {
   downloadJournalRecapExcel,
+  formatTeachingHourLabel,
   type ExportJournalRecord,
   type ExportTeachingHour,
 } from "@/lib/journalRecapExport";
@@ -308,10 +309,26 @@ export function DownloadCenterPage() {
           `/admin/journals/export?${params.toString()}`
         );
         const hours = res.data?.hours ?? [];
-        const journals = (res.data?.journals ?? []).map((j) => ({
-          ...j,
-          teacherName: j.teacherName || (!isAdmin ? user?.name ?? null : null),
-        }));
+        const sortByDateAndHour = (list: ExportJournalRecord[], hrs: ExportTeachingHour[]) =>
+          [...list].sort((a, b) => {
+            if (a.date !== b.date) return a.date.localeCompare(b.date);
+            const clsCmp = (a.className || "").localeCompare(b.className || "");
+            if (clsCmp !== 0) return clsCmp;
+            const getIdx = (item: ExportJournalRecord) => {
+              const idx = hrs.findIndex((h) => h.id === item.teachingHourId);
+              if (idx !== -1) return idx;
+              const m = item.teachingHourLabel?.match(/\d+/);
+              return m ? parseInt(m[0], 10) : 0;
+            };
+            return getIdx(a) - getIdx(b);
+          });
+        const journals = sortByDateAndHour(
+          (res.data?.journals ?? []).map((j) => ({
+            ...j,
+            teacherName: j.teacherName || (!isAdmin ? user?.name ?? null : null),
+          })),
+          hours
+        );
         setPreviewHours(hours);
         setPreviewJournals(journals);
       } catch (e) {
@@ -921,7 +938,7 @@ export function DownloadCenterPage() {
                     previewJournals.slice(0, 5).map((j) => (
                       <tr key={j.id} className="border-t app-divider">
                         <td className="px-3.5 py-2.5 whitespace-nowrap font-medium">{j.date}</td>
-                        <td className="px-3.5 py-2.5">Jam {j.teachingHourLabel}</td>
+                        <td className="px-3.5 py-2.5 whitespace-nowrap">{formatTeachingHourLabel(j.teachingHourLabel)}</td>
                         <td className="px-3.5 py-2.5 font-medium">{j.className}</td>
                         <td className="px-3.5 py-2.5">{j.teacherName || user?.name || "—"}</td>
                         <td className="px-3.5 py-2.5">{j.subjectName}</td>

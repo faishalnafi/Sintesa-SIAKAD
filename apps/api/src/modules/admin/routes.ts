@@ -1025,10 +1025,14 @@ adminRoutes.delete("/teaching-hours/:id", async (c) => {
 });
 
 adminRoutes.get("/journals/monitoring", async (c) => {
-  const dateStr = c.req.query("date");
-  const classId = c.req.query("classId");
-  if (!dateStr || !classId) {
-    return c.json({ success: false, message: "date dan classId wajib diisi" }, 400);
+  const dateStr = c.req.query("date")?.trim();
+  const classId = c.req.query("classId")?.trim();
+  const classNameParam = c.req.query("className")?.trim();
+  const teacherId = c.req.query("teacherId")?.trim();
+  const teacherNameParam = c.req.query("teacherName")?.trim().toLowerCase();
+
+  if (!dateStr || (!classId && !teacherId)) {
+    return c.json({ success: false, message: "date serta salah satu dari classId atau teacherId wajib diisi" }, 400);
   }
 
   try {
@@ -1038,7 +1042,79 @@ adminRoutes.get("/journals/monitoring", async (c) => {
       .from(teachingHours)
       .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
 
-    // 2. Ambil jurnal untuk tanggal & kelas tersebut, join dengan users untuk dapat nama guru
+    const conditions = [
+      eq(teacherJournals.date, dateStr),
+      isNull(teacherJournals.deletedAt),
+    ];
+
+    if (classId) {
+      const isRawUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(classId);
+      const cleanIdName = classId.replace(/^kelas\s+/i, "").trim();
+      const clsConds = [
+        sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${classId}))`,
+        sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanIdName}))`,
+      ];
+      if (isRawUuid) {
+        clsConds.push(eq(teacherJournals.classId, classId));
+        const [foundCls] = await db.select({ name: classes.name }).from(classes).where(eq(classes.id, classId)).limit(1);
+        if (foundCls?.name) {
+          const cleanFound = foundCls.name.replace(/^kelas\s+/i, "").trim();
+          clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${foundCls.name}))`);
+          clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanFound}))`);
+        }
+      }
+      if (classNameParam) {
+        const cleanParam = classNameParam.replace(/^kelas\s+/i, "").trim();
+        clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${classNameParam}))`);
+        clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanParam}))`);
+      }
+      conditions.push(or(...clsConds)!);
+    }
+
+    if (teacherId) {
+      const isTeacherUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(teacherId);
+      const tConds = [];
+      let resolvedTeacherName = teacherNameParam || "";
+
+      if (isTeacherUuid) {
+        tConds.push(eq(teacherJournals.teacherUserId, teacherId));
+        const [tRow] = await db
+          .select({ userId: teachers.userId, name: teachers.name })
+          .from(teachers)
+          .where(or(eq(teachers.id, teacherId), eq(teachers.userId, teacherId)))
+          .limit(1);
+        if (tRow?.userId) tConds.push(eq(teacherJournals.teacherUserId, tRow.userId));
+        if (tRow?.name && !resolvedTeacherName) resolvedTeacherName = tRow.name.trim().toLowerCase();
+      }
+
+      const userLookupConds = [eq(users.ssoId, teacherId)];
+      if (isTeacherUuid) userLookupConds.push(eq(users.id, teacherId));
+      const [uRow] = await db
+        .select({ id: users.id, name: users.name })
+        .from(users)
+        .where(or(...userLookupConds))
+        .limit(1);
+      if (uRow?.id) tConds.push(eq(teacherJournals.teacherUserId, uRow.id));
+      if (uRow?.name && !resolvedTeacherName) resolvedTeacherName = uRow.name.trim().toLowerCase();
+
+      if (resolvedTeacherName) {
+        const sameNameUsers = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(sql`LOWER(TRIM(${users.name})) = ${resolvedTeacherName}`);
+        for (const su of sameNameUsers) {
+          tConds.push(eq(teacherJournals.teacherUserId, su.id));
+        }
+      }
+
+      if (tConds.length > 0) {
+        conditions.push(or(...tConds)!);
+      } else {
+        conditions.push(sql`1=0`);
+      }
+    }
+
+    // 2. Ambil jurnal sesuai filter
     const journals = await db
       .select({
         id: teacherJournals.id,
@@ -1055,34 +1131,61 @@ adminRoutes.get("/journals/monitoring", async (c) => {
         teacherName: users.name,
       })
       .from(teacherJournals)
-      .innerJoin(users, eq(teacherJournals.teacherUserId, users.id))
-      .where(
-        and(
-          eq(teacherJournals.date, dateStr),
-          eq(teacherJournals.classId, classId),
-          isNull(teacherJournals.deletedAt)
-        )
-      );
+      .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+      .where(and(...conditions));
 
-    // Map jurnal berdasarkan jam mengajar id
-    const journalMap = new Map(journals.map((j) => [j.teachingHourId, j]));
+    // 3. Gabungkan per jam mengajar: jam mengajar yang belum diisi dikembalikan sebagai row kosong (strip)
+    const data: Array<{
+      teachingHourId: string;
+      label: string;
+      startTime: string;
+      endTime: string;
+      journalId: string | null;
+      classId: string | null;
+      className: string | null;
+      teacherName: string | null;
+      subjectName: string | null;
+      materi: string | null;
+      presenceInfo: string | null;
+      status: string | null;
+    }> = [];
 
-    // 3. Gabungkan: jam mengajar yang tidak terisi jurnalnya tetap dikembalikan sebagai row kosong (strip)
-    const data = hours.map((h) => {
-      const j = journalMap.get(h.id);
-      return {
-        teachingHourId: h.id,
-        label: h.label,
-        startTime: h.startTime,
-        endTime: h.endTime,
-        journalId: j?.id ?? null,
-        teacherName: j?.teacherName ?? null,
-        subjectName: j?.subjectName ?? null,
-        materi: j?.materi ?? null,
-        presenceInfo: j?.presenceInfo ?? null,
-        status: j?.status ?? null,
-      };
-    });
+    for (const h of hours) {
+      const matched = journals.filter((j) => j.teachingHourId === h.id);
+      if (matched.length === 0) {
+        data.push({
+          teachingHourId: h.id,
+          label: h.label,
+          startTime: h.startTime,
+          endTime: h.endTime,
+          journalId: null,
+          classId: null,
+          className: null,
+          teacherName: null,
+          subjectName: null,
+          materi: null,
+          presenceInfo: null,
+          status: null,
+        });
+      } else {
+        for (const j of matched) {
+          data.push({
+            teachingHourId: h.id,
+            label: h.label,
+            startTime: h.startTime,
+            endTime: h.endTime,
+            journalId: j.id,
+            classId: j.classId ?? null,
+            className: j.className ?? null,
+            teacherName: j.teacherName ?? null,
+            subjectName: j.subjectName ?? null,
+            materi: j.materi ?? null,
+            presenceInfo: j.presenceInfo ?? null,
+            status: j.status ?? null,
+          });
+        }
+      }
+    }
 
     return c.json({ success: true, data });
   } catch (e) {
@@ -3420,73 +3523,6 @@ adminRoutes.post("/sso/sync-kelas-roster", async (c) => {
 // MONITORING JURNAL GURU
 // ============================================================
 
-/**
- * GET /admin/journals/monitoring?classId=...&date=...
- * Menampilkan semua jam pelajaran untuk kelas dan tanggal yang dipilih.
- * Setiap jam yang belum diisi jurnal akan muncul dengan strip (—).
- */
-adminRoutes.get("/journals/monitoring", async (c) => {
-  const classId = c.req.query("classId");
-  const date = c.req.query("date");
-
-  if (!classId || !date) {
-    return c.json({ success: false, message: "classId dan date wajib diisi" }, 400);
-  }
-
-  try {
-    // Ambil semua jam pelajaran yang terdaftar
-    const hours = await db
-      .select()
-      .from(teachingHours)
-      .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
-
-    // Ambil jurnal yang sudah diisi untuk kelas & tanggal ini
-    const journals = await db
-      .select({
-        journalId: teacherJournals.id,
-        teachingHourId: teacherJournals.teachingHourId,
-        teacherName: users.name,
-        subjectName: teacherJournals.subjectName,
-        materi: teacherJournals.materi,
-        presenceInfo: teacherJournals.presenceInfo,
-        status: teacherJournals.status,
-      })
-      .from(teacherJournals)
-      .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
-      .where(
-        and(
-          eq(teacherJournals.classId, classId),
-          eq(teacherJournals.date, date),
-          isNull(teacherJournals.deletedAt)
-        )
-      );
-
-    // Map setiap jam pelajaran dengan data jurnal (jika ada)
-    const journalMap = new Map(
-      journals.map((j) => [j.teachingHourId, j])
-    );
-
-    const rows = hours.map((h) => {
-      const j = h.id ? journalMap.get(h.id) : undefined;
-      return {
-        teachingHourId: h.id,
-        label: h.label,
-        startTime: h.startTime,
-        endTime: h.endTime,
-        journalId: j?.journalId ?? null,
-        teacherName: j?.teacherName ?? null,
-        subjectName: j?.subjectName ?? null,
-        materi: j?.materi ?? null,
-        presenceInfo: j?.presenceInfo ?? null,
-        status: j?.status ?? null,
-      };
-    });
-
-    return c.json({ success: true, data: rows });
-  } catch (e) {
-    return c.json({ success: false, message: e instanceof Error ? e.message : "error" }, 500);
-  }
-});
 
 /**
  * POST /admin/journals/koreksi-ulang

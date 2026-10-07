@@ -10,6 +10,7 @@ import { useAuthStore } from "@/store/auth";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
 
 type ClassItem = { id: string; name: string };
+type TeacherItem = { id: string; name: string; nip?: string | null };
 
 type MonitoringItem = {
   teachingHourId: string;
@@ -17,6 +18,8 @@ type MonitoringItem = {
   startTime: string;
   endTime: string;
   journalId: string | null;
+  classId?: string | null;
+  className?: string | null;
   teacherName: string | null;
   subjectName: string | null;
   materi: string | null;
@@ -36,7 +39,9 @@ export function AdminMonitoringJurnalPage() {
   });
 
   const [classesList, setClassesList] = useState<ClassItem[]>([]);
+  const [teachersList, setTeachersList] = useState<TeacherItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState("");
+  const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [rows, setRows] = useState<MonitoringItem[]>([]);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -47,24 +52,26 @@ export function AdminMonitoringJurnalPage() {
   const [editMateri, setEditMateri] = useState("");
   const [editPresence, setEditPresence] = useState("");
 
-  const loadClasses = async () => {
+  const loadMasterData = async () => {
     setLoadingConfig(true);
     try {
-      const [cRes, ssoRes] = await Promise.allSettled([
+      const [cRes, ssoRes, tRes] = await Promise.allSettled([
         api<{ classes?: ClassItem[]; data?: unknown }>("/admin/classes"),
         api<Array<{ id: string; nama_kelas: string }>>("/admin/sso/kelas"),
+        api<TeacherItem[]>("/admin/teachers"),
       ]);
 
-      const combined: ClassItem[] = [];
+      const combinedClasses: ClassItem[] = [];
       const seenIds = new Set<string>();
       const seenNames = new Set<string>();
 
       if (ssoRes.status === "fulfilled" && ssoRes.value?.data) {
         for (const k of ssoRes.value.data) {
-          if (k.id && k.nama_kelas) {
-            combined.push({ id: k.id, name: k.nama_kelas });
+          const cleanName = (k.nama_kelas || "").replace(/^kelas\s+/i, "").trim();
+          if (k.id && cleanName) {
+            combinedClasses.push({ id: k.id, name: cleanName });
             seenIds.add(k.id);
-            seenNames.add(k.nama_kelas.toLowerCase());
+            seenNames.add(cleanName.toLowerCase());
           }
         }
       }
@@ -74,31 +81,58 @@ export function AdminMonitoringJurnalPage() {
         const localList = val.classes ?? (Array.isArray(val) ? val : []);
         if (Array.isArray(localList)) {
           for (const k of localList) {
-            if (k.id && k.name && !seenIds.has(k.id) && !seenNames.has(k.name.toLowerCase())) {
-              combined.push({ id: k.id, name: k.name });
+            const cleanName = (k.name || "").replace(/^kelas\s+/i, "").trim();
+            if (k.id && cleanName && !seenIds.has(k.id) && !seenNames.has(cleanName.toLowerCase())) {
+              combinedClasses.push({ id: k.id, name: cleanName });
               seenIds.add(k.id);
-              seenNames.add(k.name.toLowerCase());
+              seenNames.add(cleanName.toLowerCase());
             }
           }
         }
       }
 
-      setClassesList(combined);
-      if (combined.length > 0) {
-        setSelectedClassId(combined[0].id);
+      setClassesList(combinedClasses);
+      if (combinedClasses.length > 0) {
+        setSelectedClassId(combinedClasses[0].id);
+      }
+
+      if (tRes.status === "fulfilled" && Array.isArray(tRes.value?.data)) {
+        const uniqueTeachers: TeacherItem[] = [];
+        const seenTIds = new Set<string>();
+        const seenTNames = new Set<string>();
+        for (const t of tRes.value.data) {
+          const tName = (t.name || "").trim();
+          if (t.id && tName && !seenTIds.has(t.id) && !seenTNames.has(tName.toLowerCase())) {
+            uniqueTeachers.push({ id: t.id, name: tName, nip: t.nip });
+            seenTIds.add(t.id);
+            seenTNames.add(tName.toLowerCase());
+          }
+        }
+        setTeachersList(uniqueTeachers);
       }
     } catch (e) {
-      console.error("Gagal memuat data kelas:", e);
+      console.error("Gagal memuat data kelas/guru:", e);
     } finally {
       setLoadingConfig(false);
     }
   };
 
-  const loadMonitoring = async (cId: string, dt: string) => {
-    if (!cId || !dt) return;
+  const loadMonitoring = async (cId: string, tId: string, dt: string) => {
+    if ((!cId && !tId) || !dt) return;
     setLoadingData(true);
     try {
-      const res = await api<MonitoringItem[]>(`/admin/journals/monitoring?classId=${cId}&date=${dt}`);
+      const params = new URLSearchParams({ date: dt });
+      if (cId) {
+        params.set("classId", cId);
+        const clsObj = classesList.find((c) => c.id === cId);
+        if (clsObj?.name) params.set("className", clsObj.name);
+      } else if (tId) {
+        params.set("teacherId", tId);
+        const tObj = teachersList.find((t) => t.id === tId);
+        if (tObj?.name) params.set("teacherName", tObj.name);
+      }
+
+      const res = await api<MonitoringItem[]>(`/admin/journals/monitoring?${params.toString()}`);
       setRows(res.data ?? []);
     } catch (e) {
       console.error("Gagal memuat monitoring jurnal:", e);
@@ -108,21 +142,21 @@ export function AdminMonitoringJurnalPage() {
   };
 
   useEffect(() => {
-    loadClasses();
+    loadMasterData();
   }, []);
 
   useEffect(() => {
-    if (selectedClassId && date) {
-      loadMonitoring(selectedClassId, date);
+    if ((selectedClassId || selectedTeacherId) && date) {
+      loadMonitoring(selectedClassId, selectedTeacherId, date);
     }
-  }, [selectedClassId, date]);
+  }, [selectedClassId, selectedTeacherId, date, classesList, teachersList]);
 
   // Realtime: auto-refresh monitoring jurnal saat guru/admin input atau hapus jurnal
   useRealtimeEvent(
     ["journal_saved", "journal_deleted"],
     () => {
-      if (selectedClassId && date) {
-        loadMonitoring(selectedClassId, date);
+      if ((selectedClassId || selectedTeacherId) && date) {
+        loadMonitoring(selectedClassId, selectedTeacherId, date);
       }
     }
   );
@@ -154,7 +188,7 @@ export function AdminMonitoringJurnalPage() {
         timer: 1500,
         showConfirmButton: false,
       });
-      await loadMonitoring(selectedClassId, date);
+      await loadMonitoring(selectedClassId, selectedTeacherId, date);
     } catch (e: any) {
       Swal.fire({
         title: "Gagal",
@@ -192,7 +226,7 @@ export function AdminMonitoringJurnalPage() {
         timer: 1500,
         showConfirmButton: false,
       });
-      await loadMonitoring(selectedClassId, date);
+      await loadMonitoring(selectedClassId, selectedTeacherId, date);
     } catch (e: any) {
       Swal.fire({
         title: "Gagal Hapus",
@@ -234,7 +268,7 @@ export function AdminMonitoringJurnalPage() {
       });
       alert("Jurnal berhasil diperbarui!");
       closeEditModal();
-      await loadMonitoring(selectedClassId, date);
+      await loadMonitoring(selectedClassId, selectedTeacherId, date);
     } catch (e: any) {
       alert(e.message || "Gagal menyimpan perubahan");
     } finally {
@@ -242,17 +276,22 @@ export function AdminMonitoringJurnalPage() {
     }
   };
 
+  const selectedClassName = classesList.find((c) => c.id === selectedClassId)?.name ?? "";
+  const selectedTeacherName = teachersList.find((t) => t.id === selectedTeacherId)?.name ?? "";
+  const isTeacherMode = Boolean(selectedTeacherId);
+  const colSpanCount = isTeacherMode ? 8 : 7;
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Monitoring Jurnal Mengajar"
-        description="Pantau, koreksi, dan kelola jurnal mengajar harian guru per kelas."
+        description="Pantau, koreksi, dan kelola jurnal mengajar harian berdasarkan kelas atau guru."
       />
 
-      {/* Filter Tanggal & Kelas */}
+      {/* Filter Tanggal, Kelas & Guru */}
       <Card>
-        <div className="p-5 flex flex-col md:flex-row gap-4 items-end">
-          <div className="flex-1 space-y-1.5">
+        <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div className="space-y-1.5">
             <label className="text-xs font-semibold uppercase tracking-wider app-muted">Pilih Tanggal</label>
             <input
               type="date"
@@ -262,19 +301,68 @@ export function AdminMonitoringJurnalPage() {
             />
           </div>
 
-          <div className="flex-1 space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider app-muted">Pilih Kelas</label>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider app-muted">
+              Pilih Kelas <span className="text-[10px] font-normal lowercase opacity-75">(pilih salah satu)</span>
+            </label>
             {loadingConfig ? (
               <Skeleton className="h-10 w-full" />
             ) : (
               <select
                 value={selectedClassId}
-                onChange={(e) => setSelectedClassId(e.target.value)}
-                className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2 text-sm outline-none focus:border-primary"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedClassId(val);
+                  if (val) {
+                    setSelectedTeacherId("");
+                  } else if (!selectedTeacherId && teachersList.length > 0) {
+                    setSelectedTeacherId(teachersList[0].id);
+                  }
+                }}
+                className={`w-full rounded-xl border px-3.5 py-2 text-sm outline-none transition-all ${
+                  selectedClassId
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold"
+                    : "border-outline-variant/40 bg-[var(--bg)] opacity-80"
+                }`}
               >
+                <option value="">— Semua Kelas (Mode Per Guru) —</option>
                 {classesList.map((c) => (
                   <option key={c.id} value={c.id}>
                     Kelas {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider app-muted">
+              Pilih Guru <span className="text-[10px] font-normal lowercase opacity-75">(pilih salah satu)</span>
+            </label>
+            {loadingConfig ? (
+              <Skeleton className="h-10 w-full" />
+            ) : (
+              <select
+                value={selectedTeacherId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedTeacherId(val);
+                  if (val) {
+                    setSelectedClassId("");
+                  } else if (!selectedClassId && classesList.length > 0) {
+                    setSelectedClassId(classesList[0].id);
+                  }
+                }}
+                className={`w-full rounded-xl border px-3.5 py-2 text-sm outline-none transition-all ${
+                  selectedTeacherId
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold"
+                    : "border-outline-variant/40 bg-[var(--bg)] opacity-80"
+                }`}
+              >
+                <option value="">— Semua Guru (Mode Per Kelas) —</option>
+                {teachersList.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
                   </option>
                 ))}
               </select>
@@ -286,7 +374,11 @@ export function AdminMonitoringJurnalPage() {
       {/* Tabel Hasil Monitoring */}
       <Card className="overflow-hidden">
         <CardHeader
-          title={`Jurnal Pembelajaran Kelas - ${classesList.find((c) => c.id === selectedClassId)?.name ?? ""}`}
+          title={
+            isTeacherMode
+              ? `Jurnal Pembelajaran Guru - ${selectedTeacherName}`
+              : `Jurnal Pembelajaran Kelas - ${selectedClassName}`
+          }
           subtitle={`Status kegiatan belajar mengajar pada tanggal ${date}`}
         />
         <div className="overflow-x-auto">
@@ -294,6 +386,7 @@ export function AdminMonitoringJurnalPage() {
             <thead className="text-left" style={{ background: "var(--hover)" }}>
               <tr>
                 <th className="px-4 py-3 font-semibold">Jam Ke</th>
+                {isTeacherMode && <th className="px-4 py-3 font-semibold">Kelas</th>}
                 <th className="px-4 py-3 font-semibold">Guru Pengajar</th>
                 <th className="px-4 py-3 font-semibold">Mata Pelajaran</th>
                 <th className="px-4 py-3 font-semibold">Materi Pembelajaran</th>
@@ -306,23 +399,33 @@ export function AdminMonitoringJurnalPage() {
               {loadingData ? (
                 Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={7} className="px-4 py-3">
+                    <td colSpan={colSpanCount} className="px-4 py-3">
                       <Skeleton className="h-8 w-full" />
                     </td>
                   </tr>
                 ))
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center app-muted">
+                  <td colSpan={colSpanCount} className="px-4 py-10 text-center app-muted">
                     Tidak ada jam mengajar yang dikonfigurasi. Silakan tambahkan jam mengajar terlebih dahulu di menu Mapel & Penugasan.
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
-                  <tr key={r.teachingHourId} className="border-t app-divider row-hover transition-colors">
+                rows.map((r, idx) => (
+                  <tr key={`${r.teachingHourId}-${r.journalId ?? idx}`} className="border-t app-divider row-hover transition-colors">
                     <td className="px-4 py-3 font-semibold">{r.label}</td>
-                    <td className="px-4 py-3 font-medium">{r.teacherName ?? <span className="app-muted">—</span>}</td>
-
+                    {isTeacherMode && (
+                      <td className="px-4 py-3 font-medium">
+                        {r.className ? (
+                          r.className.toLowerCase().startsWith("kelas") ? r.className : `Kelas ${r.className}`
+                        ) : (
+                          <span className="app-muted">—</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-4 py-3 font-medium">
+                      {r.teacherName ?? (isTeacherMode && r.journalId ? selectedTeacherName : <span className="app-muted">—</span>)}
+                    </td>
                     <td className="px-4 py-3">{r.subjectName ?? <span className="app-muted">—</span>}</td>
                     <td className="px-4 py-3 max-w-[200px] truncate" title={r.materi ?? ""}>
                       {r.materi ?? <span className="app-muted">—</span>}
@@ -387,7 +490,7 @@ export function AdminMonitoringJurnalPage() {
           <Card className="w-full max-w-lg shadow-2xl bg-[var(--bg)] animate-slide-up">
             <CardHeader
               title={`Edit Jurnal: ${editingItem.label}`}
-              subtitle={`Guru: ${editingItem.teacherName} | Mapel: ${editingItem.subjectName}`}
+              subtitle={`${editingItem.className ? `Kelas: ${editingItem.className} | ` : ""}Guru: ${editingItem.teacherName || selectedTeacherName} | Mapel: ${editingItem.subjectName}`}
             />
             <div className="p-5 space-y-4">
               <div className="space-y-1.5">
