@@ -120,20 +120,52 @@ function jwtSecretCandidates(): string[] {
 }
 
 function parseSsoPayload(payload: Record<string, unknown>): SsoJwtPayload {
-  const userId = payload.user_id as string | undefined;
-  const nama = payload.nama as string | undefined;
-  if (!userId || !nama) {
-    throw new Error("Payload JWT tidak lengkap (user_id / nama wajib)");
+  const userId =
+    (payload.user_id as string | undefined) ??
+    (payload.userId as string | undefined) ??
+    (payload.id as string | undefined) ??
+    (payload.sub as string | undefined);
+
+  const nama =
+    (payload.nama as string | undefined) ??
+    (payload.name as string | undefined) ??
+    (payload.nama_lengkap as string | undefined) ??
+    (payload.fullName as string | undefined) ??
+    "Pengguna SSO";
+
+  if (!userId) {
+    throw new Error("Payload JWT tidak lengkap (user_id / userId wajib ada)");
   }
-  const rolesRaw = payload.roles;
-  const roleList = Array.isArray(rolesRaw) ? (rolesRaw as string[]) : [];
+
+  const nomorInduk =
+    (payload.nomor_induk as string | undefined) ??
+    (payload.nomorInduk as string | undefined) ??
+    (payload.nip_nis as string | undefined) ??
+    (payload.username as string | undefined) ??
+    (payload.nis as string | undefined) ??
+    (payload.nip as string | undefined) ??
+    null;
+
+  const rolesRaw = payload.roles ?? payload.role ?? payload.peran;
+  let roleList: string[] = [];
+  if (Array.isArray(rolesRaw)) {
+    roleList = rolesRaw as string[];
+  } else if (typeof rolesRaw === "string") {
+    roleList = [rolesRaw];
+  }
+
   return {
     user_id: userId,
-    nomor_induk: (payload.nomor_induk as string | undefined) ?? null,
+    nomor_induk: nomorInduk,
     nama,
     roles: roleList,
     email: (payload.email as string | undefined) ?? null,
-    avatarUrl: (payload.avatar_url as string | undefined) ?? (payload.avatar as string | undefined) ?? (payload.foto as string | undefined) ?? null,
+    avatarUrl:
+      (payload.avatar_url as string | undefined) ??
+      (payload.avatarUrl as string | undefined) ??
+      (payload.avatar as string | undefined) ??
+      (payload.foto as string | undefined) ??
+      null,
     exp: typeof payload.exp === "number" ? payload.exp : undefined,
     jti: typeof payload.jti === "string" ? payload.jti : undefined,
   };

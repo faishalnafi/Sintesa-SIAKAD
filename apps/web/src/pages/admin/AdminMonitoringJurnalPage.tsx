@@ -62,7 +62,7 @@ export function AdminMonitoringJurnalPage() {
   const [editMateri, setEditMateri] = useState("");
   const [editPresence, setEditPresence] = useState("");
 
-  const loadConfig = async () => {
+  const loadMasterData = async () => {
     setLoadingConfig(true);
     try {
       const [cRes, ssoRes, tRes] = await Promise.allSettled([
@@ -71,16 +71,17 @@ export function AdminMonitoringJurnalPage() {
         api<TeacherItem[]>("/admin/teachers"),
       ]);
 
-      const combined: ClassItem[] = [];
+      const combinedClasses: ClassItem[] = [];
       const seenIds = new Set<string>();
       const seenNames = new Set<string>();
 
       if (ssoRes.status === "fulfilled" && ssoRes.value?.data) {
         for (const k of ssoRes.value.data) {
-          if (k.id && k.nama_kelas) {
-            combined.push({ id: k.id, name: k.nama_kelas });
+          const cleanName = (k.nama_kelas || "").replace(/^kelas\s+/i, "").trim();
+          if (k.id && cleanName) {
+            combinedClasses.push({ id: k.id, name: cleanName });
             seenIds.add(k.id);
-            seenNames.add(k.nama_kelas.toLowerCase());
+            seenNames.add(cleanName.toLowerCase());
           }
         }
       }
@@ -90,18 +91,19 @@ export function AdminMonitoringJurnalPage() {
         const localList = val.classes ?? (Array.isArray(val) ? val : []);
         if (Array.isArray(localList)) {
           for (const k of localList) {
-            if (k.id && k.name && !seenIds.has(k.id) && !seenNames.has(k.name.toLowerCase())) {
-              combined.push({ id: k.id, name: k.name });
+            const cleanName = (k.name || "").replace(/^kelas\s+/i, "").trim();
+            if (k.id && cleanName && !seenIds.has(k.id) && !seenNames.has(cleanName.toLowerCase())) {
+              combinedClasses.push({ id: k.id, name: cleanName });
               seenIds.add(k.id);
-              seenNames.add(k.name.toLowerCase());
+              seenNames.add(cleanName.toLowerCase());
             }
           }
         }
       }
 
-      setClassesList(combined);
-      if (combined.length > 0) {
-        setSelectedClassId(combined[0].id);
+      setClassesList(combinedClasses);
+      if (combinedClasses.length > 0) {
+        setSelectedClassId(combinedClasses[0].id);
       }
 
       if (tRes.status === "fulfilled" && Array.isArray(tRes.value?.data)) {
@@ -119,17 +121,14 @@ export function AdminMonitoringJurnalPage() {
         setTeachersList(uniqueTeachers);
       }
     } catch (e) {
-      console.error("Gagal memuat data kelas & guru:", e);
+      console.error("Gagal memuat data kelas/guru:", e);
     } finally {
       setLoadingConfig(false);
     }
   };
 
   const loadMonitoring = async (cId: string, tId: string, dt: string) => {
-    if (!dt || (!cId && !tId)) {
-      setRows([]);
-      return;
-    }
+    if ((!cId && !tId) || !dt) return;
     setLoadingData(true);
     try {
       const params = new URLSearchParams({ date: dt });
@@ -137,12 +136,12 @@ export function AdminMonitoringJurnalPage() {
         params.set("classId", cId);
         const clsObj = classesList.find((c) => c.id === cId);
         if (clsObj?.name) params.set("className", clsObj.name);
-      }
-      if (tId) {
+      } else if (tId) {
         params.set("teacherId", tId);
         const tObj = teachersList.find((t) => t.id === tId);
         if (tObj?.name) params.set("teacherName", tObj.name);
       }
+
       const res = await api<MonitoringItem[]>(`/admin/journals/monitoring?${params.toString()}`);
       setRows(res.data ?? []);
     } catch (e) {
@@ -153,22 +152,20 @@ export function AdminMonitoringJurnalPage() {
   };
 
   useEffect(() => {
-    loadConfig();
+    loadMasterData();
   }, []);
 
   useEffect(() => {
-    if (date && (selectedClassId || selectedTeacherId)) {
+    if ((selectedClassId || selectedTeacherId) && date) {
       loadMonitoring(selectedClassId, selectedTeacherId, date);
-    } else {
-      setRows([]);
     }
-  }, [selectedClassId, selectedTeacherId, date]);
+  }, [selectedClassId, selectedTeacherId, date, classesList, teachersList]);
 
   // Realtime: auto-refresh monitoring jurnal saat guru/admin input atau hapus jurnal
   useRealtimeEvent(
     ["journal_saved", "journal_deleted"],
     () => {
-      if (date && (selectedClassId || selectedTeacherId)) {
+      if ((selectedClassId || selectedTeacherId) && date) {
         loadMonitoring(selectedClassId, selectedTeacherId, date);
       }
     }
@@ -289,14 +286,10 @@ export function AdminMonitoringJurnalPage() {
     }
   };
 
-  const selectedClassName = classesList.find((c) => c.id === selectedClassId)?.name;
-  const selectedTeacherName = teachersList.find((t) => t.id === selectedTeacherId)?.name;
-  const headerTitle = [
-    selectedClassName ? `Kelas ${selectedClassName}` : null,
-    selectedTeacherName ? `Guru: ${selectedTeacherName}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ") || "Pilih Guru atau Kelas";
+  const selectedClassName = classesList.find((c) => c.id === selectedClassId)?.name ?? "";
+  const selectedTeacherName = teachersList.find((t) => t.id === selectedTeacherId)?.name ?? "";
+  const isTeacherMode = Boolean(selectedTeacherId);
+  const colSpanCount = isTeacherMode ? 8 : 7;
 
   return (
     <div className="space-y-6">
@@ -335,246 +328,248 @@ export function AdminMonitoringJurnalPage() {
         <>
           <PageHeader
             title="Monitoring Jurnal Mengajar"
-            description="Pantau, koreksi, dan kelola jurnal mengajar harian berdasarkan tanggal, guru pengajar, atau kelas."
+            description="Pantau, koreksi, dan kelola jurnal mengajar harian berdasarkan kelas atau guru."
           />
 
-          {/* Filter Tanggal (Wajib), Guru & Kelas */}
-      <Card>
-        <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider app-muted">
-              Pilih Tanggal <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="date"
-              required
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3.5 py-2 text-sm outline-none focus:border-primary"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider app-muted">
-              Filter Per Guru <span className="text-[10px] font-normal lowercase opacity-75">(pilih salah satu)</span>
-            </label>
-            {loadingConfig ? (
-              <Skeleton className="h-10 w-full" />
-            ) : (
-              <select
-                value={selectedTeacherId}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedTeacherId(val);
-                  if (val) {
-                    setSelectedClassId("");
-                  } else if (!selectedClassId && classesList.length > 0) {
-                    setSelectedClassId(classesList[0].id);
-                  }
-                }}
-                className={`w-full rounded-xl border px-3.5 py-2 text-sm outline-none transition-all ${
-                  selectedTeacherId
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold"
-                    : "border-outline-variant/40 bg-[var(--bg)] opacity-80"
-                }`}
-              >
-                <option value="">— Semua Guru (Mode Per Kelas) —</option>
-                {teachersList.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider app-muted">
-              Filter Per Kelas <span className="text-[10px] font-normal lowercase opacity-75">(pilih salah satu)</span>
-            </label>
-            {loadingConfig ? (
-              <Skeleton className="h-10 w-full" />
-            ) : (
-              <select
-                value={selectedClassId}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedClassId(val);
-                  if (val) {
-                    setSelectedTeacherId("");
-                  } else if (!selectedTeacherId && teachersList.length > 0) {
-                    setSelectedTeacherId(teachersList[0].id);
-                  }
-                }}
-                className={`w-full rounded-xl border px-3.5 py-2 text-sm outline-none transition-all ${
-                  selectedClassId
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold"
-                    : "border-outline-variant/40 bg-[var(--bg)] opacity-80"
-                }`}
-              >
-                <option value="">— Semua Kelas (Mode Per Guru) —</option>
-                {classesList.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    Kelas {c.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        </div>
-      </Card>
-
-      {/* Tabel Hasil Monitoring */}
-      <Card className="overflow-hidden">
-        <CardHeader
-          title={`Jurnal Pembelajaran — ${headerTitle}`}
-          subtitle={`Status kegiatan belajar mengajar pada tanggal ${date}`}
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[800px]">
-            <thead className="text-left" style={{ background: "var(--hover)" }}>
-              <tr>
-                <th className="px-4 py-3 font-semibold">Jam Ke</th>
-                {!selectedClassId && <th className="px-4 py-3 font-semibold">Kelas</th>}
-                <th className="px-4 py-3 font-semibold">Guru Pengajar</th>
-                <th className="px-4 py-3 font-semibold">Mata Pelajaran</th>
-                <th className="px-4 py-3 font-semibold">Materi Pembelajaran</th>
-                <th className="px-4 py-3 font-semibold">Ket. Presensi</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold text-right">Koreksi & Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!selectedClassId && !selectedTeacherId ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center app-muted">
-                    Silakan pilih minimal salah satu <b>Guru</b> atau <b>Kelas</b> untuk menampilkan monitoring jurnal pada tanggal {date}.
-                  </td>
-                </tr>
-              ) : loadingData ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i}>
-                    <td colSpan={!selectedClassId ? 8 : 7} className="px-4 py-3">
-                      <Skeleton className="h-8 w-full" />
-                    </td>
-                  </tr>
-                ))
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={!selectedClassId ? 8 : 7} className="px-4 py-10 text-center app-muted">
-                    Tidak ada jam mengajar yang dikonfigurasi. Silakan tambahkan jam mengajar terlebih dahulu di menu Mapel & Penugasan.
-                  </td>
-                </tr>
-              ) : (
-                rows.map((r) => (
-                  <tr key={r.teachingHourId} className="border-t app-divider row-hover transition-colors">
-                    <td className="px-4 py-3 font-semibold">{r.label}</td>
-                    {!selectedClassId && (
-                      <td className="px-4 py-3 font-medium">{r.className ?? <span className="app-muted">—</span>}</td>
-                    )}
-                    <td className="px-4 py-3 font-medium">{r.teacherName ?? <span className="app-muted">—</span>}</td>
-
-                    <td className="px-4 py-3">{r.subjectName ?? <span className="app-muted">—</span>}</td>
-                    <td className="px-4 py-3 max-w-[200px] truncate" title={r.materi ?? ""}>
-                      {r.materi ?? <span className="app-muted">—</span>}
-                    </td>
-                    <td className="px-4 py-3 max-w-[150px] truncate" title={r.presenceInfo ?? ""}>
-                      {r.presenceInfo ?? <span className="app-muted">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {r.status ? (
-                        <Badge status={r.status === "sent" ? "success" : "warning"}>
-                          {r.status === "sent" ? "Terkirim" : "Draft"}
-                        </Badge>
-                      ) : (
-                        <Badge status="incomplete">Belum Isi</Badge>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {r.journalId ? (
-                        <div className="flex gap-2 justify-end items-center">
-                          <Button size="sm" variant="ghost" disabled={busy} onClick={() => openEditModal(r)}>
-                            Edit
-                          </Button>
-                          {r.status === "sent" && (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="!py-1 !px-2.5 text-xs"
-                              disabled={busy}
-                              onClick={() => handleKoreksiUlang(r.journalId!, r.label)}
-                            >
-                              Koreksi Ulang
-                            </Button>
-                          )}
-                          {isSuperAdmin && (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="!bg-red-500/10 hover:!bg-red-500/20 !text-red-600 dark:!text-red-400 !py-1 !px-2.5 text-xs gap-1"
-                              disabled={busy}
-                              onClick={() => handleDeleteJournal(r.journalId!, r.label)}
-                            >
-                              <span className="material-symbols-outlined text-[16px]">delete</span>
-                              Hapus
-                            </Button>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-xs app-muted px-2">Kunci</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {/* Modal Edit Jurnal */}
-      {editingItem && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <Card className="w-full max-w-lg shadow-2xl bg-[var(--bg)] animate-slide-up">
-            <CardHeader
-              title={`Edit Jurnal: ${editingItem.label}`}
-              subtitle={`Guru: ${editingItem.teacherName} | Mapel: ${editingItem.subjectName}`}
-            />
-            <div className="p-5 space-y-4">
+          {/* Filter Tanggal, Kelas & Guru */}
+          <Card>
+            <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Materi Pembelajaran</label>
-                <textarea
-                  value={editMateri}
-                  onChange={(e) => setEditMateri(e.target.value)}
-                  placeholder="Tuliskan pokok bahasan atau materi pembelajaran..."
-                  rows={4}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary"
+                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Pilih Tanggal</label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3.5 py-2 text-sm outline-none focus:border-primary"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Keterangan Presensi</label>
-                <textarea
-                  value={editPresence}
-                  onChange={(e) => setEditPresence(e.target.value)}
-                  placeholder="Contoh: Hadir lengkap..."
-                  rows={3}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary"
-                />
+                <label className="text-xs font-semibold uppercase tracking-wider app-muted">
+                  Pilih Kelas <span className="text-[10px] font-normal lowercase opacity-75">(pilih salah satu)</span>
+                </label>
+                {loadingConfig ? (
+                  <Skeleton className="h-10 w-full" />
+                ) : (
+                  <select
+                    value={selectedClassId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedClassId(val);
+                      if (val) {
+                        setSelectedTeacherId("");
+                      } else if (!selectedTeacherId && teachersList.length > 0) {
+                        setSelectedTeacherId(teachersList[0].id);
+                      }
+                    }}
+                    className={`w-full rounded-xl border px-3.5 py-2 text-sm outline-none transition-all ${
+                      selectedClassId
+                        ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold"
+                        : "border-outline-variant/40 bg-[var(--bg)] opacity-80"
+                    }`}
+                  >
+                    <option value="">— Semua Kelas (Mode Per Guru) —</option>
+                    {classesList.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        Kelas {c.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
-              <div className="flex gap-3 justify-end pt-2">
-                <Button variant="ghost" onClick={closeEditModal} disabled={busy}>
-                  Batal
-                </Button>
-                <Button onClick={handleSaveEdit} disabled={busy}>
-                  Simpan Perubahan
-                </Button>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider app-muted">
+                  Pilih Guru <span className="text-[10px] font-normal lowercase opacity-75">(pilih salah satu)</span>
+                </label>
+                {loadingConfig ? (
+                  <Skeleton className="h-10 w-full" />
+                ) : (
+                  <select
+                    value={selectedTeacherId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedTeacherId(val);
+                      if (val) {
+                        setSelectedClassId("");
+                      } else if (!selectedClassId && classesList.length > 0) {
+                        setSelectedClassId(classesList[0].id);
+                      }
+                    }}
+                    className={`w-full rounded-xl border px-3.5 py-2 text-sm outline-none transition-all ${
+                      selectedTeacherId
+                        ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold"
+                        : "border-outline-variant/40 bg-[var(--bg)] opacity-80"
+                    }`}
+                  >
+                    <option value="">— Semua Guru (Mode Per Kelas) —</option>
+                    {teachersList.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
           </Card>
-        </div>
-      )}
+
+          {/* Tabel Hasil Monitoring */}
+          <Card className="overflow-hidden">
+            <CardHeader
+              title={
+                isTeacherMode
+                  ? `Jurnal Pembelajaran Guru - ${selectedTeacherName}`
+                  : `Jurnal Pembelajaran Kelas - ${selectedClassName}`
+              }
+              subtitle={`Status kegiatan belajar mengajar pada tanggal ${date}`}
+            />
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[800px]">
+                <thead className="text-left" style={{ background: "var(--hover)" }}>
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Jam Ke</th>
+                    {isTeacherMode && <th className="px-4 py-3 font-semibold">Kelas</th>}
+                    <th className="px-4 py-3 font-semibold">Guru Pengajar</th>
+                    <th className="px-4 py-3 font-semibold">Mata Pelajaran</th>
+                    <th className="px-4 py-3 font-semibold">Materi Pembelajaran</th>
+                    <th className="px-4 py-3 font-semibold">Ket. Presensi</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold text-right">Koreksi & Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loadingData ? (
+                    Array.from({ length: 4 }).map((_, i) => (
+                      <tr key={i}>
+                        <td colSpan={colSpanCount} className="px-4 py-3">
+                          <Skeleton className="h-8 w-full" />
+                        </td>
+                      </tr>
+                    ))
+                  ) : rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={colSpanCount} className="px-4 py-10 text-center app-muted">
+                        Tidak ada jam mengajar yang dikonfigurasi. Silakan tambahkan jam mengajar terlebih dahulu di menu Mapel & Penugasan.
+                      </td>
+                    </tr>
+                  ) : (
+                    rows.map((r, idx) => (
+                      <tr key={`${r.teachingHourId}-${r.journalId ?? idx}`} className="border-t app-divider row-hover transition-colors">
+                        <td className="px-4 py-3 font-semibold">{r.label}</td>
+                        {isTeacherMode && (
+                          <td className="px-4 py-3 font-medium">
+                            {r.className ? (
+                              r.className.toLowerCase().startsWith("kelas") ? r.className : `Kelas ${r.className}`
+                            ) : (
+                              <span className="app-muted">—</span>
+                            )}
+                          </td>
+                        )}
+                        <td className="px-4 py-3 font-medium">
+                          {r.teacherName ?? (isTeacherMode && r.journalId ? selectedTeacherName : <span className="app-muted">—</span>)}
+                        </td>
+                        <td className="px-4 py-3">{r.subjectName ?? <span className="app-muted">—</span>}</td>
+                        <td className="px-4 py-3 max-w-[200px] truncate" title={r.materi ?? ""}>
+                          {r.materi ?? <span className="app-muted">—</span>}
+                        </td>
+                        <td className="px-4 py-3 max-w-[150px] truncate" title={r.presenceInfo ?? ""}>
+                          {r.presenceInfo ?? <span className="app-muted">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {r.status ? (
+                            <Badge status={r.status === "sent" ? "success" : "warning"}>
+                              {r.status === "sent" ? "Terkirim" : "Draft"}
+                            </Badge>
+                          ) : (
+                            <Badge status="incomplete">Belum Isi</Badge>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {r.journalId ? (
+                            <div className="flex gap-2 justify-end items-center">
+                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => openEditModal(r)}>
+                                Edit
+                              </Button>
+                              {r.status === "sent" && (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="!py-1 !px-2.5 text-xs"
+                                  disabled={busy}
+                                  onClick={() => handleKoreksiUlang(r.journalId!, r.label)}
+                                >
+                                  Koreksi Ulang
+                                </Button>
+                              )}
+                              {isSuperAdmin && (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="!bg-red-500/10 hover:!bg-red-500/20 !text-red-600 dark:!text-red-400 !py-1 !px-2.5 text-xs gap-1"
+                                  disabled={busy}
+                                  onClick={() => handleDeleteJournal(r.journalId!, r.label)}
+                                >
+                                  <span className="material-symbols-outlined text-[16px]">delete</span>
+                                  Hapus
+                                </Button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs app-muted px-2">Kunci</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          {/* Modal Edit Jurnal */}
+          {editingItem && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+              <Card className="w-full max-w-lg shadow-2xl bg-[var(--bg)] animate-slide-up">
+                <CardHeader
+                  title={`Edit Jurnal: ${editingItem.label}`}
+                  subtitle={`${editingItem.className ? `Kelas: ${editingItem.className} | ` : ""}Guru: ${editingItem.teacherName || selectedTeacherName} | Mapel: ${editingItem.subjectName}`}
+                />
+                <div className="p-5 space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider app-muted">Materi Pembelajaran</label>
+                    <textarea
+                      value={editMateri}
+                      onChange={(e) => setEditMateri(e.target.value)}
+                      placeholder="Tuliskan pokok bahasan atau materi pembelajaran..."
+                      rows={4}
+                      className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider app-muted">Keterangan Presensi</label>
+                    <textarea
+                      value={editPresence}
+                      onChange={(e) => setEditPresence(e.target.value)}
+                      placeholder="Contoh: Hadir lengkap..."
+                      rows={3}
+                      className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                  </div>
+
+                  <div className="flex gap-3 justify-end pt-2">
+                    <Button variant="ghost" onClick={closeEditModal} disabled={busy}>
+                      Batal
+                    </Button>
+                    <Button onClick={handleSaveEdit} disabled={busy}>
+                      Simpan Perubahan
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
         </>
       )}
     </div>

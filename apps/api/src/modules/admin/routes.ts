@@ -1042,13 +1042,14 @@ adminRoutes.delete("/teaching-hours/:id", async (c) => {
 });
 
 adminRoutes.get("/journals/monitoring", async (c) => {
-  const dateStr = c.req.query("date");
-  const classId = c.req.query("classId");
-  const teacherId = c.req.query("teacherId");
+  const dateStr = c.req.query("date")?.trim();
+  const classId = c.req.query("classId")?.trim();
+  const classNameParam = c.req.query("className")?.trim();
+  const teacherId = c.req.query("teacherId")?.trim();
   const teacherNameFilter = c.req.query("teacherName")?.trim().toLowerCase();
 
   if (!dateStr || (!classId && !teacherId && !teacherNameFilter)) {
-    return c.json({ success: false, message: "date dan minimal salah satu dari classId atau teacherId wajib diisi" }, 400);
+    return c.json({ success: false, message: "date serta salah satu dari classId atau teacherId wajib diisi" }, 400);
   }
 
   try {
@@ -1079,7 +1080,6 @@ adminRoutes.get("/journals/monitoring", async (c) => {
           clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${cleanFound}))`);
         }
       }
-      const classNameParam = c.req.query("className")?.trim();
       if (classNameParam) {
         const cleanParam = classNameParam.replace(/^kelas\s+/i, "").trim();
         clsConds.push(sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${classNameParam}))`);
@@ -1125,6 +1125,8 @@ adminRoutes.get("/journals/monitoring", async (c) => {
 
       if (tConds.length > 0) {
         conditions.push(or(...tConds)!);
+      } else {
+        conditions.push(sql`1=0`);
       }
     }
 
@@ -1153,28 +1155,61 @@ adminRoutes.get("/journals/monitoring", async (c) => {
       journals = journals.filter((j) => (j.teacherName || "").toLowerCase().includes(teacherNameFilter));
     }
 
-    // Map jurnal berdasarkan jam mengajar id
-    const journalMap = new Map(journals.map((j) => [j.teachingHourId, j]));
+    // 4. Gabungkan per jam mengajar: jam mengajar yang belum diisi dikembalikan sebagai row kosong (strip)
+    const data: Array<{
+      teachingHourId: string;
+      label: string;
+      startTime: string;
+      endTime: string;
+      journalId: string | null;
+      classId: string | null;
+      className: string | null;
+      teacherUserId: string | null;
+      teacherName: string | null;
+      subjectName: string | null;
+      materi: string | null;
+      presenceInfo: string | null;
+      status: string | null;
+    }> = [];
 
-    // 4. Gabungkan: jam mengajar yang tidak terisi jurnalnya tetap dikembalikan sebagai row kosong (strip)
-    const data = hours.map((h) => {
-      const j = journalMap.get(h.id);
-      return {
-        teachingHourId: h.id,
-        label: h.label,
-        startTime: h.startTime,
-        endTime: h.endTime,
-        journalId: j?.id ?? null,
-        classId: j?.classId ?? null,
-        className: j?.className ?? null,
-        teacherUserId: j?.teacherUserId ?? null,
-        teacherName: j?.teacherName ?? null,
-        subjectName: j?.subjectName ?? null,
-        materi: j?.materi ?? null,
-        presenceInfo: j?.presenceInfo ?? null,
-        status: j?.status ?? null,
-      };
-    });
+    for (const h of hours) {
+      const matched = journals.filter((j) => j.teachingHourId === h.id);
+      if (matched.length === 0) {
+        data.push({
+          teachingHourId: h.id,
+          label: h.label,
+          startTime: h.startTime,
+          endTime: h.endTime,
+          journalId: null,
+          classId: null,
+          className: null,
+          teacherUserId: null,
+          teacherName: null,
+          subjectName: null,
+          materi: null,
+          presenceInfo: null,
+          status: null,
+        });
+      } else {
+        for (const j of matched) {
+          data.push({
+            teachingHourId: h.id,
+            label: h.label,
+            startTime: h.startTime,
+            endTime: h.endTime,
+            journalId: j.id,
+            classId: j.classId ?? null,
+            className: j.className ?? null,
+            teacherUserId: j.teacherUserId ?? null,
+            teacherName: j.teacherName ?? null,
+            subjectName: j.subjectName ?? null,
+            materi: j.materi ?? null,
+            presenceInfo: j.presenceInfo ?? null,
+            status: j.status ?? null,
+          });
+        }
+      }
+    }
 
     return c.json({ success: true, data });
   } catch (e) {

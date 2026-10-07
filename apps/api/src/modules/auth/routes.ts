@@ -255,29 +255,34 @@ authRoutes.get("/sso/login", async (c) => {
  * Validate HS256 → consume one-time → JIT provision → local session cookie
  */
 authRoutes.get("/sso/callback", async (c) => {
-  // This request comes from a browser redirect — Host header is always the real public domain
-  const origin = getOriginFromRequest(c);
-  const token = c.req.query("token");
-  const state = c.req.query("state");
-  const raw = getCookie(c, "sintesa_sso_state_raw");
-  const hashed = getCookie(c, "sintesa_sso_state");
-
-  deleteCookie(c, "sintesa_sso_state", { path: "/" });
-  deleteCookie(c, "sintesa_sso_state_raw", { path: "/" });
-
-  if (!token) {
-    return c.redirect(`${origin}/login?error=missing_token`);
-  }
-
-  // Validate state only if both we issued one and IdP echoed it
-  if (raw && hashed && state) {
-    const ok = hashState(state) === hashed || hashState(raw) === hashed;
-    if (!ok) {
-      return c.redirect(`${origin}/login?error=invalid_state`);
-    }
-  }
+  let origin = "http://localhost:5174";
+  try {
+    origin = getOriginFromRequest(c);
+  } catch (_) {}
 
   try {
+    const token = c.req.query("token");
+    const state = c.req.query("state");
+    const raw = getCookie(c, "sintesa_sso_state_raw");
+    const hashed = getCookie(c, "sintesa_sso_state");
+
+    try {
+      deleteCookie(c, "sintesa_sso_state", { path: "/" });
+      deleteCookie(c, "sintesa_sso_state_raw", { path: "/" });
+    } catch (_) {}
+
+    if (!token) {
+      return c.redirect(`${origin}/login?error=missing_token`);
+    }
+
+    // Validate state only if both we issued one and IdP echoed it
+    if (raw && hashed && state) {
+      const ok = hashState(state) === hashed || hashState(raw) === hashed;
+      if (!ok) {
+        return c.redirect(`${origin}/login?error=invalid_state`);
+      }
+    }
+
     const payload = await verifySsoToken(token);
     await consumeSsoToken(token, payload.jti);
 
