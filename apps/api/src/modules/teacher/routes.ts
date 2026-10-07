@@ -27,14 +27,16 @@ import { getUserWithRoles } from "../../utils/user.js";
 import { env } from "../../env.js";
 import { ssoListKelas } from "../../services/sso-api-client.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
-import { askGemini } from "../../services/gemini.js";
+import { askGemini, extractSpreadsheetAllSheetsText, extractDocumentTextFromBuffer, type AttachedFile } from "../../services/gemini.js";
+import * as XLSX from "xlsx";
 import path from "node:path";
-import { uploadFile, deleteFile, deleteFolderPrefix } from "../../services/storage/storage.service.js";
+import { uploadFile, deleteFile, deleteFolderPrefix, getFileFromStorage } from "../../services/storage/storage.service.js";
 import { scheduleJob, cancelJob, getPendingJobs, getSchedulerInfo } from "../../services/scheduler.js";
 import {
   exportJournalRecapExcel,
   exportGradeLegerExcel,
   exportGradeTemplateExcel,
+  exportStudentRosterExcel,
   type ExportReportResult,
 } from "../../services/exports/report-exporter.js";
 import type { StorageProviderType } from "../../services/storage/types.js";
@@ -1122,16 +1124,187 @@ teacherRoutes.post("/journals/bulk-send", async (c) => {
 /**
  * Helper untuk menyusun konteks lengkap profil guru, mapel, dan kelas
  */
-async function getTeacherAiContext(userId: string, userName: string, userObj?: any) {
+type TeacherAiContextData = Awaited<ReturnType<typeof loadTeacherAiContext>>;
+const teacherAiContextCache = new Map<string, { expiresAt: number; data: TeacherAiContextData }>();
+
+async function getTeacherAiContext(userId: string, userName: string, userObj?: any): Promise<TeacherAiContextData> {
+  const cached = teacherAiContextCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+  const data = await loadTeacherAiContext(userId, userName, userObj);
+  teacherAiContextCache.set(userId, { expiresAt: Date.now() + 10_000, data });
+  return data;
+}
+
+async function loadTeacherAiContext(userId: string, userName: string, userObj?: any) {
+
   let currentUser = userObj;
   if (!currentUser) {
     currentUser = await getUserWithRoles(userId);
   }
 
-  // 1. Ambil data guru
-  let teacher: typeof teachers.$inferSelect | undefined = (
-    await db.select().from(teachers).where(eq(teachers.userId, userId)).limit(1)
-  )[0];
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0, 10);
+
+  // Jalankan seluruh query independen secara paralel agar waktu persiapan konteks sangat cepat
+  const [
+    directTeacherRows,
+    assignedSubjects,
+    allSubjectTeachers,
+    allHomeroomTeachers,
+    activeClasses,
+    adminUsers,
+    allTeachingHours,
+    recentJournals,
+    trashedJournals,
+    trashedGrades,
+    allSubjects,
+    allAcademicYears,
+    assessmentComponentsList,
+    [siswaCount],
+    [alumniCount],
+    [keluarCount],
+    [guruCount],
+    [tendikCount],
+  ] = await Promise.all([
+    db.select().from(teachers).where(eq(teachers.userId, userId)).limit(1),
+    db
+      .select({
+        id: subjects.id,
+        name: subjects.name,
+        code: subjects.code,
+        type: subjects.type,
+      })
+      .from(teacherSubjects)
+      .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+      .where(and(eq(teacherSubjects.userId, userId), eq(subjects.isActive, true)))
+      .orderBy(subjects.name),
+    db
+      .select({
+        userId: teacherSubjects.userId,
+        teacherName: users.name,
+        subjectId: subjects.id,
+        subjectName: subjects.name,
+        subjectCode: subjects.code,
+      })
+      .from(teacherSubjects)
+      .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+      .innerJoin(users, eq(teacherSubjects.userId, users.id))
+      .where(and(eq(subjects.isActive, true), eq(users.isActive, true))),
+    db
+      .select({
+        userId: homeroomAssignments.userId,
+        teacherName: users.name,
+        classId: classes.id,
+        className: classes.name,
+      })
+      .from(homeroomAssignments)
+      .innerJoin(classes, eq(homeroomAssignments.classId, classes.id))
+      .innerJoin(users, eq(homeroomAssignments.userId, users.id))
+      .where(and(eq(classes.isActive, true), eq(users.isActive, true))),
+    db
+      .select({ id: classes.id, name: classes.name, gradeLevel: classes.gradeLevel })
+      .from(classes)
+      .where(eq(classes.isActive, true))
+      .orderBy(classes.name),
+    db
+      .selectDistinct({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        roleCode: roles.code,
+        roleName: roles.name,
+      })
+      .from(users)
+      .innerJoin(userRoles, eq(userRoles.userId, users.id))
+      .innerJoin(roles, eq(roles.id, userRoles.roleId))
+      .where(
+        and(
+          eq(users.isActive, true),
+          or(eq(roles.code, "admin"), eq(roles.code, "superadmin"))
+        )
+      )
+      .orderBy(roles.code, users.name),
+    db
+      .select({ id: teachingHours.id, label: teachingHours.label, startTime: teachingHours.startTime, endTime: teachingHours.endTime })
+      .from(teachingHours)
+      .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime),
+    db
+      .select({
+        id: teacherJournals.id,
+        teacherUserId: teacherJournals.teacherUserId,
+        teacherName: users.name,
+        date: teacherJournals.date,
+        className: teacherJournals.className,
+        teachingHourLabel: teacherJournals.teachingHourLabel,
+        subjectName: teacherJournals.subjectName,
+        materi: teacherJournals.materi,
+        presenceInfo: teacherJournals.presenceInfo,
+        status: teacherJournals.status,
+        groupId: teacherJournals.groupId,
+      })
+      .from(teacherJournals)
+      .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+      .where(
+        and(
+          isNull(teacherJournals.deletedAt),
+          sql`${teacherJournals.date} >= ${thirtyDaysAgoStr}`
+        )
+      )
+      .orderBy(desc(teacherJournals.date), desc(teacherJournals.createdAt))
+      .limit(50),
+    db
+      .select({
+        id: teacherJournals.id,
+        date: teacherJournals.date,
+        className: teacherJournals.className,
+        subjectName: teacherJournals.subjectName,
+        teachingHourLabel: teacherJournals.teachingHourLabel,
+        teacherName: users.name,
+        materi: teacherJournals.materi,
+        presenceInfo: teacherJournals.presenceInfo,
+        deletedAt: teacherJournals.deletedAt,
+        groupId: teacherJournals.groupId,
+      })
+      .from(teacherJournals)
+      .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
+      .where(isNotNull(teacherJournals.deletedAt))
+      .orderBy(desc(teacherJournals.deletedAt))
+      .limit(30),
+    db
+      .select({
+        id: grades.id,
+        studentName: students.name,
+        nis: students.nis,
+        className: classes.name,
+        subjectName: subjects.name,
+        uh1: grades.uh1,
+        t1: grades.t1,
+        sts: grades.sts,
+        uh2: grades.uh2,
+        t2: grades.t2,
+        deletedAt: grades.deletedAt,
+      })
+      .from(grades)
+      .innerJoin(students, eq(grades.studentId, students.id))
+      .innerJoin(classes, eq(grades.classId, classes.id))
+      .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+      .where(isNotNull(grades.deletedAt))
+      .orderBy(desc(grades.deletedAt))
+      .limit(30),
+    db.select({ id: subjects.id, code: subjects.code, name: subjects.name, type: subjects.type, isActive: subjects.isActive }).from(subjects).orderBy(subjects.name),
+    db.select().from(academicYears).orderBy(desc(academicYears.name)),
+    db.select().from(assessmentComponents).orderBy(asc(assessmentComponents.sortOrder)),
+    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "siswa")),
+    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "alumni")),
+    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "keluar")),
+    db.select({ value: count() }).from(teachers).where(eq(teachers.staffType, "guru")),
+    db.select({ value: count() }).from(teachers).where(eq(teachers.staffType, "tendik")),
+  ]);
+
+  let teacher: typeof teachers.$inferSelect | undefined = directTeacherRows[0];
   if (!teacher) {
     const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (u?.username) {
@@ -1148,47 +1321,7 @@ async function getTeacherAiContext(userId: string, userName: string, userObj?: a
     }
   }
 
-  // 2. Ambil mapel yang diampu guru ini
-  const assignedSubjects = await db
-    .select({
-      id: subjects.id,
-      name: subjects.name,
-      code: subjects.code,
-      type: subjects.type,
-    })
-    .from(teacherSubjects)
-    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
-    .where(and(eq(teacherSubjects.userId, userId), eq(subjects.isActive, true)))
-    .orderBy(subjects.name);
-
-  // 2B. Ambil seluruh pemetaan guru mapel di sekolah (untuk cek kepemilikan mapel guru lain)
-  const allSubjectTeachers = await db
-    .select({
-      userId: teacherSubjects.userId,
-      teacherName: users.name,
-      subjectId: subjects.id,
-      subjectName: subjects.name,
-      subjectCode: subjects.code,
-    })
-    .from(teacherSubjects)
-    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
-    .innerJoin(users, eq(teacherSubjects.userId, users.id))
-    .where(and(eq(subjects.isActive, true), eq(users.isActive, true)));
-
-  // 2C. Ambil seluruh pemetaan wali kelas di sekolah (untuk Matrix Persetujuan)
-  const allHomeroomTeachers = await db
-    .select({
-      userId: homeroomAssignments.userId,
-      teacherName: users.name,
-      classId: classes.id,
-      className: classes.name,
-    })
-    .from(homeroomAssignments)
-    .innerJoin(classes, eq(homeroomAssignments.classId, classes.id))
-    .innerJoin(users, eq(homeroomAssignments.userId, users.id))
-    .where(and(eq(classes.isActive, true), eq(users.isActive, true)));
-
-  // 3. Ambil kelas aktif + mapel yang diajar guru di kelas tersebut (via classSubjects)
+  // Ambil kelas aktif + mapel yang diajar guru di kelas tersebut (via classSubjects)
   const taughtClasses = teacher
     ? await db
         .selectDistinct({
@@ -1204,14 +1337,6 @@ async function getTeacherAiContext(userId: string, userName: string, userObj?: a
         .orderBy(classes.name, subjects.name)
     : [];
 
-  // 4. Ambil daftar kelas aktif (umum, untuk referensi)
-  const activeClasses = await db
-    .select({ id: classes.id, name: classes.name, gradeLevel: classes.gradeLevel })
-    .from(classes)
-    .where(eq(classes.isActive, true))
-    .orderBy(classes.name);
-
-  // 5. Ambil daftar siswa (utamakan kelas yang diajar jika ada relasi spesifik, atau seluruh siswa aktif di sekolah)
   const taughtClassIds = [...new Set(taughtClasses.map((tc) => tc.classId))];
   const studentRoster = await db
     .select({
@@ -1231,124 +1356,6 @@ async function getTeacherAiContext(userId: string, userName: string, userObj?: a
       )
     )
     .orderBy(classes.name, students.name);
-
-  // 6. Ambil daftar admin aktif dari DB (role code: admin | superadmin)
-  const adminUsers = await db
-    .selectDistinct({
-      id: users.id,
-      name: users.name,
-      email: users.email,
-      roleCode: roles.code,
-      roleName: roles.name,
-    })
-    .from(users)
-    .innerJoin(userRoles, eq(userRoles.userId, users.id))
-    .innerJoin(roles, eq(roles.id, userRoles.roleId))
-    .where(
-      and(
-        eq(users.isActive, true),
-        or(eq(roles.code, "admin"), eq(roles.code, "superadmin"))
-      )
-    )
-    .orderBy(roles.code, users.name);
-
-  // 7. Ambil daftar jam mengajar (teachingHours) — untuk resolusi jam oleh AI
-  const allTeachingHours = await db
-    .select({ id: teachingHours.id, label: teachingHours.label, startTime: teachingHours.startTime, endTime: teachingHours.endTime })
-    .from(teachingHours)
-    .orderBy(sql`CAST(REGEXP_REPLACE(label, '[^0-9]', '', 'g') AS INTEGER) ASC`, teachingHours.startTime);
-
-  // 8. Ambil jurnal terbaru (30 hari terakhir, milik sendiri maupun guru lain) — untuk cek konflik guru lain & data sebelumnya
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0, 10);
-  const recentJournals = await db
-    .select({
-      id: teacherJournals.id,
-      teacherUserId: teacherJournals.teacherUserId,
-      teacherName: users.name,
-      date: teacherJournals.date,
-      className: teacherJournals.className,
-      teachingHourLabel: teacherJournals.teachingHourLabel,
-      subjectName: teacherJournals.subjectName,
-      materi: teacherJournals.materi,
-      presenceInfo: teacherJournals.presenceInfo,
-      status: teacherJournals.status,
-      groupId: teacherJournals.groupId,
-    })
-    .from(teacherJournals)
-    .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
-    .where(
-      and(
-        isNull(teacherJournals.deletedAt),
-        sql`${teacherJournals.date} >= ${thirtyDaysAgoStr}`
-      )
-    )
-    .orderBy(desc(teacherJournals.date), desc(teacherJournals.createdAt))
-    .limit(100);
-
-  // 8B. Ambil isi Tempat Sampah / Recycle Bin (Soft Delete: deletedAt IS NOT NULL) — Jurnal & Nilai
-  const trashedJournals = await db
-    .select({
-      id: teacherJournals.id,
-      date: teacherJournals.date,
-      className: teacherJournals.className,
-      subjectName: teacherJournals.subjectName,
-      teachingHourLabel: teacherJournals.teachingHourLabel,
-      teacherName: users.name,
-      materi: teacherJournals.materi,
-      presenceInfo: teacherJournals.presenceInfo,
-      deletedAt: teacherJournals.deletedAt,
-      groupId: teacherJournals.groupId,
-    })
-    .from(teacherJournals)
-    .leftJoin(users, eq(teacherJournals.teacherUserId, users.id))
-    .where(isNotNull(teacherJournals.deletedAt))
-    .orderBy(desc(teacherJournals.deletedAt))
-    .limit(50);
-
-  const trashedGrades = await db
-    .select({
-      id: grades.id,
-      studentName: students.name,
-      nis: students.nis,
-      className: classes.name,
-      subjectName: subjects.name,
-      uh1: grades.uh1,
-      t1: grades.t1,
-      sts: grades.sts,
-      uh2: grades.uh2,
-      t2: grades.t2,
-      deletedAt: grades.deletedAt,
-    })
-    .from(grades)
-    .innerJoin(students, eq(grades.studentId, students.id))
-    .innerJoin(classes, eq(grades.classId, classes.id))
-    .innerJoin(subjects, eq(grades.subjectId, subjects.id))
-    .where(isNotNull(grades.deletedAt))
-    .orderBy(desc(grades.deletedAt))
-    .limit(50);
-
-  // 8C. Ambil data seluruh menu Manajemen Akademik (Tahun Pelajaran, Semua Mapel, Komponen Penilaian, Statistik Sekolah)
-  const [
-    allSubjects,
-    allAcademicYears,
-    assessmentComponentsList,
-    [siswaCount],
-    [alumniCount],
-    [keluarCount],
-    [guruCount],
-    [tendikCount],
-  ] = await Promise.all([
-    db.select({ id: subjects.id, code: subjects.code, name: subjects.name, type: subjects.type, isActive: subjects.isActive }).from(subjects).orderBy(subjects.name),
-    db.select().from(academicYears).orderBy(desc(academicYears.name)),
-    db.select().from(assessmentComponents).orderBy(asc(assessmentComponents.sortOrder)),
-    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "siswa")),
-    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "alumni")),
-    db.select({ value: count() }).from(students).where(eq(students.memberStatus, "keluar")),
-    db.select({ value: count() }).from(teachers).where(eq(teachers.staffType, "guru")),
-    db.select({ value: count() }).from(teachers).where(eq(teachers.staffType, "tendik")),
-  ]);
 
   const schoolStats = {
     totalSiswaAktif: siswaCount?.value ?? 0,
@@ -1388,7 +1395,7 @@ async function getTeacherAiContext(userId: string, userName: string, userObj?: a
 
   const classNames = activeClasses.map((c) => c.name).join(", ");
 
-  return {
+  const resultContext = {
     teacher,
     assignedSubjects,
     allSubjectTeachers,
@@ -1411,6 +1418,7 @@ async function getTeacherAiContext(userId: string, userName: string, userObj?: a
     assessmentComponentsList,
     schoolStats,
   };
+  return resultContext;
 }
 
 /**
@@ -1662,6 +1670,16 @@ teacherRoutes.post("/ai/upload", async (c) => {
       const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
       const buf = Buffer.from(cleanB64, "base64");
 
+      if (buf.length > 10 * 1024 * 1024) {
+        return c.json(
+          {
+            success: false,
+            message: `Ukuran berkas "${origName}" (${(buf.length / (1024 * 1024)).toFixed(1)} MB) melebihi batas maksimal 10 MB untuk menjaga efisiensi token dan performa respons AI.`,
+          },
+          400
+        );
+      }
+
       const uploaded = await uploadFile({
         buffer: buf,
         filename: origName,
@@ -1891,7 +1909,19 @@ teacherRoutes.post("/ai/chat", async (c) => {
     return chatTokens.some((tok) => sName.includes(tok));
   });
 
-  const rosterToShow = matchedStudents.length > 0 ? matchedStudents.slice(0, 80) : ctx.studentRoster.slice(0, 30);
+  const needsStudentOrGradeContext =
+    matchedStudents.length > 0 ||
+    /\b(siswa|murid|kelas|nilai|uh1|t1|sts|uh2|t2|matrix|rapor|leger|skor|absen|hadir)\b/i.test(combinedChatText);
+  const needsJournalContext =
+    /\b(jurnal|mengajar|jadwal|jam|materi|presensi|monitoring|kirim|draft|hapus|bentrok)\b/i.test(combinedChatText);
+  const needsTrashContext =
+    /\b(sampah|trash|pulih|restore|recycle|hapus|soft\s*delete)\b/i.test(combinedChatText);
+
+  const rosterToShow = matchedStudents.length > 0
+    ? matchedStudents.slice(0, 60)
+    : needsStudentOrGradeContext
+    ? ctx.studentRoster.slice(0, 25)
+    : [];
 
   const studentRosterText =
     rosterToShow.length > 0
@@ -1901,7 +1931,7 @@ teacherRoutes.post("/ai/chat", async (c) => {
               `| ${s.name} | ${s.nis ?? "-"} | ${s.nisn ?? "-"} | ${s.className} | \`${s.id}\` |`
           )
           .join("\n")
-      : "| (Tidak ada data siswa) | - | - | - | - |";
+      : "| (Sebutkan nama siswa atau kelas untuk melihat daftar siswa spesifik) | - | - | - | - |";
 
   // Buat tabel jam mengajar (teachingHours) untuk referensi AI (rapikan label angka & sembunyikan jam dummy yang sama persis)
   const teachingHoursText =
@@ -1935,41 +1965,43 @@ teacherRoutes.post("/ai/chat", async (c) => {
     status: string;
   }>();
 
-  for (const j of ctx.recentJournals) {
-    const key = j.groupId || j.id;
-    if (j.teacherUserId === user.id) {
-      const existing = myJournalGroups.get(key);
-      if (existing) {
-        if (j.teachingHourLabel && !existing.hours.includes(j.teachingHourLabel)) {
-          existing.hours.push(j.teachingHourLabel);
+  if (needsJournalContext) {
+    for (const j of ctx.recentJournals) {
+      const key = j.groupId || j.id;
+      if (j.teacherUserId === user.id) {
+        const existing = myJournalGroups.get(key);
+        if (existing) {
+          if (j.teachingHourLabel && !existing.hours.includes(j.teachingHourLabel)) {
+            existing.hours.push(j.teachingHourLabel);
+          }
+        } else {
+          myJournalGroups.set(key, {
+            date: j.date,
+            className: j.className ?? "-",
+            subjectName: j.subjectName ?? "-",
+            hours: j.teachingHourLabel ? [j.teachingHourLabel] : [],
+            materi: j.materi || "-",
+            presenceInfo: j.presenceInfo || "-",
+            status: j.status,
+          });
         }
       } else {
-        myJournalGroups.set(key, {
-          date: j.date,
-          className: j.className ?? "-",
-          subjectName: j.subjectName ?? "-",
-          hours: j.teachingHourLabel ? [j.teachingHourLabel] : [],
-          materi: j.materi || "-",
-          presenceInfo: j.presenceInfo || "-",
-          status: j.status,
-        });
-      }
-    } else {
-      const existing = otherJournalGroups.get(key);
-      if (existing) {
-        if (j.teachingHourLabel && !existing.hours.includes(j.teachingHourLabel)) {
-          existing.hours.push(j.teachingHourLabel);
+        const existing = otherJournalGroups.get(key);
+        if (existing) {
+          if (j.teachingHourLabel && !existing.hours.includes(j.teachingHourLabel)) {
+            existing.hours.push(j.teachingHourLabel);
+          }
+        } else {
+          otherJournalGroups.set(key, {
+            date: j.date,
+            className: j.className ?? "-",
+            teacherName: j.teacherName ?? "Guru Lain",
+            subjectName: j.subjectName ?? "-",
+            hours: j.teachingHourLabel ? [j.teachingHourLabel] : [],
+            materi: j.materi || "-",
+            status: j.status,
+          });
         }
-      } else {
-        otherJournalGroups.set(key, {
-          date: j.date,
-          className: j.className ?? "-",
-          teacherName: j.teacherName ?? "Guru Lain",
-          subjectName: j.subjectName ?? "-",
-          hours: j.teachingHourLabel ? [j.teachingHourLabel] : [],
-          materi: j.materi || "-",
-          status: j.status,
-        });
       }
     }
   }
@@ -1977,6 +2009,7 @@ teacherRoutes.post("/ai/chat", async (c) => {
   const recentJournalsText =
     myJournalGroups.size > 0
       ? [...myJournalGroups.values()]
+          .slice(0, 15)
           .map((j) => `| ${j.date} | ${j.className} | ${j.subjectName} | ${j.hours.join(", ") || "-"} | ${j.materi} | ${j.presenceInfo} | ${j.status} |`)
           .join("\n")
       : "| (Belum ada jurnal milik Anda dalam 30 hari terakhir) | - | - | - | - | - | - |";
@@ -1984,14 +2017,14 @@ teacherRoutes.post("/ai/chat", async (c) => {
   const otherTeachersJournalsText =
     otherJournalGroups.size > 0
       ? [...otherJournalGroups.values()]
-          .slice(0, 30)
+          .slice(0, 15)
           .map((j) => `| ${j.date} | ${j.className} | ${j.hours.join(", ") || "-"} | ${j.teacherName} | ${j.subjectName} | ${j.materi} | ${j.status} |`)
           .join("\n")
       : "| (Belum ada slot jurnal yang diisi guru lain) | - | - | - | - | - | - |";
 
-  // Ambil data nilai & status Matrix Persetujuan saat ini untuk siswa yang relevan (rosterToShow)
-  const rosterStudentIds = rosterToShow.map((s) => s.id);
-  const liveGrades = rosterStudentIds.length > 0
+  // Ambil data nilai & status Matrix Persetujuan saat ini HANYA jika konteks percakapan berkaitan dengan siswa/nilai
+  const rosterStudentIds = needsStudentOrGradeContext ? rosterToShow.map((s) => s.id) : [];
+  const liveGrades = rosterStudentIds.length > 0 && /\b(nilai|uh1|t1|sts|uh2|t2|matrix|rapor|leger|skor|input|ubah|simpan|hapus)\b/i.test(combinedChatText)
     ? await db
         .select({
           id: grades.id,
@@ -2014,7 +2047,7 @@ teacherRoutes.post("/ai/chat", async (c) => {
         .innerJoin(classes, eq(grades.classId, classes.id))
         .innerJoin(subjects, eq(grades.subjectId, subjects.id))
         .where(and(inArray(grades.studentId, rosterStudentIds), isNull(grades.deletedAt)))
-        .limit(100)
+        .limit(60)
     : [];
 
   const liveGradesText =
@@ -2163,18 +2196,32 @@ teacherRoutes.post("/ai/chat", async (c) => {
   const systemInstruction = `Anda adalah **NEBULA AI**, Asisten AI Resmi SIMAK (Sistem Informasi Manajemen Akademik) SMA Negeri 3 Mojokerto (SMAGA) yang memiliki pengetahuan menyeluruh atas **SELURUH FITUR & MENU SIMAK**.
 - **NAMA RESMI ANDA ADALAH: NEBULA AI** (bukan Gemini!). Jika ditanya siapa Anda atau apa nama AI ini, selalu perkenalkan diri sebagai **NEBULA AI**, Asisten Cerdas Resmi SIMAK SMA Negeri 3 Mojokerto.
 
-## 🗓️ INFORMASI WAKTU, TANGGAL & JAM SERVER REAL-TIME (SERVER LOKAL / WIB / UTC+7)
-- **Sumber Waktu Valid:** Jam Server Lokal (Single Source of Truth yang Valid)
-- **Zona Waktu Resmi:** WIB (Waktu Indonesia Barat) / UTC+7
-- **Hari & Tanggal Hari Ini:** ${todayReadable}
-- **Format Tanggal ISO Hari Ini (YYYY-MM-DD):** \`${todayIso}\`
-- **Waktu / Jam / Pukul Server Lokal Saat Ini:** **${currentTimeWib}** (${currentTimeWibExact})
-- ⏰ **SINKRONISASI JAM & PUKUL REAL-TIME:**
-  - Waktu server lokal saat ini persis menunjukkan pukul **${currentTimeWib}** (${currentTimeWibExact}).
-  - Jam server lokal adalah acuan mutlak dan valid bagi seluruh sistem SIMAK. Keterangan waktu wajib selalu menyertakan zona: **WIB (UTC+7)**.
-  - Jika pengguna menanyakan jam berapa sekarang, pukul berapa saat ini, jamnya, atau menanyakan waktu, Anda **WAJIB MENJAWAB DENGAN TEPAT & LUGAS** bahwa waktu server lokal saat ini adalah pukul **${currentTimeWib}** (atau ${currentTimeWibExact}) pada hari **${todayReadable}**.
-  - **DILARANG KERAS** menjawab 00:00 atau mengarang waktu lain! Jam server lokal saat ini adalah **${currentTimeWib}**.
-- ⚠️ **PENTING TANGGAL:** Setiap kali pengguna menyebut "hari ini", "sekarang", atau tidak menyebutkan tanggal spesifik saat mencatat/menghapus jurnal mengajar, Anda **WAJIB** menggunakan tanggal \`${todayIso}\` (${todayReadable}). **DILARANG KERAS** menebak atau mengarang tahun 2024/2025 atau tanggal lain!
+## ⚡ ATURAN GAYA JAWABAN (SINGKAT, PADAT, LANGSUNG KE INTI / TO-THE-POINT & HEMAT TOKEN)
+- **HEMAT TOKEN & RESPON CEPAT:**
+  - Utamakan jawaban yang padat, to the point, dan efisien token.
+  - Jangan mengulang-ulang atau menyalin seluruh isi berkas lampiran ke dalam teks jawaban. Cukup berikan poin esensial atau ringkasan data yang diminta pengguna.
+- **JANGAN BERTELE-TELE!** Berikan jawaban yang **ringkas, padat, jelas, dan langsung menjawab inti pertanyaan** pengguna.
+- Hindari kalimat pembuka atau penutup yang terlalu panjang, dan jangan mengulang-ulang penjelasan fitur jika tidak ditanyakan.
+- 🚫 **LARANGAN MENAMPILKAN WAKTU / JAM SERVER TANPA DIMINTA:**
+  - **JANGAN PERNAH** menampilkan atau menyebutkan jam, pukul, atau waktu server saat ini di dalam jawaban Anda **KECUALI** jika pengguna secara eksplisit bertanya tentang waktu/jam/tanggal (misal: *"jam berapa sekarang?"*, *"hari ini tanggal berapa?"*) atau saat melaporkan tanggal pada aksi Jurnal Mengajar.
+  - Jika pertanyaan pengguna tidak berhubungan dengan waktu (misal: menyapa, bertanya data siswa/nilai, menganalisis file Excel/dokumen, atau diskusi umum), **DILARANG KERAS** mencantumkan jam/waktu di jawaban Anda!
+
+## 🛑 ATURAN UTAMA: TIDAK SEMUANYA HARUS DIEKSPOR KE FILE!
+- **FILE HANYA DIGENERATE KETIKA DIMINTA SAJA. KALAU TIDAK YA TIDAK!**
+- Pengguna sering bertanya/meminta informasi biasa di chat (contoh: "rekap nama siswa kelas xii-1 sampai xii-5", "siapa saja siswa kelas X-1?", "rekap kehadiran hari ini", "tampilkan jurnal hari ini").
+- Jika pengguna **TIDAK** secara eksplisit menggunakan kata kunci permintaan berkas (\`ekspor\`, \`export\`, \`unduh\`, \`download\`, \`buatkan file\`, \`bikin file\`, \`buatkan excel\`, \`ke excel\`, \`format .xlsx\`):
+  - **DILARANG KERAS** membuat blok action \`EXPORT_REPORT\` maupun \`GENERATE_EXCEL\`!
+  - **DILARANG** membuat/mengekstrak berkas file unduhan!
+  - **WAJIB** jawab langsung di obrolan chat bubble secara ringkas dan informatif!
+    - Untuk rekap siswa: sebutkan jumlah siswa per kelas, contoh sampel beberapa nama, dan totalnya di chat.
+    - Untuk rekap jurnal: sebutkan ringkasan status jurnal di chat.
+  - Anda boleh menawarkan secara sopan di akhir: *"Jika ingin diekspor ke file Excel (.xlsx), silakan beri tahu saya ya."*
+- **KAPAN BOLEH GENERATE FILE?**
+  - **HANYA JIKA** ada kata kunci eksplisit seperti: "ekspor ke excel", "unduh rekap", "download file", "buatkan file excel", "format xlsx".
+
+## 🗓️ REFERENSI WAKTU SERVER LOKAL (HANYA GUNAKAN JIKA DITANYA WAKTU ATAU UNTUK TANGGAL JURNAL)
+- Hari & Tanggal Hari Ini: ${todayReadable} (\`${todayIso}\`) | Jam Server Lokal: **${currentTimeWib}**
+- Gunakan tanggal \`${todayIso}\` secara internal jika pengguna meminta mencatat/menghapus jurnal "hari ini" tanpa menyebut tanggal spesifik.
 
 ## Identitas Pengguna yang Sedang Login
 - Nama Lengkap: ${user.name}
@@ -2214,44 +2261,9 @@ ${allSubjectsCatalogText}
 
 ## Penugasan Kelas & Mata Pelajaran Anda
 ${taughtClassesText}
-
-## 🏫 Daftar Wali Kelas (Menu Matrix Persetujuan)
-${homeroomInfoText}
-
-## 📋 Daftar Siswa Aktif Sekolah
-| Nama Lengkap | NIS | NISN | Kelas | ID (UUID) |
-|---|---|---|---|---|
-${studentRosterText}
-
-## 📊 Data Live Saat Ini: Input Nilai & Matrix Persetujuan
-| Siswa | Kelas | Mapel | Pengampu Mapel | UH1 | T1 | STS | UH2 | T2 | Status |
-|---|---|---|---|---|---|---|---|---|---|
-${liveGradesText}
-
-## ⏰ Daftar Jam Mengajar (Teaching Hours)
-| Label | Jam Mulai | Jam Selesai | ID (UUID) |
-|---|---|---|---|
-${teachingHoursText}
-
-## 📓 Riwayat Jurnal Mengajar Aktif Milik Anda Sendiri (30 Hari Terakhir)
-| Tanggal | Kelas | Mapel | Jam Mengajar | Materi Sebelumnya | Presensi Sebelumnya | Status |
-|---|---|---|---|---|---|---|
-${recentJournalsText}
-
-## 📋 Slot Jurnal Mengajar Aktif yang Diisi oleh Guru Lain
-| Tanggal | Kelas | Jam Mengajar | Diisi Oleh Guru | Mapel | Materi | Status |
-|---|---|---|---|---|---|---|
-${otherTeachersJournalsText}
-
-## 🗑️ Isi Tempat Sampah (Soft Delete) Saat Ini — Jurnal Mengajar (\`/admin/trash\`)
-| Tanggal | Kelas | Jam Mengajar | Guru | Mapel | Materi | Status |
-|---|---|---|---|---|---|---|
-${trashedJournalsText}
-
-## 🗑️ Isi Tempat Sampah (Soft Delete) Saat Ini — Nilai Siswa (\`/admin/trash\`)
-| Siswa | Kelas | Mapel | Rincian Nilai | Status |
-|---|---|---|---|---|
-${trashedGradesText}
+${needsStudentOrGradeContext ? `\n## 🏫 Daftar Wali Kelas (Menu Matrix Persetujuan)\n${homeroomInfoText}\n\n## 📋 Daftar Siswa Aktif Sekolah\n| Nama Lengkap | NIS | NISN | Kelas | ID (UUID) |\n|---|---|---|---|---|\n${studentRosterText}\n\n## 📊 Data Live Saat Ini: Input Nilai & Matrix Persetujuan\n| Siswa | Kelas | Mapel | Pengampu Mapel | UH1 | T1 | STS | UH2 | T2 | Status |\n|---|---|---|---|---|---|---|---|---|---|\n${liveGradesText}` : ""}
+${needsJournalContext ? `\n## ⏰ Daftar Jam Mengajar (Teaching Hours)\n| Label | Jam Mulai | Jam Selesai | ID (UUID) |\n|---|---|---|---|\n${teachingHoursText}\n\n## 📓 Riwayat Jurnal Mengajar Aktif Milik Anda Sendiri (30 Hari Terakhir)\n| Tanggal | Kelas | Mapel | Jam Mengajar | Materi Sebelumnya | Presensi Sebelumnya | Status |\n|---|---|---|---|---|---|---|\n${recentJournalsText}\n\n## 📋 Slot Jurnal Mengajar Aktif yang Diisi oleh Guru Lain\n| Tanggal | Kelas | Jam Mengajar | Diisi Oleh Guru | Mapel | Materi | Status |\n|---|---|---|---|---|---|---|\n${otherTeachersJournalsText}` : ""}
+${needsTrashContext ? `\n## 🗑️ Isi Tempat Sampah (Soft Delete) Saat Ini — Jurnal Mengajar (\`/admin/trash\`)\n| Tanggal | Kelas | Jam Mengajar | Guru | Mapel | Materi | Status |\n|---|---|---|---|---|---|---|\n${trashedJournalsText}\n\n## 🗑️ Isi Tempat Sampah (Soft Delete) Saat Ini — Nilai Siswa (\`/admin/trash\`)\n| Siswa | Kelas | Mapel | Rincian Nilai | Status |\n|---|---|---|---|---|\n${trashedGradesText}` : ""}
 
 ${roleSpecificRulesText}
 
@@ -2351,68 +2363,109 @@ ${roleSpecificRulesText}
   mapel: <Nama Mapel atau "SEMUA">
   \`\`\`
 
-### J. Pusat Unduhan — Ekspor Berkas Laporan Resmi (.xlsx) (\`EXPORT_REPORT\`)
-- **PENTING — KEMAMPUAN EKSPOR BERKAS EXCEL:** Anda memiliki kemampuan mengekspor data laporan resmi langsung menjadi file Excel (.xlsx) dengan struktur dan template yang **SAMA PERSIS** dengan menu **Pusat Unduhan** (\`/admin/downloads\` atau \`/guru/downloads\`), lalu menyimpannya di server lokal atau Cloud Object Storage dan menyediakannya untuk diunduh langsung oleh pengguna.
-- Ketika pengguna menanyakan apakah bisa mengakses template unduhan, meminta mengunduh, mengekspor, merekap, atau membuat berkas:
-  1. **Rekap Monitoring Jurnal Mengajar Guru (.xlsx)** (format resmi KBM harian, status keterisian jam 1-11, materi, presensi, kop sekolah, dan blok tanda tangan pemberkasan fisik):
-     \`\`\`action
-     EXPORT_REPORT
-     jenis: REKAP_JURNAL
-     kelas: <Nama Kelas seperti X-1, atau SEMUA>
-     tanggal_mulai: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
-     tanggal_selesai: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
-     guru: <Nama Guru atau SEMUA>
-     sertakan_kosong: true
-     \`\`\`
-  2. **Buku Leger & Rekap Nilai Akademik Kelas (.xlsx)** (rekapitulasi roster siswa x seluruh mata pelajaran, rata-rata, dan detail komponen nilai):
-     \`\`\`action
-     EXPORT_REPORT
-     jenis: LEGER_NILAI
-     kelas: <Nama Kelas, contoh: X-1>
-     mapel: <Nama Mapel atau SEMUA>
-     status: <SEMUA | APPROVED | SUBMITTED | DRAFT>
-     \`\`\`
-  3. **Template Resmi Input Nilai Guru (.xlsx)** (template terkunci dengan token keamanan digital untuk diisi guru offline lalu diunggah kembali):
-     \`\`\`action
-     EXPORT_REPORT
-     jenis: TEMPLATE_NILAI
-     kelas: <Nama Kelas, contoh: X-1>
-     mapel: <Nama Mapel, contoh: DKV>
-     \`\`\`
-- **ATURAN WAJIB FORMAT EKSPOR LAPORAN RESMI (SANGAT PENTING):**
-  - Pusat Unduhan SIMAK **HANYA MENDUKUNG format Microsoft Excel (.xlsx)**.
-  - SIMAK **TIDAK MENDUKUNG ekspor langsung ke PDF, Word/DOCX, CSV, atau format lainnya** untuk berkas Rekap Jurnal Mengajar dan Leger Nilai.
-  - **JIKA PENGGUNA MEMINTA EKSPOR DALAM FORMAT PDF ATAU FORMAT LAIN YANG TIDAK DIDUKUNG:**
-    1. **JANGAN PERNAH mengeksekusi \`EXPORT_REPORT\`** dengan mengabaikan format yang diminta.
-    2. **JANGAN PERNAH membuat link unduhan palsu/halusinasi ke file PDF** (misalnya \`[Unduh PDF](...)\` atau tautan buatan sendiri).
-    3. **WAJIB informasikan secara jujur, ramah, dan solutif:**
-       - Sampaikan bahwa ekspor langsung ke format **PDF saat ini belum didukung** oleh server SIMAK.
-       - Beritahu bahwa format resmi yang tersedia adalah **Microsoft Excel (.xlsx)** yang sudah diformat rapi standar A4 Landscape, kop sekolah resmi, dan kolom tanda tangan siap cetak.
-       - Tawarkan untuk membuat berkas Excel (.xlsx), di mana pengguna dapat menyimpannya sebagai PDF melalui fitur Cetak (Print to PDF) di aplikasi Excel atau Google Sheets.
-- **ATURAN WAJIB UNTUK PERMINTAAN VALID:** Setiap kali pengguna meminta unduhan/ekspor rekap jurnal, leger nilai, atau template nilai (format Excel), **WAJIB sertakan blok \`EXPORT_REPORT\`**. Sistem akan langsung mengeksekusi pembuatan file Excel asli yang tersimpan aman di server lokal atau Cloud Object Storage dan dapat diunduh langsung.
+### J. Jalur 1: Pusat Unduhan — Ekspor Berkas Laporan Resmi (.xlsx) (\`EXPORT_REPORT\`)
+- ⚠️ **PRINSIP DASAR: FILE DIGENERATE KETIKA DIMINTA SAJA. KALAU TIDAK YA TIDAK.**
+  - **TIDAK SEMUANYA HARUS DIEKSPOR KE FILE!**
+  - Jika pengguna (guru/admin) hanya bertanya biasa atau meminta informasi di obrolan chat (misalnya: "siapa siswa kelas XII-1?", "rekap data siswa kelas X-1", "tampilkan jurnal hari ini", "siapa saja siswa yang remedial?"):
+    - **JANGAN BUAT FILE EXCEL!** Jawablah langsung di chat bubble secara wajar, ramah, dan ringkas (gunakan teks biasa atau tabel markdown sederhana).
+    - Jika data yang diminta berjumlah puluhan/ratusan (seperti seluruh siswa lintas kelas), berikan ringkasan statistik per kelas dan beberapa contoh nama di chat, lalu tawarkan secara sopan di akhir jika pengguna membutuhkan berkas lengkapnya dalam format Excel.
+  - **BLOK \`EXPORT_REPORT\` HANYA DIGUNAKAN JIKA PENGGUNA SECARA EKSPLISIT MEMINTA FILE/EKSPOR/UNDUH** (misal: "ekspor ke excel", "unduh rekap", "download leger", "buatkan file excel rekap siswa", dsb.):
+    1. **Rekap Monitoring Jurnal Mengajar Guru (.xlsx)** (format resmi KBM harian, status keterisian jam 1-11, materi, presensi, kop sekolah, dan blok tanda tangan):
+       \`\`\`action
+       EXPORT_REPORT
+       jenis: REKAP_JURNAL
+       kelas: <Nama Kelas seperti X-1, atau SEMUA>
+       tanggal_mulai: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
+       tanggal_selesai: <YYYY-MM-DD, gunakan ${todayIso} untuk hari ini>
+       guru: <Nama Guru atau SEMUA>
+       sertakan_kosong: true
+       \`\`\`
+    2. **Buku Leger & Rekap Nilai Akademik Kelas (.xlsx)** (rekapitulasi roster siswa x seluruh mata pelajaran, rata-rata, dan detail komponen nilai):
+       \`\`\`action
+       EXPORT_REPORT
+       jenis: LEGER_NILAI
+       kelas: <Nama Kelas, contoh: X-1>
+       mapel: <Nama Mapel atau SEMUA>
+       status: <SEMUA | APPROVED | SUBMITTED | DRAFT>
+       \`\`\`
+    3. **Template Resmi Input Nilai Guru (.xlsx)** (template terkunci dengan token keamanan digital untuk diisi guru offline lalu diunggah kembali):
+       \`\`\`action
+       EXPORT_REPORT
+       jenis: TEMPLATE_NILAI
+       kelas: <Nama Kelas, contoh: X-1>
+       mapel: <Nama Mapel, contoh: DKV>
+       \`\`\`
+    4. **Rekapitulasi Daftar Nama Siswa / Roster Kelas (.xlsx)** (daftar lengkap nama siswa, NIS, NISN, jenis kelamin, poin GDS untuk satu kelas atau multi-kelas seperti XII-1 sampai XII-5):
+       \`\`\`action
+       EXPORT_REPORT
+       jenis: REKAP_SISWA
+       kelas: <Nama Kelas tunggal atau rentang, contoh: XII-1 sampai XII-5 atau X-1 atau SEMUA>
+       \`\`\`
+       *PENTING:* Hanya gunakan blok \`EXPORT_REPORT jenis: REKAP_SISWA\` jika pengguna meminta file/ekspor (misal "ekspor daftar siswa kelas XII-1 sampai XII-5" atau "buatkan file excel nama siswa"). Jika pengguna tidak meminta file/ekspor, cukup jawab dalam teks biasa di chat.
+
+### K. Jalur 2: Pembuat Berkas Excel Kustom & Fleksibel (.xlsx) (\`GENERATE_EXCEL\`)
+- ⚠️ **HANYA DIGENERATE KETIKA PENGGUNA MEMINTA DIBUATKAN FILE / EXCEL!**
+  - Jika pengguna meminta dibuatkan file Excel kustom (contoh: "buatkan excel siswa di bawah KKM", "ekspor peringkat kelas ke excel", "bikin file rekap piket"), laksanakan dengan membuat berkas Excel kustom menggunakan \`GENERATE_EXCEL\`.
+  - Jika pengguna TIDAK meminta dibuatkan file (hanya bertanya/menganalisis), jawablah langsung di chat tanpa membuat file Excel!
+  - **ATURAN EFISIENSI & HEMAT TOKEN:** Jika membuat berkas kustom, gunakan format pipe \`|\` yang ringkas:
+    \`\`\`action
+    GENERATE_EXCEL
+    file_name: <Nama_Berkas.xlsx>
+    sheet: <Nama Lembar Kerja, contoh: Data Siswa>
+    judul: <Judul Utama Laporan / Kop Huruf Kapital>
+    subjudul: <Keterangan Tambahan, misal: Kelas X-1 • Mapel Matematika>
+    headers: <Daftar nama kolom dipisahkan koma, contoh: No, NIS, Nama Siswa, Nilai, Keterangan>
+    data:
+    1 | 1001 | Ahmad Fauzi | 65 | Remedial UH1
+    2 | 1004 | Budi Santoso | 68 | Remedial UH1
+    \`\`\`
+
+### L. Aturan Mutlak Format Berkas Ekspor (HANYA EXCEL SAJA DULU!)
+- **FILE DIGENERATE KETIKA DIMINTA SAJA. KALAU TIDAK YA TIDAK.**
+- **HANYA MICROSOFT EXCEL (.xlsx):** Seluruh fitur ekspor berkas (baik \`EXPORT_REPORT\` maupun \`GENERATE_EXCEL\`) **HANYA MENDUKUNG FORMAT MICROSOFT EXCEL (.xlsx)**.
+- **DILARANG EKSPOR KE PDF, WORD/DOCX, CSV, ATAU FORMAT LAINNYA.**
+- **JIKA PENGGUNA MEMINTA PDF ATAU FORMAT LAIN:**
+  1. Jangan jalankan action dengan format lain tersebut dan jangan pernah mengarang link unduhan buatan sendiri (misal file .pdf palsu).
+  2. Tolak format tersebut secara ramah dan solutif: jelaskan bahwa server saat ini khusus menyediakan format **Microsoft Excel (.xlsx)** yang sudah diformat rapi standar cetak A4.
+  3. Buatkan atau tawarkan berkas **Excel (.xlsx)** yang rapi, dan beri tahu bahwa pengguna dapat menyimpannya sebagai PDF melalui fitur **Print / Save as PDF** di Excel atau peramban.
 
 ## 🚫 LARANGAN KERAS — ANTI HALLUSINASI DATABASE & BERKAS
 - **JANGAN PERNAH** mengklaim data tersimpan/terhapus/dipulihkan/diekspor tanpa menyertakan blok \`\`\`action ...\`\`\`.
 - **DILARANG MENGARANG LINK BERKAS:** Jangan pernah menulis URL atau tautan unduhan buatan sendiri (misalnya \`/api/uploads/exports/...pdf\`). Seluruh berkas unduhan yang sah akan dilampirkan oleh sistem SIMAK secara otomatis.
-- **PENTING — FILE EXCEL / GAMBAR YANG DIUNGGAH GURU:** Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai atau gambar tabel nilai, **WAJIB proses/simpan nilainya** menggunakan \`SAVE_GRADE_DRAFT\`.
+- **PENTING — KEMAMPUAN MULTI-LEMBAR (MULTI-SHEET) EXCEL & TABEL DAFTAR HADIR/NILAI:**
+  - Anda **MAMPU SEPENUHNYA** membaca dan memproses berkas Microsoft Excel (\`.xlsx\`, \`.xls\`) maupun CSV yang memiliki **banyak lembar kerja (multi-sheet)** ataupun **banyak tabel kelas berurutan** (misalnya XII-1 s.d. XII-9 dalam satu file atau lintas lembar kerja).
+  - Seluruh lembar kerja telah diekstrak oleh sistem dengan penanda \`=== LEMBAR KERJA (SHEET X/Y): "NamaSheet" ===\` atau blok \`Kelas : XII-1\`, \`Kelas : XII-2\`, dst.
+  - **JANGAN PERNAH** mengatakan bahwa Anda tidak bisa membaca file Excel multi-lembar! Analisis seluruh lembar kerja yang tersedia secara menyeluruh.
+  - Apabila ${ctx.honorific} ${user.name} mengunggah file Excel nilai / daftar hadir (baik satu lembar maupun multi-lembar) atau menempelkan data CSV multi-kelas dan meminta menyimpan/menginput nilainya ke database, **WAJIB proses nilainya** untuk kelas/siswa yang diminta (atau seluruh kelas yang memiliki kolom nilai \`uh1\`, \`t1\`, \`sts\`, \`uh2\`, \`t2\`). Jika pengguna belum menyebutkan mata pelajarannya dan Anda mengampu lebih dari 1 mapel (atau sebagai Admin), gunakan mapel yang relevan atau tanyakan/konfirmasi mapelnya sambil menyajikan ringkasan lengkap seluruh lembar/kelas yang berhasil Anda baca dari file tersebut!
 
 ## 👤 Daftar Admin Aktif SIMAK
 ${adminList}
 ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
 
-  // Format riwayat pesan untuk Gemini (dengan sanitasi error & alternasi user-model yang ketat)
-  const rawList: Array<{ role: "user" | "model"; text: string }> = [];
+  // Format riwayat pesan untuk Gemini (dengan sanitasi error & alternasi user-model yang ketat + pelestarian lampiran riwayat)
+  const rawList: Array<{ role: "user" | "model"; text: string; files?: AttachedFile[] }> = [];
   if (Array.isArray(messages)) {
     for (const msg of messages) {
-      if (!msg.text && !msg.content) continue;
       const text = (msg.text || msg.content || "").trim();
-      if (!text) continue;
+      const msgFiles: AttachedFile[] | undefined = Array.isArray(msg.files)
+        ? msg.files
+        : Array.isArray(msg.attachments)
+        ? msg.attachments.map((att: any) => ({
+            name: att.name,
+            type: att.type || "application/octet-stream",
+            size: att.size || 0,
+            storageKey: att.storageKey,
+            textPreview: att.textPreview,
+          }))
+        : undefined;
+
+      if (!text && (!msgFiles || msgFiles.length === 0)) continue;
       // Abaikan hanya pesan error koneksi frontend agar tidak menghapus pesan konfirmasi verifikasi 2 langkah
       if (text.startsWith("⚠️ Gagal") || text.startsWith("⚠️ Terjadi kesalahan")) continue;
 
       if (msg.sender === "user" || msg.role === "user") {
-        rawList.push({ role: "user", text });
+        rawList.push({ role: "user", text, files: msgFiles });
       } else if (msg.sender === "assistant" || msg.role === "model") {
         rawList.push({ role: "model", text });
       }
@@ -2428,7 +2481,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
   }
 
   // Normalisasi urutan: Gemini mewajibkan giliran bergantian (user -> model -> user -> model -> user)
-  const chatMessages: Array<{ role: "user" | "model"; text: string }> = [];
+  const chatMessages: Array<{ role: "user" | "model"; text: string; files?: AttachedFile[] }> = [];
   for (const item of rawList) {
     if (chatMessages.length === 0) {
       if (item.role === "user") {
@@ -2438,7 +2491,10 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       const prev = chatMessages[chatMessages.length - 1];
       if (prev.role === item.role) {
         // Gabungkan pesan berurutan dengan role sama
-        prev.text = `${prev.text}\n\n${item.text}`;
+        prev.text = [prev.text, item.text].filter(Boolean).join("\n\n");
+        if (item.files && item.files.length > 0) {
+          prev.files = [...(prev.files || []), ...item.files];
+        }
       } else {
         chatMessages.push(item);
       }
@@ -2452,7 +2508,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     } else if (Array.isArray(files) && files.length > 0) {
       chatMessages.push({
         role: "user",
-        text: "Mohon analisis dan jelaskan isi dari berkas yang saya lampirkan ini.",
+        text: "Mohon analisis dan jelaskan seluruh isi dari berkas (termasuk semua lembar kerja/sheet jika file Excel multi-lembar) yang saya lampirkan ini.",
       });
     }
   }
@@ -2487,8 +2543,72 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       storedName: string;
     }> = [];
 
+    // Helper untuk memastikan semua dokumen (spreadsheet multi-lembar, Word, PPT, teks, PDF, gambar, audio, video) terbaca penuh
+    const enrichSpreadsheetFile = async (f: any) => {
+      if (!f) return f;
+      const lowerName = (f.name || "").toLowerCase();
+      const lowerMime = (f.type || "").toLowerCase();
+      const isSpreadsheet =
+        /\.(xlsx|xls|csv|ods)$/.test(lowerName) ||
+        lowerMime.includes("spreadsheet") ||
+        lowerMime.includes("excel") ||
+        lowerMime === "text/csv";
+      const isDocOrSlideOrText =
+        /\.(docx|doc|odt|rtf|pptx|ppt|odp|txt|json|md|sql|html|css|js|ts|tsx|jsx|py|xml|yaml|yml)$/.test(lowerName) ||
+        lowerMime.includes("word") ||
+        lowerMime.includes("presentation") ||
+        lowerMime.includes("powerpoint") ||
+        lowerMime.includes("opendocument") ||
+        lowerMime.includes("rtf") ||
+        lowerMime.startsWith("text/");
+      const isBinaryMultimodal =
+        lowerMime.startsWith("image/") ||
+        lowerMime === "application/pdf" ||
+        lowerName.endsWith(".pdf") ||
+        lowerMime.startsWith("audio/") ||
+        lowerMime.startsWith("video/");
+
+      // 1. Jika sudah ada base64 di request, ekstrak teks untuk spreadsheet / dokumen Office / teks
+      if (f.base64 && (isSpreadsheet || isDocOrSlideOrText)) {
+        const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
+        const fullText = extractDocumentTextFromBuffer(Buffer.from(cleanB64, "base64"), f.name, f.type);
+        if (fullText) {
+          f.textPreview = fullText;
+          return f;
+        }
+      }
+
+      // 2. Jika file berasal dari storageKey (sudah di-upload via /ai/upload atau dari riwayat chat)
+      if (f.storageKey) {
+        const needsSpreadsheetExtract =
+          isSpreadsheet && (!f.textPreview || !f.textPreview.includes("=== LEMBAR KERJA (SHEET"));
+        const needsDocExtract = isDocOrSlideOrText && !f.textPreview;
+        const needsBinaryBase64 = isBinaryMultimodal && !f.base64;
+
+        if (needsSpreadsheetExtract || needsDocExtract || needsBinaryBase64) {
+          try {
+            const storedObj = await getFileFromStorage(f.storageKey);
+            if (storedObj?.buffer) {
+              if (needsSpreadsheetExtract || needsDocExtract) {
+                const fullText = extractDocumentTextFromBuffer(storedObj.buffer, f.name, f.type);
+                if (fullText) {
+                  f.textPreview = fullText;
+                }
+              } else if (needsBinaryBase64) {
+                f.base64 = storedObj.buffer.toString("base64");
+              }
+            }
+          } catch (e) {
+            console.warn("[Teacher AI Chat] Gagal membaca ulang dokumen dari storage:", e);
+          }
+        }
+      }
+      return f;
+    };
+
     if (Array.isArray(files) && files.length > 0) {
       for (const f of files) {
+        await enrichSpreadsheetFile(f);
         if (f.storageKey && f.storageUrl) {
           // Already uploaded immediately when attached in the roomchat
           storedFiles.push({
@@ -2510,6 +2630,15 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
             }
             const cleanB64 = f.base64.includes(",") ? f.base64.split(",")[1] : f.base64;
             const buf = Buffer.from(cleanB64, "base64");
+            if (buf.length > 10 * 1024 * 1024) {
+              return c.json(
+                {
+                  success: false,
+                  message: `Ukuran berkas "${origName}" (${(buf.length / (1024 * 1024)).toFixed(1)} MB) melebihi batas maksimal 10 MB untuk menjaga efisiensi token dan performa AI.`,
+                },
+                400
+              );
+            }
 
             const uploaded = await uploadFile({
               buffer: buf,
@@ -2550,20 +2679,34 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       }
     }
 
-    const geminiMessages = chatMessages.map((m, idx) =>
-      idx === chatMessages.length - 1
+    // Hanya perkaya dokumen/spreadsheet pada pesan aktif terakhir agar hemat token & memori
+    const lastMsg = chatMessages[chatMessages.length - 1];
+    if (lastMsg && Array.isArray(lastMsg.files) && lastMsg.files.length > 0) {
+      for (const hf of lastMsg.files) {
+        await enrichSpreadsheetFile(hf);
+      }
+    }
+
+    const geminiMessages = chatMessages.map((m, idx) => {
+      if (idx !== chatMessages.length - 1) return m;
+      const asksAboutTime = /\b(jam berapa|pukul berapa|waktu sekarang|jam sekarang|tanggal berapa)\b/i.test(m.text || "");
+      return asksAboutTime
         ? {
             ...m,
-            text: `${m.text}\n\n[Catatan Sistem: Waktu server lokal yang valid saat ini persis adalah pukul ${currentTimeWib} (${currentTimeWibExact}) pada hari ${todayReadable} (${todayIso}). Jika pengguna menanyakan jam berapa sekarang, pukul berapa, atau waktu saat ini, jawab secara langsung pukul ${currentTimeWib}. Keterangan waktu selalu gunakan WIB (UTC+7).]`,
+            text: `${m.text}\n\n[Info Sistem: Waktu server saat ini pukul ${currentTimeWib} pada ${todayReadable} (${todayIso}).]`,
           }
-        : m
-    );
+        : m;
+    });
 
     const rawReply = await askGemini({
       systemInstruction,
       messages: geminiMessages,
       files,
     });
+
+    if (rawReply.includes("```action")) {
+      teacherAiContextCache.delete(user.id);
+    }
 
     // =========================================================
     // ACTION PARSER: Ekstrak blok action dari reply AI
@@ -4086,6 +4229,267 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       };
     }
 
+    // =========================================================
+    // HELPER 6 (CUSTOM EXCEL GENERATOR): Buat file Excel kustom serapi mungkin
+    // =========================================================
+    async function executeGenerateCustomExcel(params: {
+      fileName?: string;
+      sheetName?: string;
+      title?: string;
+      subtitle?: string;
+      headersRaw?: string | string[];
+      dataRaw?: string | any[];
+    }): Promise<{
+      success: boolean;
+      message: string;
+      data?: any;
+    }> {
+      let rawFileName = (params.fileName || "").trim();
+      if (!rawFileName || !rawFileName.toLowerCase().endsWith(".xlsx")) {
+        const baseName = rawFileName ? rawFileName.replace(/\.[a-zA-Z0-9]+$/, "") : "Rekap_Data";
+        const dateTag = `${nowWib.getFullYear()}${String(nowWib.getMonth() + 1).padStart(2, "0")}${String(nowWib.getDate()).padStart(2, "0")}`;
+        rawFileName = `${baseName.replace(/[^a-zA-Z0-9_\-]/g, "_")}_${dateTag}.xlsx`;
+      }
+      const cleanFileName = rawFileName.replace(/[\\/:*?"<>|]/g, "_");
+
+      let cleanSheetName = (params.sheetName || "Data").trim().replace(/[\\/?*[\]:]/g, "-").slice(0, 31) || "Data";
+
+      const title = (params.title || "").trim();
+      const subtitle = (params.subtitle || "").trim();
+
+      // 1. Parse Headers
+      let headers: string[] = [];
+      const headersInput = params.headersRaw;
+      if (Array.isArray(headersInput)) {
+        headers = headersInput.map((h) => String(h || "").trim());
+      } else if (typeof headersInput === "string" && headersInput.trim()) {
+        const trimmed = headersInput.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+              headers = parsed.map((h: any) => String(h || "").trim());
+            }
+          } catch {
+            // fallback split
+          }
+        }
+        if (headers.length === 0) {
+          if (trimmed.includes("|")) {
+            headers = trimmed.split("|").map((h) => h.trim()).filter(Boolean);
+          } else {
+            headers = trimmed.split(",").map((h) => h.trim()).filter(Boolean);
+          }
+        }
+      }
+
+      // 2. Parse Rows / Data
+      let rows: any[][] = [];
+      const dataInput = params.dataRaw;
+      if (Array.isArray(dataInput)) {
+        for (const item of dataInput) {
+          if (Array.isArray(item)) {
+            rows.push(item);
+          } else if (typeof item === "object" && item !== null) {
+            if (headers.length === 0) {
+              headers = Object.keys(item);
+            }
+            rows.push(headers.map((k) => item[k] ?? ""));
+          }
+        }
+      } else if (typeof dataInput === "string" && dataInput.trim()) {
+        const trimmed = dataInput.trim();
+        let parsedJson = false;
+        if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                if (Array.isArray(item)) {
+                  rows.push(item);
+                } else if (typeof item === "object" && item !== null) {
+                  if (headers.length === 0) {
+                    headers = Object.keys(item);
+                  }
+                  rows.push(headers.map((k) => item[k] ?? ""));
+                }
+              }
+              parsedJson = true;
+            }
+          } catch {
+            parsedJson = false;
+          }
+        }
+
+        if (!parsedJson) {
+          const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+          for (const line of lines) {
+            if (/^[:|\-\s]+$/.test(line)) continue;
+            let cells: string[] = [];
+            if (line.includes("|")) {
+              cells = line.split("|").map((c) => c.trim());
+              if (cells.length > 0 && cells[0] === "") cells.shift();
+              if (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
+            } else if (line.includes("\t")) {
+              cells = line.split("\t").map((c) => c.trim());
+            } else {
+              cells = line.split(",").map((c) => c.trim());
+            }
+
+            if (cells.length > 0) {
+              if (headers.length === 0 && rows.length === 0) {
+                headers = cells;
+              } else {
+                rows.push(cells);
+              }
+            }
+          }
+        }
+      }
+
+      if (headers.length === 0 && rows.length === 0) {
+        return {
+          success: false,
+          message: "Data untuk generate file Excel kosong atau format tidak dikenali.",
+        };
+      }
+
+      // Bersihkan dan format tipe data numerik
+      const cleanedRows: any[][] = rows.map((row) =>
+        row.map((val) => {
+          if (val === null || val === undefined) return "";
+          const s = String(val).trim();
+          if (/^-?\d+(\.\d+)?$/.test(s) && (!s.startsWith("0") || s === "0" || s.startsWith("0."))) {
+            const num = Number(s);
+            if (!isNaN(num)) return num;
+          }
+          return s;
+        })
+      );
+
+      // 3. Bangun Worksheet AOA
+      const aoa: any[][] = [];
+      const merges: XLSX.Range[] = [];
+      let currentRowIdx = 0;
+      const totalCols = Math.max(headers.length, ...cleanedRows.map((r) => r.length), 1);
+
+      if (title) {
+        aoa.push([title.toUpperCase()]);
+        merges.push({ s: { r: currentRowIdx, c: 0 }, e: { r: currentRowIdx, c: totalCols - 1 } });
+        currentRowIdx++;
+
+        const sub = subtitle || `Dicetak oleh: ${user.name} • Tanggal: ${currentTimeWib} WIB`;
+        aoa.push([sub]);
+        merges.push({ s: { r: currentRowIdx, c: 0 }, e: { r: currentRowIdx, c: totalCols - 1 } });
+        currentRowIdx++;
+
+        aoa.push([]);
+        currentRowIdx++;
+      }
+
+      if (headers.length > 0) {
+        aoa.push(headers);
+        currentRowIdx++;
+      }
+
+      for (const r of cleanedRows) {
+        aoa.push(r);
+        currentRowIdx++;
+      }
+
+      aoa.push([]);
+      aoa.push([`Sumber: NEBULA AI SIMAK • ${cleanFileName} • Tanggal Ekspor: ${todayIso}`]);
+      merges.push({ s: { r: currentRowIdx + 1, c: 0 }, e: { r: currentRowIdx + 1, c: totalCols - 1 } });
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+      const colWidths: number[] = new Array(totalCols).fill(10);
+      if (headers.length > 0) {
+        headers.forEach((h, idx) => {
+          colWidths[idx] = Math.max(colWidths[idx], String(h).length);
+        });
+      }
+      for (const r of cleanedRows) {
+        r.forEach((cell, idx) => {
+          if (idx < totalCols) {
+            colWidths[idx] = Math.max(colWidths[idx], String(cell ?? "").length);
+          }
+        });
+      }
+      ws["!cols"] = colWidths.map((w) => ({ wch: Math.min(Math.max(w + 3, 10), 60) }));
+      if (merges.length > 0) {
+        ws["!merges"] = merges;
+      }
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, cleanSheetName);
+
+      const excelBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+
+      const uploadRes = await uploadFile({
+        buffer: excelBuffer,
+        filename: cleanFileName,
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        folder: "exports",
+      });
+
+      await db.execute(sql`
+        INSERT INTO ai_chat_files (
+          session_id, user_id, original_name, stored_name, storage_key, storage_provider, storage_url, mime_type, size_bytes
+        ) VALUES (
+          ${safeSessionId},
+          ${user.id},
+          ${cleanFileName},
+          ${path.basename(uploadRes.key)},
+          ${uploadRes.key},
+          ${uploadRes.provider},
+          ${uploadRes.url},
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ${uploadRes.size}
+        )
+      `);
+
+      generatedFiles.push({
+        id: `gen-file-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: cleanFileName,
+        size: uploadRes.size,
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        category: "spreadsheet",
+        url: uploadRes.url,
+        cloudUrl: uploadRes.cloudUrl,
+        provider: uploadRes.provider,
+        key: uploadRes.key,
+        storedName: path.basename(uploadRes.key),
+      });
+
+      const storageProviderLabel =
+        uploadRes.provider === "local"
+          ? "Penyimpanan Server Lokal (`/uploads`)"
+          : `Cloud Object Storage [${uploadRes.provider.toUpperCase()}]`;
+
+      const downloadUrlWithFilename = `${uploadRes.url}?filename=${encodeURIComponent(cleanFileName)}`;
+
+      return {
+        success: true,
+        message: `📊 **Berkas Excel Kustom Berhasil Dibuat & Siap Diunduh**\n` +
+          `- **Nama Berkas:** \`${cleanFileName}\`\n` +
+          `- **Lembar Kerja (Sheet):** \`${cleanSheetName}\`\n` +
+          (title ? `- **Judul Laporan:** ${title}\n` : "") +
+          `- **Jumlah Data:** **${cleanedRows.length} baris** (${headers.length} kolom)\n` +
+          `- **Lokasi Penyimpanan:** ${storageProviderLabel}\n` +
+          `- **Ukuran Berkas:** ${(uploadRes.size / 1024).toFixed(1)} KB\n\n` +
+          `📥 **[Klik di Sini untuk Mengunduh Berkas Excel: ${cleanFileName}](${downloadUrlWithFilename})**`,
+        data: {
+          fileName: cleanFileName,
+          sheetName: cleanSheetName,
+          totalRows: cleanedRows.length,
+          url: uploadRes.url,
+          storageKey: uploadRes.key,
+          size: uploadRes.size,
+        },
+      };
+    }
+
     const aiActions: Array<{
       type: string;
       payload: Record<string, unknown>;
@@ -4093,25 +4497,95 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     }> = [];
 
     // =========================================================
-    // LAYER 1: Ekstrak blok action ```action ... ``` jika ada
+    // LAYER 1: Ekstrak blok action (Mendukung ```action ... ```, ``` ... ```, maupun bare text tanpa backtick)
     // =========================================================
-    const actionBlockRegex = /```action\s*([\s\S]*?)```/gi;
-    let actionMatch: RegExpExecArray | null;
+    const backtickActionRegex = /```(?:action)?\s*([\s\S]*?)```/gi;
+    const bareActionRegex = /(?:^|\n)(GENERATE_EXCEL|EXPORT_CUSTOM_EXCEL|CREATE_EXCEL|EXPORT_REPORT|DOWNLOAD_REPORT|SAVE_GRADE_DRAFT|SAVE_JOURNAL_DRAFT|SEND_JOURNAL_DRAFT|SCHEDULE_ACTION|SAVE_MATRIX_DRAFT|DELETE_JOURNAL|DELETE_GRADE|RESTORE_TRASH|PERMANENT_DELETE_TRASH)\r?\n([a-z0-9_]+:\s*[^\n]+[\s\S]*?)(?=(?:\n[A-Z_]{4,}\b|\n```|$))/gi;
+
+    const actionBlocksToProcess: Array<{ text: string; fullMatch: string }> = [];
+
+    // 1. Ekstrak blok berpagar backtick (```action ... ``` atau ``` ... ```)
+    let bMatch: RegExpExecArray | null;
+    while ((bMatch = backtickActionRegex.exec(rawReply)) !== null) {
+      const content = bMatch[1].trim();
+      if (content) {
+        actionBlocksToProcess.push({ text: content, fullMatch: bMatch[0] });
+      }
+    }
+
+    // 2. Ekstrak bare action blocks (jika model menulis GENERATE_EXCEL atau EXPORT_REPORT tanpa backticks)
+    let bareMatch: RegExpExecArray | null;
+    while ((bareMatch = bareActionRegex.exec(rawReply)) !== null) {
+      const type = bareMatch[1].trim();
+      const body = bareMatch[2].trim();
+      const combined = `${type}\n${body}`;
+      if (!actionBlocksToProcess.some((item) => item.text.includes(type) && item.text.includes(body.slice(0, 30)))) {
+        actionBlocksToProcess.push({ text: combined, fullMatch: bareMatch[0] });
+      }
+    }
+
+    const promptToCheck = lastUserLower;
+
+    // Deteksi apakah pengguna secara EKSPLISIT meminta ekspor / download / buatkan file
+    // Prinsip: "tidak semuanya harus diekspor ke file, file digenerate ketika diminta saja. kalau ngga ya ngga"
+    const isExplicitExportRequested = (
+      promptToCheck.includes("ekspor") ||
+      promptToCheck.includes("export") ||
+      promptToCheck.includes("download") ||
+      promptToCheck.includes("unduh") ||
+      promptToCheck.includes("buatkan file") ||
+      promptToCheck.includes("bikin file") ||
+      promptToCheck.includes("jadikan file") ||
+      promptToCheck.includes("simpan file") ||
+      promptToCheck.includes("ke file") ||
+      promptToCheck.includes("ke dalam file") ||
+      promptToCheck.includes("buatkan excel") ||
+      promptToCheck.includes("bikin excel") ||
+      promptToCheck.includes("jadikan excel") ||
+      promptToCheck.includes("ke excel") ||
+      promptToCheck.includes("format excel") ||
+      promptToCheck.includes("format .xlsx") ||
+      promptToCheck.includes("format xlsx") ||
+      promptToCheck.includes("file excel") ||
+      promptToCheck.includes("berkas excel") ||
+      promptToCheck.includes("dokumen excel") ||
+      promptToCheck.includes("template unduhan") ||
+      promptToCheck.includes("pusat unduhan") ||
+      promptToCheck.includes("cetak rekap") ||
+      chatMessages.slice(-2).some((m) =>
+        m.role === "user" && /\b(ekspor|export|download|unduh|buatkan file|bikin file|jadikan file|file excel|ke excel|format excel|\.xlsx|xlsx|spreadsheet|cetak)\b/i.test(m.text)
+      )
+    );
+
     const executedActionKeys = new Set<string>();
 
-    while ((actionMatch = actionBlockRegex.exec(rawReply)) !== null) {
-      const blockText = actionMatch[1].trim();
+    for (const { text: blockText } of actionBlocksToProcess) {
       const lines = blockText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       const actionType = lines[0]?.toUpperCase();
 
       const parseParams = () => {
         const p: Record<string, string> = {};
+        let currentKey = "";
+        const standardKeys = new Set([
+          "file_name", "filename", "nama_file", "sheet", "sheet_name", "nama_sheet",
+          "judul", "title", "subjudul", "subtitle", "headers", "kolom", "data", "rows", "baris",
+          "student_id", "studentid", "id", "siswa", "student", "kelas", "class", "mapel", "subject",
+          "field", "nilai", "value", "tahun", "tahun_ajaran", "semester", "tanggal", "date",
+          "jam_awal_id", "jam_awal", "start_hour_id", "start", "jam_akhir_id", "jam_akhir", "end_hour_id", "end",
+          "materi", "material", "presensi", "presence", "presence_info", "tipe", "type", "waktu", "jam", "time",
+          "catatan", "note", "jenis", "laporan", "tanggal_mulai", "start_date", "tanggal_selesai", "end_date",
+          "guru", "teacher", "sertakan_kosong", "status", "format", "ext", "ekstensi", "action"
+        ]);
+
         for (const line of lines.slice(1)) {
           const colonIdx = line.indexOf(":");
-          if (colonIdx === -1) continue;
-          const key = line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_");
-          const val = line.slice(colonIdx + 1).trim();
-          p[key] = val;
+          const potentialKey = colonIdx !== -1 ? line.slice(0, colonIdx).trim().toLowerCase().replace(/-/g, "_") : "";
+          if (colonIdx !== -1 && (standardKeys.has(potentialKey) || !currentKey)) {
+            currentKey = potentialKey;
+            p[currentKey] = line.slice(colonIdx + 1).trim();
+          } else if (currentKey) {
+            p[currentKey] = (p[currentKey] ? p[currentKey] + "\n" : "") + line;
+          }
         }
         return p;
       };
@@ -4318,6 +4792,78 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           continue;
         }
 
+        const isUserExplicitlyRequestingExport = isExplicitExportRequested || chatMessages.slice(-2).some((m) =>
+          m.role === "user" && /\b(ekspor|export|download|unduh|buatkan file|bikin file|jadikan file|file excel|ke excel|format excel|\.xlsx|xlsx|spreadsheet|cetak)\b/i.test(m.text)
+        );
+
+        if (!isUserExplicitlyRequestingExport) {
+          // Sesuai aturan: "tidak semuanya harus diekspor ke file, file digenerate ketika diminta saja. kalau ngga ya ngga"
+          if (jenisRaw.includes("SISWA") || jenisRaw.includes("ROSTER") || jenisRaw.includes("MURID")) {
+            const allClasses = await db.select({ id: classes.id, name: classes.name }).from(classes).where(eq(classes.isActive, true));
+            const qRaw = (className || "SEMUA").trim().toLowerCase();
+            let targetCls = allClasses.filter((c) => qRaw.includes(c.name.toLowerCase()));
+            if (targetCls.length === 0) {
+              const rangeMatch = qRaw.match(/([xXiI0-9\-]+)\s*(?:sampai|s\/d|hingga|sd|-)\s*([xXiI0-9\-]+)/i);
+              if (rangeMatch) {
+                const normPrefix = (p: string) => {
+                  const clean = p.replace(/[^a-z0-9]/gi, "").toLowerCase();
+                  if (clean === "xii" || clean === "12") return "12";
+                  if (clean === "xi" || clean === "11") return "11";
+                  if (clean === "x" || clean === "10") return "10";
+                  return clean;
+                };
+                const sM = rangeMatch[1].match(/(\d+)$/);
+                const eM = rangeMatch[2].match(/(\d+)$/);
+                const pM = rangeMatch[1].match(/^([a-z0-9\-]+?)[-_ ]*(\d+)$/i);
+                if (sM && eM && pM) {
+                  const targetNorm = normPrefix(pM[1]);
+                  const sN = parseInt(sM[1], 10);
+                  const eN = parseInt(eM[1], 10);
+                  targetCls = allClasses.filter((c) => {
+                    const cNumM = c.name.match(/(\d+)$/);
+                    const cPreM = c.name.match(/^([a-z0-9\-]+?)[-_ ]*(\d+)$/i);
+                    if (!cNumM || !cPreM) return false;
+                    const cNum = parseInt(cNumM[1], 10);
+                    return normPrefix(cPreM[1]) === targetNorm && cNum >= sN && cNum <= eN;
+                  });
+                }
+              }
+            }
+            if (targetCls.length === 0) targetCls = allClasses.slice(0, 5);
+            const targetIds = targetCls.map((c) => c.id);
+            const stRows = await db
+              .select({ id: students.id, name: students.name, classId: students.classId })
+              .from(students)
+              .where(inArray(students.classId, targetIds));
+
+            const summaryLines = targetCls.map((cls) => {
+              const count = stRows.filter((s) => s.classId === cls.id).length;
+              return `- **Kelas ${cls.name}:** ${count} siswa`;
+            });
+
+            aiActions.push({
+              type: "EXPORT_REPORT",
+              payload: params,
+              result: {
+                success: true,
+                message: `📋 **Rekapitulasi Data Siswa (${targetCls.map((c) => c.name).join(", ")}):**\n${summaryLines.join("\n")}\n- **Total Siswa:** **${stRows.length} siswa**\n\n💡 *Catatan:* Berkas unduhan Excel tidak dibuat karena Kakak tidak meminta ekspor file. Jika Kakak ingin mengunduhnya dalam bentuk berkas Excel (.xlsx), silakan ketik *"ekspor rekap siswa ke excel"*.`,
+                data: { total: stRows.length, targetClasses: targetCls.map((c) => c.name) },
+              },
+            });
+            continue;
+          }
+
+          aiActions.push({
+            type: "EXPORT_REPORT",
+            payload: params,
+            result: {
+              success: true,
+              message: `ℹ️ **Informasi Laporan:** Permintaan data terdeteksi. Sesuai preferensi, berkas unduhan Excel (.xlsx) hanya digenerate jika Kakak secara eksplisit meminta ekspor file. Silakan ketik *"ekspor ke excel"* jika Kakak membutuhkan berkas file resminya.`,
+            },
+          });
+          continue;
+        }
+
         let targetTeacherUserId: string | undefined = undefined;
         let targetTeacherName: string | null = null;
 
@@ -4350,7 +4896,18 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           executedActionKeys.add(dedupKey);
           try {
             let exportResult: ExportReportResult;
-            if (jenisRaw.includes("LEGER") || (jenisRaw.includes("NILAI") && !jenisRaw.includes("TEMPLATE"))) {
+            if (
+              jenisRaw.includes("SISWA") ||
+              jenisRaw.includes("ROSTER") ||
+              jenisRaw.includes("MURID") ||
+              jenisRaw.includes("PESERTA")
+            ) {
+              exportResult = await exportStudentRosterExcel({
+                classQuery: className || ctx.classNames.split(",")[0] || "SEMUA",
+                statusFilter: "siswa",
+                printedBy: user.name,
+              });
+            } else if (jenisRaw.includes("LEGER") || (jenisRaw.includes("NILAI") && !jenisRaw.includes("TEMPLATE"))) {
               exportResult = await exportGradeLegerExcel({
                 classQuery: className || ctx.classNames.split(",")[0] || "X-1",
                 subjectQuery: subjectName,
@@ -4413,7 +4970,13 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
             const downloadUrlWithFilename = `${exportResult.url}?filename=${encodeURIComponent(exportResult.fileName)}`;
 
             let detailMsg = "";
-            if (exportResult.exportType === "rekap_jurnal") {
+            if (exportResult.exportType === "rekap_siswa") {
+              detailMsg = `- **Tipe Berkas:** Rekapitulasi Daftar Nama Siswa / Roster Kelas (.xlsx)\n` +
+                `- **Cakupan:** ${exportResult.scopeDescription}\n` +
+                `- **Lokasi Simpan:** ${storageProviderLabel}\n` +
+                `- **Ukuran Berkas:** ${(exportResult.size / 1024).toFixed(1)} KB\n\n` +
+                `📥 **[Klik di Sini untuk Mengunduh Berkas Siswa Excel: ${exportResult.fileName}](${downloadUrlWithFilename})**`;
+            } else if (exportResult.exportType === "rekap_jurnal") {
               detailMsg = `- **Tipe Berkas:** Rekapitulasi Monitoring Jurnal Mengajar Guru (.xlsx)\n` +
                 `- **Cakupan:** ${exportResult.scopeDescription}\n` +
                 `- **Statistik Data:** Total Baris: **${exportResult.totalRows ?? 0}** | Terisi: **${exportResult.filledCount ?? 0}** (Terkirim: **${exportResult.sentCount ?? 0}**, Draft: **${exportResult.draftCount ?? 0}**) | Kosong: **${exportResult.emptyCount ?? 0}**\n` +
@@ -4455,22 +5018,122 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           }
         }
       }
+
+      if (
+        actionType === "GENERATE_EXCEL" ||
+        actionType === "EXPORT_CUSTOM_EXCEL" ||
+        actionType === "CREATE_EXCEL"
+      ) {
+        const params = parseParams();
+        const rawFormat = (
+          params["format"] ||
+          params["ext"] ||
+          params["ekstensi"] ||
+          ""
+        ).toLowerCase().trim();
+
+        const isPdfExplicit = rawFormat === "pdf";
+        const isUnsupportedFormat = Boolean(rawFormat && !["xlsx", "excel", "spreadsheet"].includes(rawFormat));
+
+        if (isPdfExplicit || isUnsupportedFormat) {
+          const badFormat = isPdfExplicit ? "PDF" : rawFormat.toUpperCase();
+          aiActions.push({
+            type: "GENERATE_EXCEL",
+            payload: params,
+            result: {
+              success: false,
+              message: `⚠️ **Format Ekspor "${badFormat}" Belum Didukung**\n\nNEBULA AI saat ini **hanya mendukung pembuatan dan ekspor berkas dalam format Microsoft Excel (.xlsx)**. Format ${badFormat} belum didukung secara langsung oleh server.\n\n💡 *Solusi Cetak PDF:* Berkas Excel (.xlsx) yang dihasilkan telah diformat rapi dan terstruktur standar A4. Anda dapat mengunduh berkas Excel (.xlsx) lalu menyimpannya sebagai ${badFormat} melalui menu **Cetak (Print to PDF)** di Excel atau peramban.`,
+            },
+          });
+          continue;
+        }
+
+        const fileName = params["file_name"] || params["filename"] || params["nama_file"] || "";
+        const sheetName = params["sheet"] || params["sheet_name"] || params["nama_sheet"] || "Data";
+        const title = params["judul"] || params["title"] || "";
+        const subtitle = params["subjudul"] || params["subtitle"] || "";
+        const headersRaw = params["headers"] || params["kolom"] || "";
+        const dataRaw = params["data"] || params["rows"] || params["baris"] || "";
+
+        const isUserExplicitlyRequestingExport = isExplicitExportRequested || chatMessages.slice(-2).some((m) =>
+          m.role === "user" && /\b(ekspor|export|download|unduh|buatkan file|bikin file|jadikan file|file excel|ke excel|format excel|\.xlsx|xlsx|spreadsheet|cetak)\b/i.test(m.text)
+        );
+
+        if (!isUserExplicitlyRequestingExport) {
+          // Tampilkan tabel markdown di chat langsung tanpa generate file Excel
+          let tableMd = "";
+          let hList: string[] = [];
+          if (Array.isArray(headersRaw)) hList = headersRaw;
+          else if (typeof headersRaw === "string" && headersRaw.trim()) {
+            hList = headersRaw.split(/[,|]/).map((h) => h.trim()).filter(Boolean);
+          }
+          if (hList.length > 0) {
+            tableMd = `| ${hList.join(" | ")} |\n| ${hList.map(() => "---").join(" | ")} |\n`;
+          }
+          if (typeof dataRaw === "string" && dataRaw.trim()) {
+            const dataLines = dataRaw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+            for (const line of dataLines.slice(0, 30)) {
+              const cells = line.split("|").map((c) => c.trim()).filter(Boolean);
+              if (cells.length > 0) {
+                tableMd += `| ${cells.join(" | ")} |\n`;
+              }
+            }
+          }
+          aiActions.push({
+            type: "GENERATE_EXCEL",
+            payload: params,
+            result: {
+              success: true,
+              message: (title ? `📊 **${title}**\n${subtitle ? `*${subtitle}*\n\n` : "\n"}` : "") +
+                tableMd +
+                `\n💡 *Catatan:* Berkas Excel tidak dibuat karena Kakak tidak meminta ekspor file. Jika membutuhkan file Excel (.xlsx), silakan ketik *"buatkan file excel"*.`,
+            },
+          });
+          continue;
+        }
+
+        const dedupKey = `GEN_EXCEL|${fileName}|${title}|${headersRaw}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          try {
+            const res = await executeGenerateCustomExcel({
+              fileName,
+              sheetName,
+              title,
+              subtitle,
+              headersRaw,
+              dataRaw,
+            });
+            aiActions.push({ type: "GENERATE_EXCEL", payload: params, result: res });
+          } catch (e: any) {
+            aiActions.push({
+              type: "GENERATE_EXCEL",
+              payload: params,
+              result: {
+                success: false,
+                message: `⚠️ Gagal membuat berkas Excel: ${e.message || String(e)}`,
+              },
+            });
+          }
+        }
+      }
     }
 
     // =========================================================
     // LAYER 1B: Fallback cerdas untuk Verifikasi 2 Langkah (Langkah 1 & Langkah 2) & Ekspor Berkas
     // =========================================================
-    const promptToCheck = lastUserLower;
+    // HANYA JIKA USER SECARA EKSPLISIT MEMINTA FILE/EKSPOR:
+    const isStudentRosterIntent = isExplicitExportRequested && (
+      promptToCheck.includes("siswa") || promptToCheck.includes("murid") || promptToCheck.includes("roster")
+    );
 
-    // Jika user meminta EKSPOR / UNDUH REKAPITULASI JURNAL ATAU LEGER NILAI
-    const isExportIntent = (
-      promptToCheck.includes("rekap jurnal") ||
-      promptToCheck.includes("template unduhan") ||
-      promptToCheck.includes("pusat unduhan") ||
-      (promptToCheck.includes("unduhan") && (promptToCheck.includes("jurnal") || promptToCheck.includes("nilai") || promptToCheck.includes("template") || promptToCheck.includes("akses"))) ||
-      (promptToCheck.includes("export") && (promptToCheck.includes("jurnal") || promptToCheck.includes("nilai") || promptToCheck.includes("rekap") || promptToCheck.includes("template"))) ||
-      (promptToCheck.includes("unduh") && (promptToCheck.includes("jurnal") || promptToCheck.includes("rekap") || promptToCheck.includes("leger") || promptToCheck.includes("template"))) ||
-      (promptToCheck.includes("download") && (promptToCheck.includes("jurnal") || promptToCheck.includes("rekap") || promptToCheck.includes("leger") || promptToCheck.includes("template")))
+    const isExportIntent = isExplicitExportRequested && (
+      isStudentRosterIntent ||
+      promptToCheck.includes("jurnal") ||
+      promptToCheck.includes("leger") ||
+      promptToCheck.includes("nilai") ||
+      promptToCheck.includes("template") ||
+      promptToCheck.includes("rekap")
     );
 
     if (aiActions.length === 0 && isExportIntent) {
@@ -4488,14 +5151,23 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
           },
         });
       } else {
-        const classMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
-        const targetClass = classMatch ? classMatch[1].trim() : (ctx.classNames.split(",")[0]?.trim() || "SEMUA");
-        const isLeger = promptToCheck.includes("leger") || (promptToCheck.includes("nilai") && !promptToCheck.includes("jurnal"));
-        const isTemplate = promptToCheck.includes("template nilai") || (promptToCheck.includes("template") && promptToCheck.includes("nilai"));
+        const rangeClassMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\s*(?:sampai|s\/d|hingga|sd|-)\s*(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+        const singleClassMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+        const targetClass = rangeClassMatch
+          ? `${rangeClassMatch[1]} sampai ${rangeClassMatch[2]}`
+          : (singleClassMatch ? singleClassMatch[1].trim() : (ctx.classNames.split(",")[0]?.trim() || "SEMUA"));
+
+        const isLeger = !isStudentRosterIntent && (promptToCheck.includes("leger") || (promptToCheck.includes("nilai") && !promptToCheck.includes("jurnal")));
+        const isTemplate = !isStudentRosterIntent && (promptToCheck.includes("template nilai") || (promptToCheck.includes("template") && promptToCheck.includes("nilai")));
 
         try {
           let exportResult: ExportReportResult;
-          if (isTemplate) {
+          if (isStudentRosterIntent) {
+            exportResult = await exportStudentRosterExcel({
+              classQuery: targetClass,
+              printedBy: user.name,
+            });
+          } else if (isTemplate) {
             exportResult = await exportGradeTemplateExcel({
               user: { id: user.id, name: user.name },
               classQuery: targetClass,
@@ -4577,6 +5249,58 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
               message: `⚠️ Gagal mengekspor berkas: ${err.message || String(err)}`,
             },
           });
+        }
+      }
+    }
+
+    // Jika user meminta ekspor / buatkan file Excel dan AI merespon dengan tabel data tapi lupa action block
+    const isCustomExcelIntent = isExplicitExportRequested && (
+      promptToCheck.includes("excel") ||
+      promptToCheck.includes("xlsx") ||
+      promptToCheck.includes("spreadsheet") ||
+      promptToCheck.includes("buatkan file") ||
+      promptToCheck.includes("bikin file") ||
+      promptToCheck.includes("ekspor") ||
+      promptToCheck.includes("export") ||
+      promptToCheck.includes("unduh") ||
+      promptToCheck.includes("download")
+    );
+
+    if (aiActions.length === 0 && isCustomExcelIntent) {
+      const tableMatch = rawReply.match(/(\|[^\n]+\|\r?\n\|[-:\s|]+\|\r?\n(?:\|[^\n]+\|\r?\n?)+)/);
+      if (tableMatch) {
+        const tableText = tableMatch[1].trim();
+        const tableLines = tableText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (tableLines.length >= 3) {
+          const headerLine = tableLines[0];
+          const dataLines = tableLines.slice(2);
+
+          const parsedHeaders = headerLine.split("|").map((c) => c.trim()).filter(Boolean);
+          const parsedRows = dataLines.map((line) => {
+            const cells = line.split("|").map((c) => c.trim());
+            if (cells.length > 0 && cells[0] === "") cells.shift();
+            if (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
+            return cells;
+          });
+
+          if (parsedHeaders.length > 0 && parsedRows.length > 0) {
+            try {
+              const res = await executeGenerateCustomExcel({
+                fileName: `Rekap_Data_${nowWib.getFullYear()}${String(nowWib.getMonth() + 1).padStart(2, "0")}${String(nowWib.getDate()).padStart(2, "0")}.xlsx`,
+                sheetName: "Rekap Data",
+                title: "REKAPITULASI DATA SIMAK",
+                headersRaw: parsedHeaders,
+                dataRaw: parsedRows,
+              });
+              aiActions.push({
+                type: "GENERATE_EXCEL",
+                payload: { from: "markdown_table_fallback" },
+                result: res,
+              });
+            } catch (err: any) {
+              console.error("[Fallback Custom Excel] Failed to generate excel from table:", err);
+            }
+          }
         }
       }
     }
@@ -4859,7 +5583,11 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // Serta koreksi tanggal halusinasi 2023/2024/2025 di teks narasi AI menjadi tanggal server hari ini
     // Dan bersihkan halusinasi 00:00 atau 00:00 WIB menjadi jam server lokal yang valid
     let cleanReply = rawReply
-      .replace(actionBlockRegex, "")
+      .replace(backtickActionRegex, "")
+      .replace(bareActionRegex, "")
+      .replace(/(?:^|\n)(?:GENERATE_EXCEL|EXPORT_CUSTOM_EXCEL|CREATE_EXCEL|EXPORT_REPORT|DOWNLOAD_REPORT)[\s\S]*?(?=(?:\n\n[A-Z]|\n\n---\n|$))/gi, "")
+      .replace(/(?:^|\n)\s*\d+\s*\|\s*[^\n|]+\s*\|\s*[^\n|]+\s*\|\s*[^\n|]+\s*\|[^\n]*/gi, "")
+      .replace(/(?:^|\n)\s*(?:Skipped|Note|Add when|Thinking|Thought|Reasoning):\s*[^\n]*/gi, "")
       .replace(/\bGoogle\s+Gemini\b/gi, "NEBULA AI")
       .replace(/\bGemini\s+(?:AI|Flash|Pro|2\.0)\b/gi, "NEBULA AI")
       .replace(/\bGemini\b/gi, "NEBULA AI")
@@ -4918,7 +5646,11 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       } else if (anyStep2Completed || (allSucceeded && (hasFalseRefusal || !cleanReply))) {
         finalReply = `Baik ${ctx.honorific} ${user.name}, sesuai otoritas **${isSuperadmin ? "Superadmin" : isAdminUser ? "Admin" : "Guru"}**, permintaan Anda telah selesai dieksekusi:\n\n${actionSummaries}`;
       } else if (actionSummaries) {
-        finalReply = `${finalReply}\n\n---\n${actionSummaries}`.trim();
+        if (!cleanReply) {
+          finalReply = actionSummaries;
+        } else {
+          finalReply = `${finalReply}\n\n---\n${actionSummaries}`.trim();
+        }
       }
     }
 

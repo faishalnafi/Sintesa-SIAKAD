@@ -62,9 +62,10 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().optional()),
   GOOGLE_CLIENT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
 
-  // --- Google AI Studio / Gemini API ---
+  // --- 9Router Gateway LLM API ---
   GEMINI_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
-  GEMINI_MODEL: z.preprocess(emptyToUndefined, z.string().default("gemini-2.0-flash")),
+  GEMINI_BASE_URL: z.preprocess(emptyToUndefined, z.string().default("https://llm.faishalnafi.com/v1")),
+  GEMINI_MODEL: z.preprocess(emptyToUndefined, z.string().default("gemini/gemini-3.5-flash-lite")),
 
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().default(20),
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().default(600_000),
@@ -186,6 +187,10 @@ export const env = {
   },
   get GEMINI_API_KEY() {
     return (process.env.GEMINI_API_KEY || parsed.GEMINI_API_KEY || "").trim();
+  },
+  get GEMINI_BASE_URL() {
+    const raw = (process.env.GEMINI_BASE_URL || parsed.GEMINI_BASE_URL || "").trim();
+    return raw ? cleanUrlProtocol(raw) : "";
   },
   get GEMINI_MODEL() {
     return (process.env.GEMINI_MODEL || parsed.GEMINI_MODEL || "gemini-2.0-flash").trim();

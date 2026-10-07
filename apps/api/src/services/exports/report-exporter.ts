@@ -72,7 +72,7 @@ function parseScore(val: string | null | undefined): number | null {
 
 export type ExportReportResult = {
   success: boolean;
-  exportType: "rekap_jurnal" | "leger_nilai" | "template_nilai";
+  exportType: "rekap_jurnal" | "leger_nilai" | "template_nilai" | "rekap_siswa";
   fileName: string;
   url: string;
   cloudUrl?: string;
@@ -1121,3 +1121,213 @@ export async function exportGradeTemplateExcel(params: {
     studentCount: roster.length,
   };
 }
+
+// ============================================================================
+// 4. REKAPITULASI DAFTAR NAMA SISWA / ROSTER KELAS (.XLSX)
+// ============================================================================
+export async function exportStudentRosterExcel(params: {
+  classQuery?: string | null;
+  statusFilter?: string;
+  printedBy: string;
+}): Promise<ExportReportResult> {
+  const { classQuery, statusFilter = "siswa", printedBy } = params;
+  const now = new Date();
+
+  // 1. Ambil semua kelas aktif
+  const allClasses = await db
+    .select({ id: classes.id, name: classes.name, gradeLevel: classes.gradeLevel })
+    .from(classes)
+    .where(eq(classes.isActive, true))
+    .orderBy(classes.name);
+
+  // 2. Parse target classes dari classQuery (mendukung rentang seperti "XII-1 sampai XII-5", "X-1, X-2", atau "SEMUA")
+  let targetClasses: Array<{ id: string; name: string; gradeLevel?: string | null }> = [];
+  const qRaw = (classQuery || "SEMUA").trim().toLowerCase();
+
+  const rangeMatch = qRaw.match(/([xXiI0-9\-]+)\s*(?:sampai|s\/d|hingga|sd|-)\s*([xXiI0-9\-]+)/i);
+  if (rangeMatch) {
+    const startStr = rangeMatch[1].replace(/kelas\s*/i, "").trim().toLowerCase();
+    const endStr = rangeMatch[2].replace(/kelas\s*/i, "").trim().toLowerCase();
+
+    const startNumMatch = startStr.match(/(\d+)$/);
+    const endNumMatch = endStr.match(/(\d+)$/);
+    const prefixMatch = startStr.match(/^([a-z0-9\-]+?)[-_ ]*(\d+)$/i);
+
+    if (startNumMatch && endNumMatch && prefixMatch) {
+      const prefix = prefixMatch[1].replace(/[-_ ]*$/, "").toLowerCase();
+      const startNum = parseInt(startNumMatch[1], 10);
+      const endNum = parseInt(endNumMatch[1], 10);
+
+      const normPrefix = (p: string) => {
+        const clean = p.replace(/[^a-z0-9]/gi, "").toLowerCase();
+        if (clean === "xii" || clean === "12") return "12";
+        if (clean === "xi" || clean === "11") return "11";
+        if (clean === "x" || clean === "10") return "10";
+        return clean;
+      };
+
+      const targetNorm = normPrefix(prefix);
+      targetClasses = allClasses.filter((c) => {
+        const cLower = c.name.toLowerCase();
+        const cNumMatch = cLower.match(/(\d+)$/);
+        const cPrefixMatch = cLower.match(/^([a-z0-9\-]+?)[-_ ]*(\d+)$/i);
+        if (!cNumMatch || !cPrefixMatch) return false;
+        const cPrefix = cPrefixMatch[1].replace(/[-_ ]*$/, "").toLowerCase();
+        const cNum = parseInt(cNumMatch[1], 10);
+        return normPrefix(cPrefix) === targetNorm && cNum >= startNum && cNum <= endNum;
+      });
+    }
+  }
+
+  if (targetClasses.length === 0) {
+    if (qRaw === "semua" || qRaw === "all" || qRaw === "*") {
+      targetClasses = allClasses;
+    } else {
+      const classTokens = qRaw.split(/[,;]/).map((t) => t.replace(/kelas\s*/i, "").trim().toLowerCase()).filter(Boolean);
+      if (classTokens.length > 1) {
+        targetClasses = allClasses.filter((c) =>
+          classTokens.some((token) => c.name.toLowerCase().includes(token) || token.includes(c.name.toLowerCase()))
+        );
+      } else {
+        const singleToken = classTokens[0] || qRaw;
+        const matched = allClasses.filter((c) =>
+          c.name.toLowerCase() === singleToken ||
+          c.name.toLowerCase().includes(singleToken) ||
+          singleToken.includes(c.name.toLowerCase())
+        );
+        targetClasses = matched.length > 0 ? matched : [allClasses[0]];
+      }
+    }
+  }
+
+  if (targetClasses.length === 0) {
+    targetClasses = allClasses.slice(0, 5);
+  }
+
+  // 3. Ambil data siswa untuk semua targetClasses
+  const targetClassIds = targetClasses.map((c) => c.id);
+  const stConds = [inArray(students.classId, targetClassIds)];
+  if (statusFilter && statusFilter !== "all" && statusFilter !== "semua") {
+    stConds.push(eq(students.memberStatus, statusFilter));
+  }
+
+  const studentRows = await db
+    .select({
+      id: students.id,
+      name: students.name,
+      nis: students.nis,
+      nisn: students.nisn,
+      classId: students.classId,
+      jenisKelamin: students.jenisKelamin,
+      poinGds: students.poinGds,
+      memberStatus: students.memberStatus,
+    })
+    .from(students)
+    .where(and(...stConds))
+    .orderBy(students.name);
+
+  const classStudentsMap = new Map<string, typeof studentRows>();
+  for (const st of studentRows) {
+    if (!st.classId) continue;
+    const list = classStudentsMap.get(st.classId) || [];
+    list.push(st);
+    classStudentsMap.set(st.classId, list);
+  }
+
+  // 4. Bangun Workbook Excel
+  const wb = XLSX.utils.book_new();
+  let totalExportedStudents = 0;
+
+  for (const cls of targetClasses) {
+    const list = (classStudentsMap.get(cls.id) || []).sort((a, b) => a.name.localeCompare(b.name));
+    totalExportedStudents += list.length;
+
+    const aoa: any[][] = [];
+    const merges: XLSX.Range[] = [];
+
+    // KOP RESMI
+    aoa.push(["PEMERINTAH PROVINSI JAWA TIMUR"]);
+    aoa.push(["DINAS PENDIDIKAN"]);
+    aoa.push(["SEKOLAH MENENGAH ATAS NEGERI 3 MOJOKERTO"]);
+    aoa.push([`DAFTAR REKAPITULASI SISWA KELAS ${cls.name.toUpperCase()}`]);
+    aoa.push([`Tahun Pelajaran: 2025/2026 • Status: ${statusFilter.toUpperCase()} • Dicetak Oleh: ${printedBy}`]);
+    aoa.push([]); // baris kosong
+
+    for (let r = 0; r < 5; r++) {
+      merges.push({ s: { r, c: 0 }, e: { r, c: 6 } });
+    }
+
+    // HEADER TABEL
+    aoa.push(["No", "NIS", "NISN", "Nama Lengkap Siswa", "L/P", "Poin GDS", "Status"]);
+
+    list.forEach((st, idx) => {
+      aoa.push([
+        idx + 1,
+        st.nis || "-",
+        st.nisn || "-",
+        st.name,
+        st.jenisKelamin ? st.jenisKelamin.toUpperCase() : "-",
+        st.poinGds ?? 0,
+        st.memberStatus ? st.memberStatus.toUpperCase() : "AKTIF",
+      ]);
+    });
+
+    // FOOTER TANDA TANGAN
+    aoa.push([]);
+    aoa.push([
+      `Mojokerto, ${now.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}`,
+      "",
+      "",
+      "",
+      "",
+      "",
+      `Total: ${list.length} Siswa`,
+    ]);
+    aoa.push([`Petugas / Administrator: ${printedBy}`]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    ws["!cols"] = [
+      { wch: 6 },  // No
+      { wch: 14 }, // NIS
+      { wch: 16 }, // NISN
+      { wch: 38 }, // Nama
+      { wch: 8 },  // L/P
+      { wch: 12 }, // Poin GDS
+      { wch: 14 }, // Status
+    ];
+    ws["!merges"] = merges;
+
+    const sheetName = sanitizeSheetName(`Kelas ${cls.name}`);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+
+  const cleanName = (str: string) => str.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 25);
+  const timeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const classLabel = targetClasses.length === 1 ? targetClasses[0].name : `${targetClasses[0].name}_sd_${targetClasses[targetClasses.length - 1].name}`;
+  const fileName = `Daftar_Siswa_${cleanName(classLabel)}_${timeStr}.xlsx`;
+
+  const excelBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+
+  const uploadRes = await uploadFile({
+    buffer: excelBuffer,
+    filename: fileName,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    folder: "exports",
+  });
+
+  return {
+    success: true,
+    exportType: "rekap_siswa",
+    fileName,
+    url: uploadRes.url,
+    cloudUrl: uploadRes.cloudUrl,
+    provider: uploadRes.provider,
+    storageKey: uploadRes.key,
+    size: uploadRes.size,
+    scopeDescription: `Kelas: ${targetClasses.map((c) => c.name).join(", ")}, Total Siswa: ${totalExportedStudents}`,
+    studentCount: totalExportedStudents,
+    totalRows: totalExportedStudents,
+  };
+}
+

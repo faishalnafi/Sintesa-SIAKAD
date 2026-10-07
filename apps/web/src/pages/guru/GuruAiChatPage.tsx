@@ -23,7 +23,7 @@ marked.use({
   },
 });
 
-export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 export const MAX_FILES_PER_UPLOAD = 25;
 
 export type FileCategory =
@@ -232,11 +232,15 @@ function ChatBubbleItem({
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!isUser) {
+      setIsOverflowing(false);
+      return;
+    }
     const el = contentRef.current;
     if (el) {
       setIsOverflowing(el.scrollHeight > 140);
     }
-  }, [message.text]);
+  }, [message.text, isUser]);
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -362,12 +366,12 @@ function ChatBubbleItem({
             </div>
           )}
 
-          {/* Text Content (with auto-collapse limit) */}
+          {/* Text Content (with auto-collapse limit for user messages only) */}
           <div
             ref={contentRef}
             className={cn(
               "relative transition-all duration-300",
-              isOverflowing && !isExpanded ? "max-h-[125px] overflow-hidden" : ""
+              isUser && isOverflowing && !isExpanded ? "max-h-[125px] overflow-hidden" : ""
             )}
           >
             {isUser ? (
@@ -376,15 +380,10 @@ function ChatBubbleItem({
               <MarkdownContent content={message.text} />
             )}
 
-            {/* Gradient Fade overlay when collapsed */}
-            {isOverflowing && !isExpanded && (
+            {/* Gradient Fade overlay when collapsed (user messages only) */}
+            {isUser && isOverflowing && !isExpanded && (
               <div
-                className={cn(
-                  "absolute inset-x-0 bottom-0 h-10 pointer-events-none bg-gradient-to-t",
-                  isUser
-                    ? "from-[var(--accent)] to-transparent"
-                    : "from-[var(--card)] to-transparent"
-                )}
+                className="absolute inset-x-0 bottom-0 h-10 pointer-events-none bg-gradient-to-t from-[var(--accent)] to-transparent"
               />
             )}
           </div>
@@ -566,8 +565,8 @@ function ChatBubbleItem({
             </div>
           )}
 
-          {/* Expand / Collapse Button */}
-          {isOverflowing && (
+          {/* Expand / Collapse Button (User messages only) */}
+          {isUser && isOverflowing && (
             <div className="flex justify-end mt-1.5 -mb-1 relative z-10">
               <button
                 type="button"
@@ -575,12 +574,7 @@ function ChatBubbleItem({
                   e.stopPropagation();
                   setIsExpanded(!isExpanded);
                 }}
-                className={cn(
-                  "w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer shadow-xs",
-                  isUser
-                    ? "bg-black/25 hover:bg-black/40 text-white"
-                    : "bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-[var(--fg)]"
-                )}
+                className="w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer shadow-xs bg-black/25 hover:bg-black/40 text-white"
                 title={isExpanded ? "Ciutkan teks" : "Tampilkan selengkapnya"}
               >
                 <span className="material-symbols-outlined text-[18px]">
@@ -892,26 +886,63 @@ export function GuruAiChatPage() {
       }
     }
 
-    // If Excel / Spreadsheet, extract sheet data via XLSX
+    // If Excel / Spreadsheet, extract ALL sheets cleanly via XLSX
     if (category === "spreadsheet") {
       try {
         const buffer = await file.arrayBuffer();
         const wb = XLSX.read(buffer, { type: "array" });
-        let sheetSummary = `[File Spreadsheet: "${file.name}"]\n`;
-        for (const sName of wb.SheetNames.slice(0, 5)) {
+        const visibleSheetNames = wb.SheetNames.filter(
+          (name) => !name.startsWith("_SECURITY") && !name.startsWith("__")
+        );
+        const targetSheetNames = visibleSheetNames.length > 0 ? visibleSheetNames : wb.SheetNames;
+
+        let sheetSummary = `[File Spreadsheet Multi-Lembar: "${file.name}" | Total Lembar Kerja: ${targetSheetNames.length} (${targetSheetNames.join(", ")})]\n\n`;
+
+        for (let idx = 0; idx < targetSheetNames.length; idx++) {
+          const sName = targetSheetNames[idx];
           const sheet = wb.Sheets[sName];
-          const csv = XLSX.utils.sheet_to_csv(sheet);
-          if (csv.trim()) {
-            sheetSummary += `--- Lembar Kerja: ${sName} ---\n${csv.slice(0, 4000)}\n\n`;
+          if (!sheet) continue;
+          const rows = XLSX.utils.sheet_to_json<(string | number | null | undefined)[]>(sheet, {
+            header: 1,
+            defval: "",
+            blankrows: false,
+          });
+
+          const compactLines: string[] = [];
+          for (const row of rows) {
+            if (!Array.isArray(row)) continue;
+            // Trim trailing empty cells on each row to avoid dozens of empty commas
+            let lastNonEmpty = row.length - 1;
+            while (
+              lastNonEmpty >= 0 &&
+              (row[lastNonEmpty] === null ||
+                row[lastNonEmpty] === undefined ||
+                String(row[lastNonEmpty]).trim() === "")
+            ) {
+              lastNonEmpty--;
+            }
+            if (lastNonEmpty < 0) continue;
+            const trimmedRow = row.slice(0, lastNonEmpty + 1).map((cell) => {
+              const s = String(cell ?? "").trim().replace(/\r?\n/g, " ");
+              return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+            });
+            compactLines.push(trimmedRow.join(","));
+          }
+
+          if (compactLines.length > 0) {
+            const rowCount = compactLines.length;
+            const limitedRows = compactLines.slice(0, 60);
+            const extraNote = rowCount > 60 ? `\n... (menampilkan 60 baris pertama dari total ${rowCount} baris untuk hemat token)` : "";
+            sheetSummary += `=== LEMBAR KERJA (SHEET ${idx + 1}/${targetSheetNames.length}): "${sName}" ===\n${limitedRows.join("\n").slice(0, 6000)}${extraNote}\n\n`;
           }
         }
-        textPreview = sheetSummary;
+        textPreview = sheetSummary.slice(0, 18000);
       } catch (err) {
         console.warn("Gagal mengekstrak spreadsheet:", err);
       }
     } else if (category === "code" || file.type.startsWith("text/")) {
       try {
-        textPreview = (await file.text()).slice(0, 15000);
+        textPreview = (await file.text()).slice(0, 8000);
       } catch (err) {
         console.warn("Gagal membaca file teks:", err);
       }
@@ -942,7 +973,7 @@ export function GuruAiChatPage() {
     };
   };
 
-  // Add multiple files with strict validation (max 50MB per file, max 25 files total)
+  // Add multiple files with strict validation (max 10MB per file, max 25 files total)
   // Immediately uploads to dedicated folder `ai-chat/{sessionId}` (Object Storage if active, or Local) with UUID name
   const handleFilesAdded = async (fileList: FileList | File[]) => {
     const incoming = Array.from(fileList);
@@ -1005,8 +1036,8 @@ export function GuruAiChatPage() {
 
     if (oversizedFiles.length > 0) {
       Swal.fire({
-        title: "Ukuran File Melebihi 50 MB",
-        html: `Setiap file dibatasi maksimal <strong>50 MB</strong>.<br/>File berikut dilewati karena melebihi batas:<br/><br/><div class="text-left text-xs bg-slate-100 dark:bg-slate-800 p-2.5 rounded-lg max-h-36 overflow-y-auto font-mono text-red-600">${oversizedFiles.map((f) => `• ${f}`).join("<br/>")}</div>`,
+        title: "Ukuran File Melebihi 10 MB",
+        html: `Setiap file dibatasi maksimal <strong>10 MB</strong>.<br/>File berikut dilewati karena melebihi batas:<br/><br/><div class="text-left text-xs bg-slate-100 dark:bg-slate-800 p-2.5 rounded-lg max-h-36 overflow-y-auto font-mono text-red-600">${oversizedFiles.map((f) => `• ${f}`).join("<br/>")}</div>`,
         icon: "warning",
         confirmButtonColor: "#EA4335",
       });
@@ -1324,15 +1355,27 @@ export function GuruAiChatPage() {
     // Real Google Gemini AI API Call
     setIsGenerating(true);
 
-    // Prepare previous conversation history (strip heavy base64 from history messages)
+    // Prepare previous conversation history (strip heavy base64 from history messages, but keep extracted textPreview & storageKey)
     const rawHistory = activeSession
       ? [...activeSession.messages, userMessage]
       : nextPending;
-    const historyMessages = rawHistory.map((m) => ({
+    const historyMessages = rawHistory.map((m, idx) => ({
       id: m.id,
       sender: m.sender,
       text: m.text,
       time: m.time,
+      files:
+        idx < rawHistory.length - 1 && m.attachments && m.attachments.length > 0
+          ? m.attachments.map((att) => ({
+              id: att.id,
+              name: att.name,
+              type: att.type,
+              size: att.size,
+              storageKey: att.storageKey,
+              storageUrl: att.storageUrl,
+              textPreview: att.textPreview ? `[Lampiran: ${att.name}]` : undefined,
+            }))
+          : undefined,
     }));
 
     // Payload files for backend AI (includes storage metadata if already uploaded via /ai/upload)
@@ -1596,7 +1639,7 @@ export function GuruAiChatPage() {
             Lepaskan file di sini untuk melampirkan ke NEBULA AI
           </div>
           <div className="text-xs text-[var(--fg)] mt-1 opacity-80">
-            Mendukung gambar, video, PDF, Excel, Word & semua format dokumen (Maks. 50 MB per file, hingga 25 file)
+            Mendukung gambar, video, PDF, Excel, Word & semua format dokumen (Maks. 10 MB per file, hingga 25 file)
           </div>
         </div>
       )}
@@ -1817,7 +1860,7 @@ export function GuruAiChatPage() {
             <span className="truncate font-semibold">NEBULA AI</span>
           </div>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--hover)] font-mono">
-            Multimodal 50MB
+            Multimodal 10MB
           </span>
         </div>
       </aside>
@@ -1969,7 +2012,7 @@ export function GuruAiChatPage() {
                     Multimodal Media & File
                   </div>
                   <div className="text-xs text-[var(--fg)] line-clamp-2 leading-relaxed opacity-90">
-                    "Unggah gambar soal, dokumen PDF, video, atau Excel nilai hingga 50 MB (maksimal 25 file)."
+                    "Unggah gambar soal, dokumen PDF, video, atau Excel nilai hingga 10 MB (maksimal 25 file)."
                   </div>
                 </button>
 
@@ -2187,7 +2230,7 @@ export function GuruAiChatPage() {
                 type="button"
                 onClick={() => document.getElementById(fileInputId)?.click()}
                 className="w-9 h-9 rounded-xl flex items-center justify-center app-muted hover:bg-[var(--hover)] hover:text-[var(--accent)] transition-colors shrink-0"
-                title="Klik atau seret & lepaskan (drag & drop) file ke kolom ini (Maks. 50 MB/file, hingga 25 file)"
+                title="Klik atau seret & lepaskan (drag & drop) file ke kolom ini (Maks. 10 MB/file, hingga 25 file)"
               >
                 <span className="material-symbols-outlined text-[20px]">
                   {isDraggingOverInput ? "upload_file" : "add_circle"}
@@ -2246,7 +2289,7 @@ export function GuruAiChatPage() {
 
             {/* Disclaimer Footer */}
             <div className="mt-2 text-center text-[10px] app-muted">
-              Mendukung <strong>Drag &amp; Drop</strong> atau <strong>Paste (Ctrl+V)</strong> file langsung ke kolom chat • Maksimal 50 MB/file (hingga 25 file).
+              Mendukung <strong>Drag &amp; Drop</strong> atau <strong>Paste (Ctrl+V)</strong> file langsung ke kolom chat • Maksimal 10 MB/file (hingga 25 file).
             </div>
           </div>
         </div>
