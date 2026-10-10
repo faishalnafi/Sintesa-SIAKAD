@@ -1,7 +1,7 @@
 # SINTESA — SIAKAD
 
 **Sistem Informasi Akademik Terpadu Sekolah (SMAN 3 Mojokerto)**  
-Versi Rilis Saat Ini: **`v01.06.00`** (`version_code: 10600`)
+Versi Rilis Saat Ini: **`v01.06.01`** (`version_code: 10601`)
 
 Monorepo full-stack modern untuk pengelolaan akademik sekolah secara terpadu, real-time, dan terintegrasi penuh dengan ekosistem **Kredensia SSO**, **GDS (Gerakan Disiplin Sekolah)**, dan **PASTI (Sistem Kehadiran Siswa)**.
 
@@ -33,7 +33,7 @@ Monorepo full-stack modern untuk pengelolaan akademik sekolah secara terpadu, re
 - **Tahun Pelajaran & Siklus Akademik (`/admin/academic-years`, `/admin/alumni`, `/admin/keluar`)**: Pengaturan tahun ajaran aktif, kenaikan kelas, kelulusan alumni, serta mutasi siswa keluar/masuk kembali.
 - **Data Rombel (`/admin/classes`)**: Pengelolaan kelas/rombel beserta penugasan Wali Kelas.
 - **Mata Pelajaran & Penugasan (`/admin/subjects`)**: Pengaturan mata pelajaran, pembagian tugas mengajar guru mapel, pengaturan jam pelajaran harian (`Jam ke-X`), serta konfigurasi aktif/nonaktif komponen penilaian (`UH1`, `T1`, `STS`, `UH2`, `T2`).
-- **Monitoring Jurnal Mengajar (`/admin/monitoring-jurnal`)**: Pemantauan keterisian jurnal KBM harian per kelas secara real-time, dilengkapi fitur **Kembalikan ke Draft (Koreksi Ulang)** dan edit jurnal oleh Superadmin.
+- **Monitoring Jurnal Mengajar (`/admin/monitoring-jurnal`)**: Pemantauan keterisian jurnal KBM harian secara real-time berdasarkan Kelas maupun Guru Pengajar, dilengkapi fitur **Kembalikan ke Draft (Koreksi Ulang)** dan edit jurnal oleh Superadmin.
 
 ### 3. Pusat Unduhan & Pemberkasan (`/admin/downloads` & `/guru/downloads`)
 Menu mandiri di sidebar untuk mencetak dan mengunduh laporan Excel (`.xlsx`) resmi siap cetak:
@@ -135,7 +135,7 @@ pnpm --filter @sintesa/api build
 .\make-deploy-zip.ps1
 ```
 
-Script di atas akan menghasilkan berkas **`update_siakad_v{versi}.zip`** (contoh: `update_siakad_v01.06.00.zip`) dengan struktur path *forward-slash* (`/`) yang kompatibel baik di lingkungan Windows maupun container Linux/Docker.
+Script di atas akan menghasilkan berkas **`update_siakad_v{versi}.zip`** (contoh: `update_siakad_v01.06.01.zip`) dengan struktur path *forward-slash* (`/`) yang kompatibel baik di lingkungan Windows maupun container Linux/Docker.
 
 ---
 
@@ -154,6 +154,9 @@ docker compose pull && docker compose up -d
 
 ## 📋 Riwayat Rilis Terbaru
 
+- **`v01.06.01` (2026-10-08)**:
+  - Penambahan dropdown **Pilih Guru** di Monitoring Jurnal Mengajar dengan mode pemilihan bergantian (*mutual exclusive*) antara per Kelas atau per Guru.
+  - Perapian tampilan kolom **Jam Ke** pada pratinjau dan ekspor Excel Pusat Unduhan (hanya menampilkan nomor jam mengajar tanpa rentang waktu/duplikasi teks).
 - **`v01.06.00` (2026-10-02)**:
   - Penambahan menu mandiri **Pusat Unduhan** (`/admin/downloads` & `/guru/downloads`) untuk ekspor Excel (`.xlsx`) Rekap Monitoring Jurnal Mengajar Guru serta Buku Leger & Rekap Nilai Mapel.
   - Standarisasi penomoran versi 2 digit (`xx.yy.zz`) dan penyertaan nomor versi otomatis pada nama berkas `update_siakad_v{versi}.zip`.
