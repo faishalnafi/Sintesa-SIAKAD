@@ -2348,9 +2348,26 @@ ${roleSpecificRulesText}
   \`\`\`action
   SEND_JOURNAL_DRAFT
   tanggal: <YYYY-MM-DD atau "hari ini">
-  kelas: <Nama Kelas atau "SEMUA">
+  kelas: <Nama Kelas tunggal atau rentang, contoh: XII-1 sampai XII-5, atau X-1, atau SEMUA>
   mapel: <Nama Mapel atau "SEMUA">
   \`\`\`
+
+### H2. Menu Input Nilai — Kirim Resmi Draft Nilai ke Wali Kelas (\`SEND_GRADE_DRAFT\`)
+- Ketika pengguna meminta mengirim resmi / men-submit draft nilai siswa (mengubah status nilai dari \`draft\` menjadi \`submitted\` agar siap diverifikasi dan disetujui Wali Kelas di Matrix Persetujuan):
+  - Contoh permintaan: "kirim draft nilai kelas XII-1 sampai XII-5", "kirim draft nilai", "draft nilai maksud saya!", "submit nilai kelas X-1", "kirim nilai matematika kelas XII-1".
+  \`\`\`action
+  SEND_GRADE_DRAFT
+  kelas: <Nama Kelas tunggal atau rentang, contoh: XII-1 sampai XII-5, atau X-1, atau SEMUA>
+  mapel: <Nama Mapel, contoh: RPL, atau SEMUA>
+  tahun: 2025/2026
+  semester: 1
+  \`\`\`
+- **PENTING MEMBEDAKAN DRAFT JURNAL vs DRAFT NILAI:**
+  - Jika pengguna menyebut kata "nilai" (contoh: "kirim draft nilai", "draft nilai maksud saya!", "submit nilai"): **WAJIB** gunakan \`SEND_GRADE_DRAFT\`!
+  - Jika pengguna menyebut kata "jurnal" (contoh: "kirim draft jurnal", "kirim jurnal"): **WAJIB** gunakan \`SEND_JOURNAL_DRAFT\`!
+  - Jika pengguna sebelumnya meminta "kirim draft..." lalu mengoreksi "draft nilai maksud saya!": **WAJIB** eksekusi \`SEND_GRADE_DRAFT\` untuk kelas yang dimaksud!
+- **PENULISAN KELAS FLEKSIBEL (TUNGGAL, RENTANG, ATAU BANYAK KELAS):**
+  - Anda DAPAT menulis rentang seperti \`kelas: XII-1 sampai XII-5\` atau daftar banyak kelas seperti \`kelas: XII-1, XII-2, XII-3, XII-4, XII-5\`. Resolver multi-kelas sistem akan otomatis memproses seluruh kelas tersebut.
 
 ### I. Penjadwalan Otomatis (NEBULA Task Scheduler) — Kirim di Waktu Tertentu (\`SCHEDULE_ACTION\`)
 - Ketika pengguna meminta menjadwalkan pengiriman draft atau tugas di jam tertentu (contoh: "kirim draft jam 13:18 wib", "kirim draft nanti pukul 15:00", "jadwalkan kirim jurnal kelas X-1 jam 14:30"):
@@ -2723,6 +2740,110 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     //   ```
     // =========================================================
     // =========================================================
+    // HELPER UTAMA: Resolver Kelas Fleksibel (Tunggal, Rentang: XII-1 s.d. XII-5, Multi-Koma, atau SEMUA)
+    // =========================================================
+    async function resolveTargetClasses(rawInput?: string): Promise<Array<{ id: string; name: string }>> {
+      const allDbClasses = await db
+        .select({ id: classes.id, name: classes.name })
+        .from(classes)
+        .orderBy(asc(classes.name));
+
+      if (!rawInput || !rawInput.trim()) {
+        return allDbClasses;
+      }
+
+      const input = rawInput.trim();
+      const lower = input.toLowerCase();
+
+      // 1. "SEMUA" / "ALL" / "*"
+      if (["semua", "all", "*", "semua kelas", "seluruh kelas"].includes(lower)) {
+        return allDbClasses;
+      }
+
+      // 2. Deteksi Rentang Kelas: misal "XII-1 sampai XII-5", "XII-1 s.d. XII-5", "XII-1 s/d XII-5", "XII-1 - XII-5", "X-1 hingga X-9"
+      const rangeMatch = input.match(
+        /\b(X|XI|XII|x|xi|xii)[-\s]?(\d{1,2})\s*(?:sampai|hingga|s\.?d\.?|s\/d|sd|–|-)\s*(?:(X|XI|XII|x|xi|xii)[-\s]?)?(\d{1,2})\b/i
+      );
+      if (rangeMatch) {
+        const prefix = rangeMatch[1].toUpperCase();
+        const start = parseInt(rangeMatch[2], 10);
+        const end = parseInt(rangeMatch[4], 10);
+        const min = Math.min(start, end);
+        const max = Math.max(start, end);
+
+        const targetNames = new Set<string>();
+        for (let i = min; i <= max; i++) {
+          targetNames.add(`${prefix}-${i}`.toLowerCase());
+          targetNames.add(`${prefix}${i}`.toLowerCase());
+        }
+
+        const matched = allDbClasses.filter((c) => {
+          const cleanName = c.name.replace(/[-\s]/g, "").toLowerCase();
+          return targetNames.has(c.name.toLowerCase()) || targetNames.has(cleanName);
+        });
+
+        if (matched.length > 0) {
+          return matched;
+        }
+      }
+
+      // 3. Multi-kelas dipisahkan koma, titik koma, slash, pipe, atau kata "dan"
+      // Contoh: "XII-1, XII-2, XII-3, XII-4, XII-5" atau "XII-1 dan XII-2"
+      const tokens = input
+        .split(/[,;\/|&\n]+|\s+dan\s+|\s+and\s+/i)
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      if (tokens.length > 1) {
+        const matchedList: Array<{ id: string; name: string }> = [];
+        const seenIds = new Set<string>();
+
+        for (const token of tokens) {
+          const cleanToken = token.replace(/[-\s]/g, "").toLowerCase();
+          const found = allDbClasses.find(
+            (c) =>
+              c.name.toLowerCase() === token.toLowerCase() ||
+              c.name.replace(/[-\s]/g, "").toLowerCase() === cleanToken ||
+              (isUuid(token) && c.id === token)
+          );
+          if (found && !seenIds.has(found.id)) {
+            seenIds.add(found.id);
+            matchedList.push(found);
+          }
+        }
+
+        if (matchedList.length > 0) {
+          return matchedList;
+        }
+      }
+
+      // 4. Kelas Tunggal
+      const cleanSingle = input.replace(/[-\s]/g, "").toLowerCase();
+      const singleMatch = allDbClasses.find(
+        (c) =>
+          c.name.toLowerCase() === input.toLowerCase() ||
+          c.name.replace(/[-\s]/g, "").toLowerCase() === cleanSingle ||
+          (isUuid(input) && c.id === input)
+      );
+
+      if (singleMatch) {
+        return [singleMatch];
+      }
+
+      // 5. Pencarian parsial jika input mengandung nama kelas
+      const partialMatches = allDbClasses.filter(
+        (c) =>
+          c.name.toLowerCase().includes(lower) ||
+          lower.includes(c.name.toLowerCase())
+      );
+      if (partialMatches.length > 0) {
+        return partialMatches;
+      }
+
+      return [];
+    }
+
+    // =========================================================
     // HELPER 1 (MENU INPUT NILAI & MATRIX): Simpan draft nilai
     // =========================================================
     async function executeSaveGradeDraft(params: {
@@ -2752,24 +2873,11 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       }
 
       // 1. Resolve Class
-      const cleanClass = className.replace(/[-\s]/g, "").toLowerCase();
-      const classConds = [
-        sql`lower(${classes.name}) = lower(${className})`,
-        sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
-      ];
-      if (isUuid(className)) {
-        classConds.push(eq(classes.id, className));
-      }
-
-      const [resolvedClass] = await db
-        .select({ id: classes.id, name: classes.name })
-        .from(classes)
-        .where(or(...classConds))
-        .limit(1);
-
-      if (!resolvedClass) {
+      const targetClasses = await resolveTargetClasses(className);
+      if (targetClasses.length === 0) {
         return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
       }
+      const resolvedClass = targetClasses[0];
 
       // 2. Resolve Subject
       const subjectConds = [
@@ -3016,22 +3124,11 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       }
 
       // 2. Resolve kelas
-      const cleanClass = className.replace(/[-\s]/g, "").toLowerCase();
-      const classConds = [
-        sql`lower(${classes.name}) = lower(${className})`,
-        sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
-      ];
-      if (isUuid(className)) classConds.push(eq(classes.id, className));
-
-      const [resolvedClass] = await db
-        .select({ id: classes.id, name: classes.name })
-        .from(classes)
-        .where(or(...classConds))
-        .limit(1);
-
-      if (!resolvedClass) {
+      const targetClasses = await resolveTargetClasses(className);
+      if (targetClasses.length === 0) {
         return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
       }
+      const resolvedClass = targetClasses[0];
 
       // 3. Resolve mapel
       const subjectConds = [
@@ -3310,24 +3407,14 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       // Filter kelas jika bukan "SEMUA"
       const rawClass = (params.className || "SEMUA").trim();
       if (rawClass && !["semua", "all", "-", "*"].includes(rawClass.toLowerCase())) {
-        const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
-        const [resolvedClass] = await db
-          .select({ id: classes.id, name: classes.name })
-          .from(classes)
-          .where(
-            or(
-              sql`lower(${classes.name}) = lower(${rawClass})`,
-              sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
-              isUuid(rawClass) ? eq(classes.id, rawClass) : sql`1=0`
-            )
-          )
-          .limit(1);
-
-        if (resolvedClass) {
+        const targetClasses = await resolveTargetClasses(rawClass);
+        if (targetClasses.length > 0) {
+          const ids = targetClasses.map((c) => c.id);
+          const cleanNames = targetClasses.map((c) => c.name.replace(/[-\s]/g, "").toLowerCase());
           conds.push(
             or(
-              eq(teacherJournals.classId, resolvedClass.id),
-              sql`LOWER(TRIM(${teacherJournals.className})) = LOWER(TRIM(${resolvedClass.name}))`
+              inArray(teacherJournals.classId, ids),
+              sql`LOWER(TRIM(REPLACE(REPLACE(${teacherJournals.className}, '-', ''), ' ', ''))) IN ${cleanNames}`
             )!
           );
         }
@@ -3494,18 +3581,10 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       const conds = [isNull(grades.deletedAt)];
       const rawClass = (params.className || "SEMUA").trim();
       if (rawClass && !["semua", "all", "-", "*"].includes(rawClass.toLowerCase())) {
-        const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
-        const [resolvedClass] = await db
-          .select({ id: classes.id, name: classes.name })
-          .from(classes)
-          .where(
-            or(
-              sql`lower(${classes.name}) = lower(${rawClass})`,
-              sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`
-            )
-          )
-          .limit(1);
-        if (resolvedClass) conds.push(eq(grades.classId, resolvedClass.id));
+        const targetClasses = await resolveTargetClasses(rawClass);
+        if (targetClasses.length > 0) {
+          conds.push(inArray(grades.classId, targetClasses.map((c) => c.id)));
+        }
       }
 
       const rawStudent = (params.studentIdOrName || "SEMUA").trim();
@@ -3894,134 +3973,134 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     }): Promise<{ success: boolean; message: string; data?: any }> {
       const { className, studentIdOrName, subjectName, note } = params;
 
-      const cleanClass = (className || "").replace(/[-\s]/g, "").toLowerCase();
-      const classConds = [
-        sql`lower(${classes.name}) = lower(${className})`,
-        sql`replace(replace(lower(${classes.name}), '-', ''), ' ', '') = ${cleanClass}`,
-      ];
-      if (isUuid(className)) classConds.push(eq(classes.id, className));
-
-      const [resolvedClass] = await db
-        .select({ id: classes.id, name: classes.name })
-        .from(classes)
-        .where(or(...classConds))
-        .limit(1);
-
-      if (!resolvedClass) {
+      const targetClasses = await resolveTargetClasses(className);
+      if (targetClasses.length === 0) {
         return { success: false, message: `Kelas "${className}" tidak ditemukan di database.` };
       }
 
-      // Cek kepemilikan Wali Kelas untuk Matrix Persetujuan
-      const classWalas = ctx.allHomeroomTeachers.filter((ht) => ht.classId === resolvedClass.id);
-      const isMyHomeroom = classWalas.some((ht) => ht.userId === user.id);
+      const results: string[] = [];
+      let totalUpdated = 0;
 
-      if (!isAdminUser && !isMyHomeroom) {
-        const otherWalasNames = classWalas.map((ht) => ht.teacherName).join(", ") || "Wali Kelas Lain";
-        const myHomeroomNames = ctx.allHomeroomTeachers
-          .filter((ht) => ht.userId === user.id)
-          .map((ht) => ht.className)
-          .join(", ") || "Tidak ada";
-        return {
-          success: false,
-          message: `⛔ **Matrix Persetujuan Tidak Dapat Diubah (Kelas Perwalian Guru Lain)**\n- **Menu:** Matrix Persetujuan (\`/walikelas\`)\n- **Kelas:** **${resolvedClass.name}**\n- **Wali Kelas Pengampu:** **${otherWalasNames}** *(Kelas Perwalian Anda: ${myHomeroomNames})*\n\n> ⚠️ Sesuai aturan SIMAK, Anda tidak dapat mengubah status Matrix Persetujuan kelas yang diampu oleh Wali Kelas lain.`,
-        };
-      }
+      for (const resolvedClass of targetClasses) {
+        // Cek kepemilikan Wali Kelas untuk Matrix Persetujuan
+        const classWalas = ctx.allHomeroomTeachers.filter((ht) => ht.classId === resolvedClass.id);
+        const isMyHomeroom = classWalas.some((ht) => ht.userId === user.id);
 
-      // Filter siswa jika disebutkan spesifik
-      let targetStudentId: string | undefined;
-      let targetStudentName = "Seluruh Siswa";
-      if (studentIdOrName && studentIdOrName.toUpperCase() !== "SEMUA" && studentIdOrName.toUpperCase() !== "ALL") {
-        const [st] = await db
-          .select({ id: students.id, name: students.name })
-          .from(students)
-          .where(
-            and(
-              eq(students.classId, resolvedClass.id),
-              or(
-                isUuid(studentIdOrName) ? eq(students.id, studentIdOrName) : sql`1=0`,
-                sql`lower(${students.name}) like lower(${'%' + studentIdOrName.trim() + '%'})`
+        if (!isAdminUser && !isMyHomeroom) {
+          const otherWalasNames = classWalas.map((ht) => ht.teacherName).join(", ") || "Wali Kelas Lain";
+          const myHomeroomNames = ctx.allHomeroomTeachers
+            .filter((ht) => ht.userId === user.id)
+            .map((ht) => ht.className)
+            .join(", ") || "Tidak ada";
+          results.push(`- ⛔ **Kelas ${resolvedClass.name}:** Tidak dapat diubah karena merupakan kelas perwalian **${otherWalasNames}** *(Kelas Perwalian Anda: ${myHomeroomNames})*.`);
+          continue;
+        }
+
+        // Filter siswa jika disebutkan spesifik
+        let targetStudentId: string | undefined;
+        let targetStudentName = "Seluruh Siswa";
+        if (studentIdOrName && studentIdOrName.toUpperCase() !== "SEMUA" && studentIdOrName.toUpperCase() !== "ALL") {
+          const [st] = await db
+            .select({ id: students.id, name: students.name })
+            .from(students)
+            .where(
+              and(
+                eq(students.classId, resolvedClass.id),
+                or(
+                  isUuid(studentIdOrName) ? eq(students.id, studentIdOrName) : sql`1=0`,
+                  sql`lower(${students.name}) like lower(${'%' + studentIdOrName.trim() + '%'})`
+                )
               )
             )
-          )
-          .limit(1);
-        if (!st) {
-          return { success: false, message: `Siswa "${studentIdOrName}" tidak ditemukan di kelas ${resolvedClass.name}.` };
+            .limit(1);
+          if (!st) {
+            results.push(`- ⚠️ **Kelas ${resolvedClass.name}:** Siswa "${studentIdOrName}" tidak ditemukan.`);
+            continue;
+          }
+          targetStudentId = st.id;
+          targetStudentName = st.name;
         }
-        targetStudentId = st.id;
-        targetStudentName = st.name;
-      }
 
-      // Filter mapel jika disebutkan spesifik
-      let targetSubjectId: string | undefined;
-      let targetSubjectName = "Semua Mata Pelajaran";
-      if (subjectName && subjectName.toUpperCase() !== "SEMUA" && subjectName.toUpperCase() !== "ALL") {
-        const [subj] = await db
-          .select({ id: subjects.id, name: subjects.name })
-          .from(subjects)
-          .where(
-            or(
-              sql`lower(${subjects.name}) = lower(${subjectName})`,
-              sql`lower(${subjects.code}) = lower(${subjectName})`,
-              sql`lower(${subjects.name}) like lower(${'%' + subjectName + '%'})`
+        // Filter mapel jika disebutkan spesifik
+        let targetSubjectId: string | undefined;
+        let targetSubjectName = "Semua Mata Pelajaran";
+        if (subjectName && subjectName.toUpperCase() !== "SEMUA" && subjectName.toUpperCase() !== "ALL") {
+          const [subj] = await db
+            .select({ id: subjects.id, name: subjects.name })
+            .from(subjects)
+            .where(
+              or(
+                sql`lower(${subjects.name}) = lower(${subjectName})`,
+                sql`lower(${subjects.code}) = lower(${subjectName})`,
+                sql`lower(${subjects.name}) like lower(${'%' + subjectName + '%'})`
+              )
             )
-          )
-          .limit(1);
-        if (subj) {
-          targetSubjectId = subj.id;
-          targetSubjectName = subj.name;
+            .limit(1);
+          if (subj) {
+            targetSubjectId = subj.id;
+            targetSubjectName = subj.name;
+          }
         }
+
+        const conds = [eq(grades.classId, resolvedClass.id), isNull(grades.deletedAt)];
+        if (targetStudentId) conds.push(eq(grades.studentId, targetStudentId));
+        if (targetSubjectId) conds.push(eq(grades.subjectId, targetSubjectId));
+
+        const existingRows = await db.select().from(grades).where(and(...conds));
+        if (existingRows.length === 0) {
+          results.push(`- ℹ️ **Kelas ${resolvedClass.name}:** Belum ada data nilai pada Matrix Persetujuan (${targetSubjectName}).`);
+          continue;
+        }
+
+        const prevStatuses = [...new Set(existingRows.map((r) => r.status))].join(", ");
+        const prevNotes = [...new Set(existingRows.map((r) => r.note).filter(Boolean))].join("; ") || "-";
+        const newNote = note || "Koreksi ulang / dikembalikan ke Draft melalui Asisten AI";
+
+        for (const g of existingRows) {
+          const [updated] = await db
+            .update(grades)
+            .set({
+              status: "draft",
+              note: newNote,
+              submittedBy: null,
+              submittedAt: null,
+              approvedBy: null,
+              approvedAt: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(grades.id, g.id))
+            .returning();
+
+          await db.insert(gradeAuditLogs).values({
+            gradeId: g.id,
+            actorId: user.id,
+            action: "ai_matrix_draft",
+            before: g as unknown as Record<string, unknown>,
+            after: updated as unknown as Record<string, unknown>,
+          });
+        }
+
+        broadcastRealtimeEvent({
+          type: "grade_rejected",
+          classId: resolvedClass.id,
+          actorId: user.id,
+        });
+
+        totalUpdated += existingRows.length;
+        results.push(`- ✅ **Kelas ${resolvedClass.name}:** Berhasil mengubah **${existingRows.length} entri nilai** (${targetSubjectName}) dari **${prevStatuses}** ➔ **Draft**.`);
       }
 
-      const conds = [eq(grades.classId, resolvedClass.id), isNull(grades.deletedAt)];
-      if (targetStudentId) conds.push(eq(grades.studentId, targetStudentId));
-      if (targetSubjectId) conds.push(eq(grades.subjectId, targetSubjectId));
-
-      const existingRows = await db.select().from(grades).where(and(...conds));
-      if (existingRows.length === 0) {
+      if (totalUpdated === 0) {
         return {
           success: false,
-          message: `⚠️ Belum ada data nilai pada **Matrix Persetujuan** untuk **${targetStudentName}** di kelas **${resolvedClass.name}** (${targetSubjectName}).`,
+          message: `⚠️ **Matrix Persetujuan:** Tidak ada data nilai yang dapat diubah ke Draft.\n${results.join("\n")}`,
         };
       }
-
-      const prevStatuses = [...new Set(existingRows.map((r) => r.status))].join(", ");
-      const prevNotes = [...new Set(existingRows.map((r) => r.note).filter(Boolean))].join("; ") || "-";
-      const newNote = note || "Koreksi ulang / dikembalikan ke Draft melalui Asisten AI";
-
-      for (const g of existingRows) {
-        const [updated] = await db
-          .update(grades)
-          .set({
-            status: "draft",
-            note: newNote,
-            submittedBy: null,
-            submittedAt: null,
-            approvedBy: null,
-            approvedAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(grades.id, g.id))
-          .returning();
-
-        await db.insert(gradeAuditLogs).values({
-          gradeId: g.id,
-          actorId: user.id,
-          action: "ai_matrix_draft",
-          before: g as unknown as Record<string, unknown>,
-          after: updated as unknown as Record<string, unknown>,
-        });
-      }
-
-      broadcastRealtimeEvent({
-        type: "grade_rejected",
-        classId: resolvedClass.id,
-        actorId: user.id,
-      });
 
       return {
         success: true,
-        message: `✅ **Matrix Persetujuan Berhasil Disimpan ke Draft (Auto-Save Draft)**\n- **Menu:** Matrix Persetujuan (\`/walikelas\`) & Input Nilai (\`/guru\`)\n- **Kelas:** **${resolvedClass.name}**\n- **Cakupan Siswa:** **${targetStudentName}** (${existingRows.length} data mapel)\n- **Mata Pelajaran:** **${targetSubjectName}**\n- 🔄 **Data Sebelumnya:** Status = **${prevStatuses}** | Catatan Sebelumnya = *"${prevNotes}"*\n- ✨ **Diganti Menjadi:** Status = **Draft (Koreksi Ulang)** | Catatan Baru = **"${newNote}"**`,
-        data: { updatedCount: existingRows.length },
+        message: `✅ **Matrix Persetujuan Berhasil Disimpan ke Draft (Auto-Save Draft)**\n- **Total Kelas Diproses:** **${targetClasses.length} kelas**\n- **Total Nilai Dikembalikan ke Draft:** **${totalUpdated} entri nilai**\n- 🔄 **Rincian Per Kelas:**\n${results.join("\n")}\n- ✨ **Status Saat Ini:** **Draft (Dapat Diedit Ulang oleh Guru Mapel)**`,
+        data: { totalUpdated },
       };
     }
 
@@ -4059,10 +4138,21 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
 
       const rawClass = (params.className || "SEMUA").trim();
       if (rawClass && !["semua", "all", "*"].includes(rawClass.toLowerCase())) {
-        const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
-        conditions.push(
-          sql`LOWER(TRIM(REPLACE(REPLACE(${teacherJournals.className}, '-', ''), ' ', ''))) = ${cleanClass}`
-        );
+        const targetClasses = await resolveTargetClasses(rawClass);
+        if (targetClasses.length > 0) {
+          const cleanNames = targetClasses.map((c) => c.name.replace(/[-\s]/g, "").toLowerCase());
+          conditions.push(
+            inArray(
+              sql`LOWER(TRIM(REPLACE(REPLACE(${teacherJournals.className}, '-', ''), ' ', '')))`,
+              cleanNames
+            )
+          );
+        } else {
+          const cleanClass = rawClass.replace(/[-\s]/g, "").toLowerCase();
+          conditions.push(
+            sql`LOWER(TRIM(REPLACE(REPLACE(${teacherJournals.className}, '-', ''), ' ', ''))) = ${cleanClass}`
+          );
+        }
       }
 
       const rawSubject = (params.subjectName || "SEMUA").trim();
@@ -4118,6 +4208,199 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         success: true,
         message: `🚀 **Jurnal Mengajar Berhasil Dikirim Resmi ke Sistem (Status: SENT)**\n- **Menu Terkait:** Jurnal Guru (\`/guru/jurnal\`) & Monitoring Jurnal (\`/admin/monitoring-jurnal\`)\n- **Tanggal:** \`${tanggal}\`\n- **Kelas:** **${uniqueClasses}** | **Mapel:** **${uniqueSubjects}**\n- **Total Jurnal Terkirim:** **${drafts.length} jam pelajaran** (${hourLabels.join(", ")})\n- ✨ **Status Saat Ini:** **Sent (Terkirim Resmi)** — Data jurnal telah terkunci dan tersinkronisasi ke pemantauan admin.`,
         data: { sentCount: drafts.length, ids: idsToSend },
+      };
+    }
+
+    // =========================================================
+    // HELPER 4B (MENU PENILAIAN SISWA): Kirim Resmi Draft Nilai Siswa (Draft -> Submitted ke Wali Kelas)
+    // =========================================================
+    async function executeSendGradeDraft(params: {
+      className?: string;
+      subjectName?: string;
+      studentIdOrName?: string;
+    }): Promise<{ success: boolean; message: string; data?: any }> {
+      let rawClass = (params.className || "").trim();
+      if (!rawClass || ["semua", "all", "*"].includes(rawClass.toLowerCase())) {
+        const combinedText = `${lastUserText} ${prevUserMsg}`;
+        const rangeMatch = combinedText.match(/(?:kelas\s+)?([xXiI0-9\-]+)\s*(?:sampai|s\.?d\.?|hingga|sd|-)\s*([xXiI0-9\-]+)/i);
+        const multiMatch = combinedText.match(/kelas\s+([xXiI0-9\-,\s]+)/i);
+        if (rangeMatch) {
+          rawClass = `${rangeMatch[1]} sampai ${rangeMatch[2]}`;
+        } else if (multiMatch) {
+          rawClass = multiMatch[1].trim();
+        }
+      }
+
+      const targetClasses = await resolveTargetClasses(rawClass || "SEMUA");
+      if (targetClasses.length === 0) {
+        return {
+          success: false,
+          message: `⚠️ Kelas "${rawClass || "SEMUA"}" tidak ditemukan di database.`,
+        };
+      }
+
+      // Ambil komponen penilaian yang aktif (misal UH1, T1, STS)
+      const activeComps = await db
+        .select()
+        .from(assessmentComponents)
+        .where(eq(assessmentComponents.status, "active"));
+      const activeCodes = activeComps.map((ac) => ac.code.toLowerCase());
+      const activeNames = activeComps.map((ac) => ac.code.toUpperCase()).join(", ");
+
+      const subjectNameParam = (params.subjectName || "").trim();
+      let targetSubjectId: string | undefined;
+      let targetSubjectName = "Semua Mata Pelajaran";
+
+      if (subjectNameParam && !["semua", "all", "*"].includes(subjectNameParam.toLowerCase())) {
+        const [subj] = await db
+          .select({ id: subjects.id, name: subjects.name })
+          .from(subjects)
+          .where(
+            or(
+              sql`lower(${subjects.name}) = lower(${subjectNameParam})`,
+              sql`lower(${subjects.code}) = lower(${subjectNameParam})`,
+              sql`lower(${subjects.name}) like lower(${'%' + subjectNameParam + '%'})`
+            )
+          )
+          .limit(1);
+        if (subj) {
+          targetSubjectId = subj.id;
+          targetSubjectName = subj.name;
+        }
+      }
+
+      const results: string[] = [];
+      let totalSubmitted = 0;
+      const allSubmittedGradeIds: string[] = [];
+
+      for (const resolvedClass of targetClasses) {
+        const conds = [
+          eq(grades.classId, resolvedClass.id),
+          eq(grades.status, "draft"),
+          isNull(grades.deletedAt),
+        ];
+
+        if (targetSubjectId) {
+          conds.push(eq(grades.subjectId, targetSubjectId));
+        }
+
+        // Jika bukan admin, pastikan guru hanya mengirim nilai untuk mapel yang dia ajar
+        if (!isAdminUser) {
+          const teacherSubjectIds: string[] = [
+            ...new Set([
+              ...ctx.taughtClasses
+                .filter((tc) => tc.classId === resolvedClass.id)
+                .map((tc) => tc.subjectId),
+              ...ctx.assignedSubjects.map((s) => s.id),
+            ]),
+          ].filter(Boolean);
+
+          if (teacherSubjectIds.length > 0) {
+            conds.push(inArray(grades.subjectId, teacherSubjectIds));
+          }
+        }
+
+        const draftRows = await db.select().from(grades).where(and(...conds));
+
+        if (draftRows.length === 0) {
+          results.push(`- ℹ️ **Kelas ${resolvedClass.name}:** Tidak ada draft nilai yang siap dikirim (seluruh nilai mungkin sudah terkirim/disetujui atau belum diinput).`);
+          continue;
+        }
+
+        // Validasi per siswa seperti di /grades/submit
+        const toSubmitIds: string[] = [];
+        let hasPartialError = false;
+        let partialErrorMessage = "";
+
+        if (activeCodes.length > 0) {
+          for (const g of draftRows) {
+            let filledCount = 0;
+            for (const code of activeCodes) {
+              const val = (g as any)[code];
+              if (val !== null && val !== undefined && String(val).trim() !== "") {
+                filledCount++;
+              }
+            }
+
+            // Kosong total -> Skip (biarkan draft)
+            if (filledCount === 0) {
+              continue;
+            }
+
+            // Diisi parsial -> Tolak pengiriman
+            if (filledCount < activeCodes.length) {
+              const [st] = await db.select({ name: students.name }).from(students).where(eq(students.id, g.studentId)).limit(1);
+              const studentName = st?.name ?? "Siswa";
+              hasPartialError = true;
+              partialErrorMessage = `- ⚠️ **Kelas ${resolvedClass.name}:** Gagal mengirim nilai siswa **'${studentName}'** karena baru terisi sebagian (${filledCount}/${activeCodes.length} kolom). Kolom aktif (${activeNames}) wajib diisi lengkap sebelum dikirim ke Wali Kelas!`;
+              break;
+            }
+
+            toSubmitIds.push(g.id);
+          }
+        } else {
+          toSubmitIds.push(...draftRows.map((r) => r.id));
+        }
+
+        if (hasPartialError) {
+          results.push(partialErrorMessage);
+          continue;
+        }
+
+        if (toSubmitIds.length === 0) {
+          results.push(`- ℹ️ **Kelas ${resolvedClass.name}:** Ada ${draftRows.length} baris nilai draft, namun nilainya masih kosong total pada kolom komponen aktif (${activeNames}).`);
+          continue;
+        }
+
+        // Lakukan submit
+        for (const gradeId of toSubmitIds) {
+          const [g] = await db.select().from(grades).where(eq(grades.id, gradeId)).limit(1);
+          if (!g) continue;
+
+          const [updated] = await db
+            .update(grades)
+            .set({
+              status: "submitted",
+              submittedBy: user.id,
+              submittedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(grades.id, gradeId))
+            .returning();
+
+          await db.insert(gradeAuditLogs).values({
+            gradeId: g.id,
+            actorId: user.id,
+            action: "submit",
+            before: g as unknown as Record<string, unknown>,
+            after: updated as unknown as Record<string, unknown>,
+          });
+
+          allSubmittedGradeIds.push(gradeId);
+        }
+
+        broadcastRealtimeEvent({
+          type: "grade_submitted",
+          classId: resolvedClass.id,
+          subjectId: targetSubjectId,
+          actorId: user.id,
+        });
+
+        totalSubmitted += toSubmitIds.length;
+        results.push(`- ✅ **Kelas ${resolvedClass.name}:** Berhasil mengirim **${toSubmitIds.length} entri nilai siswa** ke Wali Kelas untuk ditinjau.`);
+      }
+
+      if (totalSubmitted === 0) {
+        return {
+          success: false,
+          message: `ℹ️ **Pengiriman Draft Nilai:** Tidak ada data nilai draft yang berhasil dikirim ke Wali Kelas.\n${results.join("\n")}`,
+        };
+      }
+
+      return {
+        success: true,
+        message: `🚀 **Pengiriman Draft Nilai Berhasil Diajukan ke Wali Kelas (Status: SUBMITTED)**\n- **Menu Terkait:** Input Nilai (\`/guru/penilaian\`) & Matrix Persetujuan Nilai (\`/guru/persetujuan-nilai\`)\n- **Total Kelas Diproses:** **${targetClasses.length} kelas**\n- **Total Nilai Dikirim:** **${totalSubmitted} entri nilai siswa**\n- 🔄 **Rincian Per Kelas:**\n${results.join("\n")}\n- ✨ **Status Saat Ini:** **Submitted (Menunggu Verifikasi & Persetujuan Wali Kelas)**. Nilai telah diteruskan ke Matrix Persetujuan Wali Kelas masing-masing.`,
+        data: { totalSubmitted, gradeIds: allSubmittedGradeIds },
       };
     }
 
@@ -4500,7 +4783,7 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
     // LAYER 1: Ekstrak blok action (Mendukung ```action ... ```, ``` ... ```, maupun bare text tanpa backtick)
     // =========================================================
     const backtickActionRegex = /```(?:action)?\s*([\s\S]*?)```/gi;
-    const bareActionRegex = /(?:^|\n)(GENERATE_EXCEL|EXPORT_CUSTOM_EXCEL|CREATE_EXCEL|EXPORT_REPORT|DOWNLOAD_REPORT|SAVE_GRADE_DRAFT|SAVE_JOURNAL_DRAFT|SEND_JOURNAL_DRAFT|SCHEDULE_ACTION|SAVE_MATRIX_DRAFT|DELETE_JOURNAL|DELETE_GRADE|RESTORE_TRASH|PERMANENT_DELETE_TRASH)\r?\n([a-z0-9_]+:\s*[^\n]+[\s\S]*?)(?=(?:\n[A-Z_]{4,}\b|\n```|$))/gi;
+    const bareActionRegex = /(?:^|\n)(GENERATE_EXCEL|EXPORT_CUSTOM_EXCEL|CREATE_EXCEL|EXPORT_REPORT|DOWNLOAD_REPORT|SAVE_GRADE_DRAFT|SEND_GRADE_DRAFT|SUBMIT_GRADE_DRAFT|SAVE_JOURNAL_DRAFT|SEND_JOURNAL_DRAFT|SCHEDULE_ACTION|SAVE_MATRIX_DRAFT|DELETE_JOURNAL|DELETE_GRADE|RESTORE_TRASH|PERMANENT_DELETE_TRASH)\r?\n([a-z0-9_]+:\s*[^\n]+[\s\S]*?)(?=(?:\n[A-Z_]{4,}\b|\n```|$))/gi;
 
     const actionBlocksToProcess: Array<{ text: string; fullMatch: string }> = [];
 
@@ -4700,6 +4983,24 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
         if (!executedActionKeys.has(dedupKey)) {
           executedActionKeys.add(dedupKey);
           const res = await executePermanentDeleteTrash({ tipe, tanggal, className });
+          aiActions.push({ type: actionType, payload: params, result: res });
+        }
+      }
+
+      if (actionType === "SEND_GRADE_DRAFT" || actionType === "SUBMIT_GRADE_DRAFT") {
+        const params = parseParams();
+        const className       = params["kelas"] || params["class"] || "";
+        const studentIdOrName = params["siswa"] || params["student"] || params["student_id"] || "SEMUA";
+        const subjectName     = params["mapel"] || params["subject"] || "SEMUA";
+
+        const dedupKey = `SEND_GRADE|${className}|${studentIdOrName}|${subjectName}`.toLowerCase();
+        if (!executedActionKeys.has(dedupKey)) {
+          executedActionKeys.add(dedupKey);
+          const res = await executeSendGradeDraft({
+            className,
+            studentIdOrName,
+            subjectName,
+          });
           aiActions.push({ type: actionType, payload: params, result: res });
         }
       }
@@ -5305,48 +5606,83 @@ ${systemPromptExtra ? `\n## Instruksi Tambahan\n${systemPromptExtra}` : ""}`;
       }
     }
 
+    // Ekstraksi kelas cerdas untuk fallback (mendukung rentang "XII-1 sampai XII-5", daftar "XII-1, XII-2", maupun kelas tunggal)
+    const combinedContextForDraft = `${promptToCheck} ${prevUserMsg}`;
+    let targetClassForDraft = "SEMUA";
+    const rangeMatchDraft = combinedContextForDraft.match(/(?:kelas\s+)?([xXiI0-9\-]+)\s*(?:sampai|s\.?d\.?|hingga|sd|-)\s*([xXiI0-9\-]+)/i);
+    const multiMatchDraft = combinedContextForDraft.match(/kelas\s+([xXiI0-9\-,\s]+)/i);
+    const singleClassMatchDraft = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i) || prevUserMsg.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
+
+    if (rangeMatchDraft) {
+      targetClassForDraft = `${rangeMatchDraft[1]} sampai ${rangeMatchDraft[2]}`;
+    } else if (multiMatchDraft && multiMatchDraft[1].trim().length > 1) {
+      targetClassForDraft = multiMatchDraft[1].trim();
+    } else if (singleClassMatchDraft) {
+      targetClassForDraft = singleClassMatchDraft[1].trim();
+    }
+
+    const subjectMatchDraft = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk|kimia|fisika|biologi)\b/i) ||
+      prevUserMsg.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk|kimia|fisika|biologi)\b/i);
+    const targetSubjectForDraft = subjectMatchDraft ? subjectMatchDraft[1].trim() : "SEMUA";
+
     // Jika user meminta KIRIM DRAFT DENGAN JADWAL JAM TERTENTU (misal: "kirim draft 13:18 wib", "kirim draft jam 13:18", "jadwalkan kirim draft 15:00")
     const scheduleMatch = promptToCheck.match(/(?:kirim\s+draft|kirim\s+jurnal|jadwalkan).*?(?:jam|pukul)?\s*(\d{1,2}[:.]\d{2})/i) ||
       promptToCheck.match(/(?:jam|pukul)\s*(\d{1,2}[:.]\d{2}).*?(?:kirim\s+draft|kirim\s+jurnal)/i);
 
     if (aiActions.length === 0 && scheduleMatch) {
       const waktuExtracted = scheduleMatch[1];
-      const classMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
-      const subjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk)\b/i);
-      const targetClass = classMatch ? classMatch[1].trim() : "SEMUA";
-      const targetSubject = subjectMatch ? subjectMatch[1].trim() : "SEMUA";
-
       const res = await executeScheduleAction({
         action: "SEND_JOURNAL_DRAFT",
         waktu: waktuExtracted,
         tanggal: todayIso,
-        className: targetClass,
-        subjectName: targetSubject,
+        className: targetClassForDraft,
+        subjectName: targetSubjectForDraft,
       });
 
       aiActions.push({
         type: "SCHEDULE_ACTION",
-        payload: { from: "prompt_schedule_fallback", waktu: waktuExtracted, className: targetClass },
+        payload: { from: "prompt_schedule_fallback", waktu: waktuExtracted, className: targetClassForDraft },
         result: res,
       });
     }
 
-    // Jika user meminta KIRIM DRAFT SEKARANG (tanpa jam masa depan, misal: "kirim draft", "kirim jurnal sekarang", "submit draft jurnal")
-    if (aiActions.length === 0 && (promptToCheck.includes("kirim draft") || promptToCheck.includes("submit draft") || promptToCheck.includes("kirim jurnal")) && !promptToCheck.includes("hapus")) {
-      const classMatch = promptToCheck.match(/\b(x(?:i{1,2})?[- ]?\d{1,2})\b/i);
-      const subjectMatch = promptToCheck.match(/\b(rpl|tkj|dkv|matematika|bahasa|pkk)\b/i);
-      const targetClass = classMatch ? classMatch[1].trim() : "SEMUA";
-      const targetSubject = subjectMatch ? subjectMatch[1].trim() : "SEMUA";
+    // Deteksi apakah user ingin mengirim DRAFT NILAI SISWA (misal: "draft nilai maksud saya!", "kirim draft nilai", "submit draft nilai", "maksud saya nilai")
+    const isGradeDraftRequest = (
+      (promptToCheck.includes("draft") && (promptToCheck.includes("nilai") || promptToCheck.includes("grade") || promptToCheck.includes("rapor"))) ||
+      promptToCheck.includes("kirim nilai") ||
+      promptToCheck.includes("submit nilai") ||
+      (/maksud\s+saya\b/i.test(promptToCheck) && (promptToCheck.includes("nilai") || promptToCheck.includes("grade")))
+    );
 
+    if (aiActions.length === 0 && isGradeDraftRequest && !promptToCheck.includes("hapus")) {
+      const res = await executeSendGradeDraft({
+        className: targetClassForDraft,
+        subjectName: targetSubjectForDraft,
+      });
+
+      aiActions.push({
+        type: "SEND_GRADE_DRAFT",
+        payload: { from: "prompt_send_grade_fallback", className: targetClassForDraft },
+        result: res,
+      });
+    }
+
+    // Jika user meminta KIRIM DRAFT JURNAL SEKARANG (tanpa jam masa depan, misal: "kirim draft", "kirim jurnal sekarang", "submit draft jurnal")
+    if (
+      aiActions.length === 0 &&
+      (promptToCheck.includes("kirim draft") || promptToCheck.includes("submit draft") || promptToCheck.includes("kirim jurnal")) &&
+      !promptToCheck.includes("hapus") &&
+      !promptToCheck.includes("nilai")
+    ) {
       const res = await executeSendJournalDraft({
         tanggal: todayIso,
-        className: targetClass,
-        subjectName: targetSubject,
+        className: targetClassForDraft,
+        subjectName: targetSubjectForDraft,
       });
 
       aiActions.push({
         type: "SEND_JOURNAL_DRAFT",
-        payload: { from: "prompt_send_fallback", className: targetClass },
+        payload: { from: "prompt_send_fallback", className: targetClassForDraft },
         result: res,
       });
     }

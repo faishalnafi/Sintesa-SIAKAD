@@ -1,164 +1,162 @@
-# SINTESA
+# SINTESA — SIMAK
 
-**Sistem Informasi Terpadu Akademik Sekolah**
+**Sistem Informasi Akademik Terpadu Sekolah (SMAN 3 Mojokerto)**  
+Versi Rilis Saat Ini: **`v01.07.01`** (`version_code: 171`)
 
-Monorepo full-stack: React (Vite) + Hono API + PostgreSQL + Drizzle ORM.  
-Auth: login lokal + Kredensia SSO. UI: Stitch design system, mobile-first, light/dark/system.
+Monorepo full-stack modern untuk pengelolaan akademik sekolah secara terpadu, real-time, dan terintegrasi penuh dengan **NEBULA AI (Asisten AI Guru)**, **Kredensia SSO**, **GDS (Gerakan Disiplin Sekolah)**, dan **PASTI (Sistem Kehadiran Siswa)**.
 
-## Stack
+---
 
-| Layer | Tech |
+## 🛠️ Tech Stack
+
+| Layer | Teknologi |
 | --- | --- |
-| Package manager | pnpm workspaces |
-| Frontend | React, Vite, Tailwind, Zustand |
-| Backend | Hono, Zod, jose (JWT cookie session) |
-| Database | PostgreSQL + Drizzle ORM |
-| SSO | Kredensia IDP (`client_id` + callback `?token=`) |
+| **Package Manager** | `pnpm` workspaces (Monorepo) |
+| **Frontend (`apps/web`)** | React 19, TypeScript, Vite 6, Tailwind CSS, Zustand, React Router v7, SheetJS (`xlsx`), SweetAlert2 |
+| **Backend (`apps/api`)** | Node.js, Hono, TypeScript, Zod, `jose` (JWT Cookie Session), `pdfkit` (Raport PDF), `adm-zip` (In-App Updater), Server-Sent Events (SSE Realtime) |
+| **AI Engine (NEBULA AI)** | 9Router Gateway LLM API (`https://llm.faishalnafi.com/v1`), Gemini 3.5 Flash-lite / 3.1 / 2.0 Flash, Multimodal Streaming |
+| **Cloud Storage Proxy** | AWS S3 / Cloudflare R2 / Google Cloud Storage (GCS) / MinIO Generic Object Storage |
+| **Database** | PostgreSQL + Drizzle ORM |
+| **Integrasi Eksternal** | Kredensia SSO IdP, Aplikasi GDS (Poin Ketertiban), Aplikasi PASTI (Presensi Kehadiran) |
 
-## Prerequisites
+---
 
-- Node.js ≥ 20
-- pnpm 10+
-- PostgreSQL running locally
+## ✨ Fitur Utama
 
-## Setup
+### 1. NEBULA AI — Asisten AI Guru & Akademik (`/guru/ai`)
+- **Dual-Sidebar Roomchat Interaktif**: Pengelolaan sesi obrolan mandiri yang terisolasi ketat per akun guru.
+- **Multimodal & Drag-Drop Media**: Mendukung unggah gambar, dokumen, serta berkas spreadsheet/PDF yang otomatis di-streaming melalui Cloud Object Storage proxy.
+- **AI Tool Calling & Automasi Tugas**:
+  - **Ekspor Excel Otomatis**: Perintah pembuatan Rekap Jurnal dan Buku Leger Nilai langsung dari obrolan AI.
+  - **Kirim / Submit Draft**: Aksi cerdas pengiriman draft jurnal maupun draft nilai siswa (`SEND_GRADE_DRAFT`, `SEND_JOURNAL_DRAFT`) dengan pemahaman bahasa alami (NLP) termasuk rentang kelas (contoh: *"XII-1 sampai XII-5"*).
+  - **Penjadwalan Otomatis (AI Scheduler)**: Penjadwalan eksekusi tugas di masa mendatang yang tersimpan aman pada tabel database `ai_scheduled_jobs`.
+- **Integrasi Konteks Data Guru**: AI mengenali jadwal mengajar, daftar siswa, rekap presensi PASTI, dan catatan pelanggaran GDS secara real-time.
+
+### 2. Pusat Unduhan & Pemberkasan (`/admin/monitoring-jurnal?section=unduhan`, `/guru?section=unduhan`)
+Modul terintegrasi untuk mencetak dan mengunduh laporan Excel (`.xlsx`) resmi berstandar administrasi sekolah:
+- **Modul #1 — Rekap Monitoring Jurnal Mengajar Guru (`.xlsx`)**:
+  - Filter rentang waktu instan: *Hari Ini*, *1 Pekan (Senin–Sabtu)*, *1 Bulan Penuh*, *Semua Tanggal*, atau *Rentang Tanggal Kustom*.
+  - Filter spesifik per Rombel dan per Guru Pengajar.
+  - Opsi menampilkan jam mengajar yang belum terisi jurnal serta format kop surat dan lembar pengesahan resmi.
+- **Modul #2 — Buku Leger Nilai Rombel & Rekap Nilai Mapel (`.xlsx`)**:
+  - **Buku Leger Kelas (Seluruh Mapel)**: Menghasilkan 3 lembar kerja (*Sheet*) sekaligus — *Leger Nilai Akhir & Rata-rata*, *Rincian Komponen Nilai (UH1, T1, STS, UH2, T2)*, dan *Matriks Status Pengumpulan Nilai*.
+  - **Rekap Nilai Spesifik per Mata Pelajaran**.
+  - Filter status nilai (*Approved*, *Submitted*, *Draft*) beserta tabel pratinjau data interaktif.
+- **Modul Rekap Presensi & GDS**: Cetak data kehadiran siswa bersumber dari aplikasi PASTI dan rekap poin ketertiban GDS.
+
+### 3. Monitoring Jurnal Mengajar (`/admin/monitoring-jurnal`)
+- **Mode Filter Ganda (Per Guru & Per Kelas)**: Menampilkan keterisian jurnal kegiatan belajar mengajar harian secara fleksibel berdasarkan rombel maupun guru pengampu.
+- **Tampilan Jam Lengkap Tanpa Timpa Data**: Menampilkan seluruh jam pelajaran yang terjadwal. Jika terdapat lebih dari satu jurnal pada jam yang sama (lintas kelas/mapel), seluruh baris tetap tersaji utuh tanpa saling menggantikan.
+- **Koreksi Ulang & Manajemen Jurnal**: Fitur pengembalian status jurnal dari *Terkirim* ke *Draft* agar dapat diperbaiki oleh guru, serta opsi edit materi/presensi dan soft-delete oleh administrator.
+
+### 4. Portal Penilaian Guru & Wali Kelas
+- **Input Nilai Akademik (`/guru`)**:
+  - Pengisian nilai per komponen penilaian aktif dengan fitur **Simpan Draft** (`upsert`) dan **Kirim Nilai** ke Wali Kelas.
+  - **Template Nilai Excel Anti-Sharing (`.xlsx`)**:
+    - File template unduhan dilengkapi tanda tangan digital (*metadata*) unik yang terikat pada Guru, Rombel, dan Mata Pelajaran.
+    - Validasi kepemilikan file saat unggah untuk mencegah kesalahan input antar guru.
+- **Jurnal Mengajar Harian (`/guru?section=jurnal`)**: Pencatatan ringkasan materi dan kehadiran siswa per jam pertemuan.
+- **Matrix Persetujuan Wali Kelas (`/walikelas`)**: Pemeriksaan kelengkapan nilai seluruh mapel kelas perwalian, persetujuan (*Approve*), atau pembatalan persetujuan nilai.
+
+### 5. Portal Siswa & Orang Tua
+- **Beranda Siswa (`/siswa`)**: Informasi kelas aktif, rekapitulasi kehadiran (*Sakit*, *Izin*, *Alpa* terintegrasi dengan PASTI), dan saldo **Poin GDS**.
+- **Raport Nilai & Unduh Raport PDF (`/siswa/raport`)**: Tampilan nilai akademik lengkap dan tombol **Unduh Raport (PDF)** format A4 standar resmi.
+
+### 6. Pengaturan Sistem, Keamanan & In-App Updater
+- **Pembaruan Aplikasi Satu Klik (`/admin/integrations?section=update`)**:
+  - Unggah dan instal paket berkas `update_simak_v{versi}.zip` langsung dari panel Superadmin.
+  - Migrasi skema database otomatis dan aman tanpa menghapus data yang ada.
+- **Otentikasi & SSO Kredensia**:
+  - Login SSO satu klik dengan sinkronisasi pengguna dan *roster* kelas (*JIT Provisioning*).
+  - Portal login manual khusus admin (`/office`).
+  - Penanganan status sidebar minimize yang rapi dengan tooltip navigasi dan tombol keluar.
+- **Pencadangan & Tempat Sampah (`/admin/integrations?section=backup`, `/admin/trash`)**: Ekspor/impor cadangan data JSON serta pemulihan data *soft-delete*.
+
+---
+
+## 👥 Matriks Peran (Roles)
+
+| Kode Role | Akses Login | Deskripsi & Hak Akses |
+| --- | --- | --- |
+| `superadmin` | Ya | Akses menyeluruh seluruh modul sistem, integrasi AI & Cloud Storage, tempat sampah, dan *In-App Updater* |
+| `admin` | Ya | Manajemen pengguna, rombel, mapel, monitoring jurnal, dan Pusat Unduhan |
+| `walikelas` | Ya | Matrix persetujuan nilai kelas binaan, input nilai, jurnal guru, dan Pusat Unduhan |
+| `guru` | Ya | Asisten NEBULA AI, input nilai (ekspor/impor Excel), jurnal mengajar, dan Pusat Unduhan pribadi |
+| `tendik` | Ya | Tenaga kependidikan |
+| `siswa` / `ortu` | Ya | Pemantauan kehadiran, poin kedisiplinan GDS, dan unduh raport PDF |
+| `alumni` | Ya | Akses arsip kelulusan (`kelas_label = ALUMNI`) |
+| `keluar` | **Diblokir** | Siswa mutasi keluar — riwayat arsip tersimpan, hak login dinonaktifkan |
+
+---
+
+## 🚀 Panduan Instalasi & Pengembangan Lokal
+
+### Prasyarat
+- **Node.js** >= 20
+- **pnpm** >= 10
+- **PostgreSQL** >= 15
+
+### Langkah Setup
 
 ```bash
-# 1) Install
+# 1. Clone repositori
+git clone https://github.com/faishalnafi/Sintesa-SiAkad.git
+cd Sintesa-SiAkad
+git checkout simak-ai
+
+# 2. Instal seluruh dependencies monorepo
 pnpm install
 
-# 2) Configure env (do not commit real .env)
+# 3. Konfigurasi Environment (.env)
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
-# edit DATABASE_URL, JWT_SECRET, etc.
+# Isi variabel DATABASE_URL, JWT_SECRET, SSO_*, GEMINI_*, dan S3_* pada apps/api/.env
 
-# 3) Migrate + seed
-pnpm db:generate   # if schema changed
+# 4. Migrasi & Seed Database
 pnpm db:migrate
 pnpm db:seed
 
-# 4) Dev
+# 5. Jalankan Aplikasi (API & Web Dev Server)
 pnpm dev
 ```
 
-- Web: http://localhost:5173  
-- API: http://localhost:3001  
+- **Frontend Web**: `http://localhost:5174` (atau `http://localhost:5173`)
+- **Backend API**: `http://localhost:3001`
 
-## Docker Deploy (Portainer / Dokploy)
+---
 
-**Panduan lengkap + blok env copy-paste:** [`deploy-to-docker.md`](deploy-to-docker.md)
+## 📦 Membangun Paket Update Produksi (`.ZIP`)
 
-Install cepat di VPS:
+Untuk membuat paket rilis pembaruan produksi yang siap diunggah melalui menu **Admin > Update & Integrasi**:
 
-```bash
-git clone https://github.com/ardianryan/sintesa.git && cd sintesa
-./scripts/generate-stack-env.sh https://domain-anda
-# isi SSO_* di .env, lalu:
-docker compose pull && docker compose up -d
+```powershell
+# 1. Kompilasi frontend & backend
+npm --prefix apps/api run build
+npm --prefix apps/web run build
+
+# 2. Buat paket ZIP otomatis
+.\make-deploy-zip.ps1
 ```
 
-Stack: PostgreSQL + API + Nginx (satu port `8080`, `/api` di-proxy otomatis).  
-Image GHCR: `ghcr.io/ardianryan/sintesa-api` · `ghcr.io/ardianryan/sintesa-web` (build otomatis via GitHub Actions).
+Script akan menghasilkan berkas **`update_simak_v{versi}.zip`** (contoh: `update_simak_v01.07.01.zip`) dan **`deploy.zip`** dengan hierarki file yang siap diekstrak oleh sistem pembaruan otomatis.
 
-## Roles (ScholarGate-SSO aligned)
+---
 
-Member roles from ScholarGate `members.role`:
+## 📋 Riwayat Rilis Terbaru
 
-| Code | Login | Keterangan |
-| --- | --- | --- |
-| `siswa` | ya | Peserta didik (+ data ayah/ibu/wali) |
-| `guru` | ya | Tenaga pendidik (NIP, gelar di `nama`) |
-| `tendik` | ya | Tenaga kependidikan |
-| `alumni` | ya | Mantan siswa (`kelas_label` = ALUMNI) |
-| `keluar` | **tidak** | Mutasi/keluar — data tetap, login diblok |
+- **`v01.07.01` (2026-10-08)**:
+  - Integrasi 9Router Gateway LLM API (`https://llm.faishalnafi.com/v1`, Gemini 3.5 Flash-lite / 3.1) dan DNS IPv4 first.
+  - Peningkatan Monitoring Jurnal Mengajar: Filter mode Per Kelas / Per Guru dan penampilan seluruh jam mengajar tanpa tertimpa data ganda.
+  - Penambahan eksekusi action AI untuk pengiriman draft nilai (`SEND_GRADE_DRAFT`) dan deteksi rentang rombel.
+  - Optimasi fleksibilitas ekstraksi klaim SSO Kredensia dan perbaikan tata letak tombol keluar saat sidebar diminimalkan.
+- **`v01.07.00` (2026-10-02)**:
+  - Rilis modul **Pusat Unduhan & Pemberkasan** terpadu untuk Rekap Jurnal Mengajar dan Buku Leger Nilai Akademik (.xlsx).
+  - Penjadwal Otomatis AI (AI Scheduler) terintegrasi pada tabel `ai_scheduled_jobs`.
+  - Penyatuan menu Update & Backup ke dalam menu terpadu **Update & Integrasi**.
+- **`v01.06.00` (2026-10-02)**:
+  - Standarisasi penomoran versi 2 digit (`xx.yy.zz`) dan optimasi impor/ekspor nilai Excel guru.
 
-System (ScholarGate `admins.role`):
+---
 
-| Code | Keterangan |
-| --- | --- |
-| `superadmin` | Super Admin |
-| `admin` | Admin / TU |
-
-SINTESA app overlays:
-
-| Code | Keterangan |
-| --- | --- |
-| `walikelas` | Dari `is_homeroom` / multi-role guru |
-| `ortu` | Akses orang tua (data dari blok orang tua siswa) |
-
-Detail field mirror ScholarGate `API.md` (NIK, KK, Google, alamat, parent block, dll.).
-
-## Integrasi eksternal (anti tumpang tindih)
-
-| App | Domain | Status |
-| --- | --- | --- |
-| **Kredensia SSO** | Identitas & login | Live |
-| **GDS** | Poin kedisiplinan → `poin_gds` | Coming soon |
-| **Kehadiran Siswa** | Absensi → sakit/izin/alpa | Coming soon |
-
-UI: `/admin/integrations` · Docs: [`apps/api/docs/INTEGRATIONS_GDS_KEHADIRAN.md`](apps/api/docs/INTEGRATIONS_GDS_KEHADIRAN.md)
-
-Env (isi saat live): `GDS_BASE_URL`, `GDS_API_KEY`, `KEHADIRAN_BASE_URL`, `KEHADIRAN_API_KEY`
-
-## Tahun pelajaran, alumni & mutasi
-
-Dokumentasi lengkap: [`apps/api/docs/ACADEMIC_LIFECYCLE.md`](apps/api/docs/ACADEMIC_LIFECYCLE.md)
-
-Ringkas (pola ScholarGate):
-
-1. **Tahun pelajaran** — hanya 1 aktif; bulk assign; naik kelas SEM→X→XI→XII  
-2. **Alumni** — siswa XII dengan `academic_year_id ≠` tahun aktif → migrasi `alumni` (`kelas_label=ALUMNI`)  
-3. **Keluar/mutasi** — `siswa` → `keluar` (login diblok); admin bisa **restore** ke `siswa`  
-
-UI admin: `/admin/academic-years`, `/admin/alumni`, `/admin/keluar`
-
-## Demo accounts (after seed)
-
-| Email | Password | Roles |
-| --- | --- | --- |
-| admin@sintesa.local | admin123 | superadmin, admin |
-| guru@sintesa.local | guru123 | guru, walikelas |
-| tendik@sintesa.local | tendik123 | tendik |
-| siswa@sintesa.local | siswa123 | siswa |
-
-## Scripts
-
-```bash
-pnpm dev           # api + web
-pnpm dev:api
-pnpm dev:web
-pnpm db:migrate
-pnpm db:seed
-pnpm build
-```
-
-## Security notes
-
-- `.env` is gitignored — never push secrets
-- Session uses HTTP-Only cookie JWT
-- SSO secrets stay on the API only
-- Register is admin/SSO provisioning only (no open public register)
-
-## Kredensia SSO (sesuai `api.md`)
-
-Dokumentasi lengkap: [`apps/api/docs/KREDENSIA_SSO.md`](apps/api/docs/KREDENSIA_SSO.md) · spek IdP: [`api.md`](api.md)
-
-1. Superadmin IdP → **Manajemen Aplikasi** daftarkan SINTESA  
-   - `login_callback_url` = `http://localhost:3001/api/auth/sso/callback` (host+port harus cocok)  
-2. Isi `apps/api/.env`:
-   - `SSO_BASE_URL`, `SSO_CLIENT_ID` (UUID app), `SSO_REDIRECT_URI`, `SSO_JWT_SECRET` (= JWT_SECRET IdP)  
-   - Opsional sync: `SSO_API_KEY` (Kunci API, format `sso_…`)  
-3. Login: tombol **Masuk dengan Kredensia SSO** → `/api/auth/sso/login`  
-4. Callback: `?token=` JWT HS256 (TTL 5 menit) → JIT user → cookie session  
-5. Logout: `/api/auth/sso/logout` → IdP `/otentikasi/keluar`  
-
-Proxy admin (butuh API key): `/api/admin/sso/test|members|peran|statistik` · `POST /api/admin/sso/sync-members`
-
-Dev simulate (non-production):
-
-```bash
-curl -X POST http://localhost:3001/api/auth/sso/dev-simulate \
-  -H 'Content-Type: application/json' \
-  -d '{"nama":"SSO Dev","roles":["Guru"],"nomor_induk":"19800101"}'
-# buka data.callbackUrl di browser
-```
+## 📄 Lisensi
+Hak Cipta © 2026 SMAN 3 Mojokerto. Seluruh hak cipta dilindungi undang-undang.
