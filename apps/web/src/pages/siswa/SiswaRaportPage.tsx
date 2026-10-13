@@ -190,17 +190,16 @@ export function SiswaRaportPage() {
             {" "}— ✓ Tuntas &nbsp;/&nbsp; ✗ Tidak Tuntas &nbsp;/&nbsp; – Segera Hadir
           </p>
         </div>
-        {canDownload && (
-          <button
-            type="button"
-            onClick={handleDownloadPdf}
-            disabled={downloading}
-            className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-semibold shadow-sm hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            <span className="material-symbols-outlined text-[18px]">download</span>
-            {downloading ? "Menyiapkan PDF..." : "Unduh Raport (PDF)"}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleDownloadPdf}
+          disabled={downloading || pager.total === 0}
+          title={pager.total === 0 ? "Raport belum disetujui wali kelas" : "Unduh Raport Siswa (PDF)"}
+          className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-semibold shadow-sm hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <span className="material-symbols-outlined text-[18px]">download</span>
+          {downloading ? "Menyiapkan PDF..." : "Unduh Raport (PDF)"}
+        </button>
       </div>
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">

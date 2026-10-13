@@ -62,6 +62,7 @@ export const users = pgTable("users", {
   ssoId: text("sso_id").unique(),
   email: varchar("email", { length: 255 }).unique(),
   username: varchar("username", { length: 100 }).unique(),
+  ssoUsername: varchar("sso_username", { length: 100 }),
   passwordHash: text("password_hash"),
   name: varchar("name", { length: 255 }).notNull(),
   avatarUrl: text("avatar_url"),

@@ -21,6 +21,7 @@ import { canRoleLogin, mapExternalRoles } from "../constants/roles.js";
 export type SsoJwtPayload = {
   user_id: string;
   nomor_induk?: string | null;
+  sso_username?: string | null;
   nama: string;
   roles: string[];
   email?: string | null;
@@ -154,9 +155,12 @@ function parseSsoPayload(payload: Record<string, unknown>): SsoJwtPayload {
     roleList = [rolesRaw];
   }
 
+  const ssoUsername = (payload.username as string | undefined) ?? (payload.sso_username as string | undefined) ?? null;
+
   return {
     user_id: userId,
     nomor_induk: nomorInduk,
+    sso_username: ssoUsername,
     nama,
     roles: roleList,
     email: (payload.email as string | undefined) ?? null,
@@ -275,6 +279,7 @@ export async function upsertUserFromSso(payload: SsoJwtPayload) {
         ssoId: payload.user_id,
         name: payload.nama,
         username: payload.nomor_induk || null,
+        ssoUsername: payload.sso_username || null,
         email: payload.email || null,
         avatarUrl: payload.avatarUrl || null,
         isActive: true,
@@ -288,6 +293,7 @@ export async function upsertUserFromSso(payload: SsoJwtPayload) {
         ssoId: payload.user_id,
         name: payload.nama,
         username: payload.nomor_induk || user.username,
+        ssoUsername: payload.sso_username || user.ssoUsername || null,
         email: payload.email || user.email,
         avatarUrl: payload.avatarUrl || user.avatarUrl,
         lastLoginAt: new Date(),

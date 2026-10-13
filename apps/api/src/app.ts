@@ -352,42 +352,46 @@ app.post("/api/v1/webhooks/kehadiran", async (c) => {
 app.get("/api/public/profile/:uuid", async (c) => {
   const uuid = c.req.param("uuid");
   const academicYearParam = c.req.query("academicYear");
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
 
-  // 1. Ambil data siswa + user
-  const [studentData] = await db
-    .select({
-      id: students.id,
-      name: students.name,
-      nisn: students.nisn,
-      kelasLabel: students.kelasLabel,
-      poinGds: students.poinGds,
-      sakit: students.sakit,
-      izin: students.izin,
-      alpa: students.alpa,
-      username: users.username,
-      avatarUrl: users.avatarUrl,
-      alamat: students.alamat,
-      emailPribadi: students.emailPribadi,
-      noTelepon: students.noTelepon,
-      classId: students.classId,
-      gradeLevel: classes.gradeLevel,
-      className: classes.name,
-      jurusan: classes.jurusan,
-    })
-    .from(students)
-    .leftJoin(users, eq(students.userId, users.id))
-    .leftJoin(classes, eq(students.classId, classes.id))
-    .where(
-      or(
-        eq(students.id, uuid),
-        eq(students.userId, uuid),
-        eq(students.ssoMemberId, uuid),
-        eq(users.ssoId, uuid)
-      )
-    )
-    .limit(1);
+  // 1. Query data user + student secara fleksibel (support UUID, sso_username, username, sso_id, nisn)
+  const [row] = await db.execute<any>(sql`
+    SELECT 
+      s.id as student_id,
+      s.name as student_name,
+      s.nisn,
+      s.kelas_label,
+      s.poin_gds,
+      s.sakit,
+      s.izin,
+      s.alpa,
+      s.alamat,
+      s.email_pribadi,
+      s.no_telepon,
+      s.class_id,
+      c.grade_level,
+      c.name as class_name,
+      c.jurusan,
+      u.id as user_id,
+      u.name as user_name,
+      u.username,
+      u.sso_username,
+      u.avatar_url,
+      u.email
+    FROM users u
+    LEFT JOIN students s ON s.user_id = u.id
+    LEFT JOIN classes c ON s.class_id = c.id
+    WHERE 
+      (${isUuid} AND (u.id = ${isUuid ? uuid : null} OR s.id = ${isUuid ? uuid : null}))
+      OR u.sso_username = ${uuid}
+      OR u.username = ${uuid}
+      OR u.sso_id = ${uuid}
+      OR s.sso_member_id = ${uuid}
+      OR s.nisn = ${uuid}
+    LIMIT 1
+  `);
 
-  if (!studentData) {
+  if (!row) {
     return c.json({ success: false, message: "Profil tidak ditemukan" }, 404);
   }
 
@@ -404,51 +408,74 @@ app.get("/api/public/profile/:uuid", async (c) => {
   const activeYear = availableYears.find((y) => y.isActive)?.name || "2025/2026";
   const selectedYear = academicYearParam || activeYear;
 
-  // 3. Ambil data nilai raport pada tahun pelajaran terpilih
-  const gradesRows = await db
-    .select({
-      id: grades.id,
-      subjectId: grades.subjectId,
-      subjectName: subjects.name,
-      uh1: grades.uh1,
-      t1: grades.t1,
-      sts: grades.sts,
-      uh2: grades.uh2,
-      t2: grades.t2,
-      status: grades.status,
-    })
-    .from(grades)
-    .innerJoin(subjects, eq(grades.subjectId, subjects.id))
-    .where(
-      and(
-        eq(grades.studentId, studentData.id),
-        eq(grades.academicYear, selectedYear),
-        eq(grades.status, "approved"),
-      )
-    );
+  let gradesRows: any[] = [];
+  if (row.student_id) {
+    gradesRows = await db
+      .select({
+        id: grades.id,
+        subjectId: grades.subjectId,
+        subjectName: subjects.name,
+        uh1: grades.uh1,
+        t1: grades.t1,
+        sts: grades.sts,
+        uh2: grades.uh2,
+        t2: grades.t2,
+        status: grades.status,
+      })
+      .from(grades)
+      .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+      .where(
+        and(
+          eq(grades.studentId, row.student_id),
+          eq(grades.academicYear, selectedYear),
+          eq(grades.status, "approved"),
+        )
+      );
+  }
 
-  // Ambil komponen penilaian
   const compList = await db
     .select()
     .from(assessmentComponents)
     .orderBy(asc(assessmentComponents.sortOrder), asc(assessmentComponents.createdAt));
 
+  const finalName = row.student_name || row.user_name;
+  const finalUsername = row.sso_username || row.username;
+  const displayUsername = row.sso_username || (row.username && row.username !== row.nisn ? row.username : row.nisn);
+
   return c.json({
     success: true,
     data: {
       student: {
-        ...studentData,
-        email: studentData.emailPribadi || null,
+        id: row.user_id,
+        studentId: row.student_id,
+        name: finalName,
+        nisn: row.nisn || (row.student_id ? null : row.username),
+        kelasLabel: row.kelas_label || (row.student_id ? "Siswa" : "Civitas Akademika"),
+        poinGds: row.poin_gds || 0,
+        sakit: row.sakit || 0,
+        izin: row.izin || 0,
+        alpa: row.alpa || 0,
+        username: displayUsername,
+        ssoUsername: row.sso_username || null,
+        avatarUrl: row.avatar_url,
+        alamat: row.alamat,
+        emailPribadi: row.email_pribadi || row.email,
+        noTelepon: row.no_telepon,
+        classId: row.class_id,
+        gradeLevel: row.grade_level,
+        className: row.class_name,
+        jurusan: row.jurusan,
+        email: row.email || row.email_pribadi,
         socialLinks: {
-          github: studentData.username || "github_user",
-          gitlab: studentData.username || "gitlab_user",
-          linkedin: studentData.username || "linkedin_user",
-          x: `@${studentData.username || "x_user"}`
+          github: finalUsername || "user",
+          gitlab: finalUsername || "user",
+          linkedin: finalUsername || "user",
+          x: finalUsername ? `@${finalUsername}` : "@user"
         },
-        location: studentData.alamat || "Kota Mojokerto, Jawa Timur, Indonesia",
-        nickname: studentData.username || "Pelajar di Google Developer",
-        jenjang: studentData.gradeLevel ? `Kelas ${studentData.gradeLevel}` : "Kelas X",
-        rombel: studentData.className || studentData.kelasLabel || "X-1",
+        location: row.alamat || "Kota Mojokerto, Jawa Timur, Indonesia",
+        nickname: finalUsername || "Civitas SMAN 3 Mojokerto",
+        jenjang: row.grade_level ? `Kelas ${row.grade_level}` : (row.student_id ? "Siswa" : "Civitas"),
+        rombel: row.class_name || row.kelas_label || (row.student_id ? "Siswa" : "Civitas Akademika"),
       },
       grades: gradesRows,
       assessmentComponents: compList,
