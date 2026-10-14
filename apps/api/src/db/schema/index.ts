@@ -189,6 +189,11 @@ export const students = pgTable(
     catatanGds: text("catatan_gds"),
     /** Catatan dari Aplikasi PASTI saat mengirim Rekap Kehadiran */
     catatanKehadiran: text("catatan_kehadiran"),
+    /** Status pengiriman data dari aplikasi Pasti (Kedisiplinan & BK) */
+    isGdsSubmitted: boolean("is_gds_submitted").default(false).notNull(),
+    isKehadiranSubmitted: boolean("is_kehadiran_submitted").default(false).notNull(),
+    gdsSubmittedAt: timestamp("gds_submitted_at", { withTimezone: true }),
+    kehadiranSubmittedAt: timestamp("kehadiran_submitted_at", { withTimezone: true }),
     isActive: boolean("is_active").default(true).notNull(),
     /** Alasan mutasi/keluar atau catatan kelulusan */
     statusNote: text("status_note"),

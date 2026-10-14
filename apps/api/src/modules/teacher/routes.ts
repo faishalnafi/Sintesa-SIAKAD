@@ -166,6 +166,29 @@ async function ensureTargetClassExists(classIdOrSsoId: string): Promise<string> 
 }
 
 teacherRoutes.get("/classes", async (c) => {
+  const user = c.get("user");
+  const isStaff = user.roles.includes("guru") || user.roles.includes("walikelas");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+
+  if (isStaff && !isAdmin) {
+    const teacherId = await resolveTeacherId(user.id);
+    if (teacherId) {
+      const assigned = await db
+        .select({
+          id: classes.id,
+          name: classes.name,
+        })
+        .from(classSubjects)
+        .innerJoin(classes, eq(classSubjects.classId, classes.id))
+        .where(and(eq(classSubjects.teacherId, teacherId), eq(classes.isActive, true)))
+        .orderBy(classes.name);
+
+      if (assigned.length > 0) {
+        return c.json({ success: true, data: assigned });
+      }
+    }
+  }
+
   const list: Array<{ id: string; name: string }> = [];
   const seenIds = new Set<string>();
 
@@ -482,7 +505,7 @@ teacherRoutes.get("/grades", async (c) => {
 const draftSchema = z.object({
   classId: z.string().min(1, "classId required"),
   subjectId: z.string().uuid("subjectId required"),
-  academicYear: z.string().default("2025/2026"),
+  academicYear: z.string().default("2026/2027"),
   semester: z.number().int().min(1).max(2).default(1),
   items: z.array(
     z.object({
@@ -500,6 +523,26 @@ teacherRoutes.patch("/grades/draft", async (c) => {
   const body = draftSchema.parse(await c.req.json());
   const user = c.get("user");
   const targetClassId = await ensureTargetClassExists(body.classId);
+
+  const isStaff = user.roles.includes("guru") || user.roles.includes("walikelas");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+  if (isStaff && !isAdmin) {
+    const teacherId = await resolveTeacherId(user.id);
+    if (teacherId) {
+      const assigned = await db
+        .select({ classId: classSubjects.classId })
+        .from(classSubjects)
+        .where(eq(classSubjects.teacherId, teacherId));
+
+      if (assigned.length > 0) {
+        const allowedIds = new Set(assigned.map((a) => a.classId));
+        if (!allowedIds.has(targetClassId) && !allowedIds.has(body.classId)) {
+          return c.json({ success: false, message: "Anda tidak ditugaskan untuk mengajar di kelas ini" }, 403);
+        }
+      }
+    }
+  }
+
   const saved = [];
 
   for (const item of body.items) {
@@ -595,12 +638,31 @@ teacherRoutes.patch("/grades/draft", async (c) => {
 const submitSchema = z.object({
   classId: z.string().min(1, "classId required"),
   subjectId: z.string().uuid("subjectId required"),
-  academicYear: z.string().default("2025/2026"),
+  academicYear: z.string().default("2026/2027"),
   semester: z.number().int().min(1).max(2).default(1),
 });teacherRoutes.post("/grades/submit", async (c) => {
   const body = submitSchema.parse(await c.req.json());
   const user = c.get("user");
   const targetClassId = await ensureTargetClassExists(body.classId);
+
+  const isStaff = user.roles.includes("guru") || user.roles.includes("walikelas");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+  if (isStaff && !isAdmin) {
+    const teacherId = await resolveTeacherId(user.id);
+    if (teacherId) {
+      const assigned = await db
+        .select({ classId: classSubjects.classId })
+        .from(classSubjects)
+        .where(eq(classSubjects.teacherId, teacherId));
+
+      if (assigned.length > 0) {
+        const allowedIds = new Set(assigned.map((a) => a.classId));
+        if (!allowedIds.has(targetClassId) && !allowedIds.has(body.classId)) {
+          return c.json({ success: false, message: "Anda tidak ditugaskan untuk mengajar di kelas ini" }, 403);
+        }
+      }
+    }
+  }
 
   // 1. Ambil komponen penilaian yang aktif (misal UH1, T1, STS)
   const activeComps = await db

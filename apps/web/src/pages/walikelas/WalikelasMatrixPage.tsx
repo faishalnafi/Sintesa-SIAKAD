@@ -16,6 +16,7 @@ type Matrix = {
     total: number;
     approved: number;
     ready: number;
+    draft?: number;
     incomplete: number;
     progress: number;
   } | null;
@@ -34,8 +35,14 @@ type Matrix = {
     alpa: number;
     catatanGds: string | null;
     catatanKehadiran: string | null;
+    isGdsSubmitted?: boolean;
+    isKehadiranSubmitted?: boolean;
+    submissionMissingReason?: string | null;
     status: string;
     gradeCount?: number;
+    draftCount?: number;
+    submittedCount?: number;
+    approvedCount?: number;
     grades?: Array<{
       subjectId: string;
       subjectName: string;
@@ -504,7 +511,11 @@ export function WalikelasMatrixPage() {
           <Button
             onClick={approveAll}
             disabled={busy || !selectedClassId || Boolean(summary && summary.ready === 0)}
-            title={summary && summary.ready === 0 ? "Tidak ada nilai berstatus Ready/Submitted yang bisa disetujui" : ""}
+            title={
+              summary && summary.ready === 0
+                ? "Tidak ada siswa yang semua mapelnya sudah Submitted"
+                : "Approve raport bagi semua siswa yang seluruh mapelnya sudah Submitted"
+            }
           >
             <span className="material-symbols-outlined text-[18px]">verified</span>
             Approve for Report Card
@@ -527,9 +538,9 @@ export function WalikelasMatrixPage() {
           ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)
           : [
               { label: "Total Siswa", value: summary.total, sub: data?.class?.name },
-              { label: "Selesai", value: `${summary.progress}%`, sub: `${summary.approved} approved` },
-              { label: "Pending", value: summary.ready, sub: "Membutuhkan aksi" },
-              { label: "Data Kurang", value: summary.incomplete, sub: "Incomplete" },
+              { label: "Selesai Disetujui", value: `${summary.progress}%`, sub: `${summary.approved} siswa disetujui` },
+              { label: "Siap Disetujui", value: summary.ready, sub: "Semua mapel submitted" },
+              { label: "Draft / Kurang", value: summary.incomplete, sub: `${summary.draft ?? 0} ada mapel draft` },
             ].map((s) => (
               <Card key={s.label} className="p-4">
                 <div className="text-xs text-on-surface-variant">{s.label}</div>
@@ -637,7 +648,24 @@ export function WalikelasMatrixPage() {
                           })}
                           <td className="px-3 py-3 whitespace-nowrap">
                             <div className="flex flex-col gap-0.5">
-                              <span className="font-medium whitespace-nowrap">{s.poinGds} points</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-medium whitespace-nowrap">{s.poinGds} points</span>
+                                {s.isGdsSubmitted ? (
+                                  <span
+                                    className="inline-flex items-center text-emerald-600 dark:text-emerald-400"
+                                    title="Data kedisiplinan sudah dikirim oleh GDS"
+                                  >
+                                    <span className="material-symbols-outlined text-[15px]">check_circle</span>
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="inline-flex items-center text-amber-500 dark:text-amber-400"
+                                    title="GDS (Poin Kedisiplinan) belum melakukan pengiriman data"
+                                  >
+                                    <span className="material-symbols-outlined text-[15px]">hourglass_empty</span>
+                                  </span>
+                                )}
+                              </div>
                               {s.catatanGds && (
                                 <span
                                   className="inline-block text-[10px] text-primary/80 bg-primary/10 px-1.5 py-0.5 rounded leading-tight max-w-[120px] truncate"
@@ -650,7 +678,24 @@ export function WalikelasMatrixPage() {
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap">
                             <div className="flex flex-col gap-0.5">
-                              <span>S: {s.sakit} · I: {s.izin} · A: {s.alpa}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span>S: {s.sakit} · I: {s.izin} · A: {s.alpa}</span>
+                                {s.isKehadiranSubmitted ? (
+                                  <span
+                                    className="inline-flex items-center text-emerald-600 dark:text-emerald-400"
+                                    title="Data kehadiran sudah dikirim oleh BK"
+                                  >
+                                    <span className="material-symbols-outlined text-[15px]">check_circle</span>
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="inline-flex items-center text-amber-500 dark:text-amber-400"
+                                    title="BK (Kehadiran SIA) belum melakukan pengiriman data"
+                                  >
+                                    <span className="material-symbols-outlined text-[15px]">hourglass_empty</span>
+                                  </span>
+                                )}
+                              </div>
                               {s.catatanKehadiran && (
                                 <span
                                   className="inline-block text-[10px] text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded leading-tight max-w-[120px] truncate"
@@ -661,8 +706,20 @@ export function WalikelasMatrixPage() {
                               )}
                             </div>
                           </td>
-                          <td className="px-3 py-3">
-                            <Badge status={s.status}>{s.status}</Badge>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <Badge status={s.status}>
+                              {s.status === "ready"
+                                ? "Siap Disetujui"
+                                : s.status === "approved"
+                                ? "Disetujui"
+                                : s.status === "draft"
+                                ? `Draft (${s.draftCount ?? 1} Mapel)`
+                                : s.submissionMissingReason
+                                ? "Menunggu GDS/BK"
+                                : s.status === "incomplete"
+                                ? "Belum Lengkap"
+                                : s.status}
+                            </Badge>
                           </td>
                           <td className="px-4 py-3 text-right whitespace-nowrap">
                             <div className="inline-flex items-center gap-1.5 justify-end">
@@ -688,17 +745,28 @@ export function WalikelasMatrixPage() {
                                   className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !py-1 !px-2.5 text-xs gap-1 shadow-sm font-medium"
                                   disabled={busy}
                                   onClick={() => handleApproveSingle(s.studentId, s.name)}
+                                  title="Semua mapel sudah Submitted dan data GDS/BK lengkap. Klik untuk menyetujui raport."
                                 >
                                   <span className="material-symbols-outlined text-[16px]">verified</span>
                                   Approve Raport
                                 </Button>
+                              ) : s.status === "draft" ? (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium border border-amber-500/20"
+                                  title={`${s.draftCount ?? "Ada"} mapel masih berstatus Draft (belum disubmit oleh guru mapel). Semua mapel harus Submitted sebelum bisa diapprove.`}
+                                >
+                                  <span className="material-symbols-outlined text-[14px]">pending_actions</span>
+                                  Ada Mapel Draft
+                                </span>
                               ) : (
                                 <span
                                   className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-surface-container-high text-on-surface-variant/70 text-xs font-medium"
-                                  title="Nilai belum lengkap atau masih berstatus Draft"
+                                  title={s.submissionMissingReason || "Nilai mapel belum lengkap atau belum semua guru menginput nilai"}
                                 >
-                                  <span className="material-symbols-outlined text-[14px]">lock</span>
-                                  Belum Lengkap
+                                  <span className="material-symbols-outlined text-[14px]">
+                                    {s.submissionMissingReason ? "hourglass_empty" : "lock"}
+                                  </span>
+                                  {s.submissionMissingReason ? "Menunggu Data" : "Belum Lengkap"}
                                 </span>
                               )}
 
@@ -771,7 +839,15 @@ export function WalikelasMatrixPage() {
                                               );
                                             })}
                                             <td className="px-4 py-2 text-center">
-                                              <Badge status={g.status}>{g.status}</Badge>
+                                              <Badge status={g.status}>
+                                                {g.status === "submitted"
+                                                  ? "Submitted"
+                                                  : g.status === "draft"
+                                                  ? "Draft (Belum Submit)"
+                                                  : g.status === "approved"
+                                                  ? "Disetujui"
+                                                  : g.status}
+                                              </Badge>
                                             </td>
                                             <td className="px-4 py-2 text-right whitespace-nowrap">
                                                <button

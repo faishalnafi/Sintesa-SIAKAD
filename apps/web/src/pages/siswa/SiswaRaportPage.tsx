@@ -15,6 +15,8 @@ type Report = {
     sakit: number;
     izin: number;
     alpa: number;
+    catatanGds?: string | null;
+    catatanKehadiran?: string | null;
   };
   grades: Array<{
     subjectName: string;
@@ -253,6 +255,56 @@ export function SiswaRaportPage() {
             to={pager.to}
             onPageChange={pager.setPage}
           />
+        )}
+      </Card>
+
+      {/* Rekap Presensi & Tata Tertib (GDS) */}
+      <Card className="p-4 md:p-6 border border-outline-variant/30 shadow-sm">
+        <h3 className="font-display font-bold text-base mb-3 text-on-surface">
+          Rekap Presensi &amp; Tata Tertib (GDS)
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: "Poin GDS", value: data?.student.poinGds ?? 0, icon: "stars", unit: "Poin", color: "text-primary bg-primary/10" },
+            { label: "Sakit (S)", value: data?.student.sakit ?? 0, icon: "medical_services", unit: "Hari", color: "text-amber-500 bg-amber-500/10" },
+            { label: "Izin (I)", value: data?.student.izin ?? 0, icon: "event_available", unit: "Hari", color: "text-emerald-500 bg-emerald-500/10" },
+            { label: "Tanpa Keterangan (A)", value: data?.student.alpa ?? 0, icon: "person_off", unit: "Hari", color: "text-rose-500 bg-rose-500/10" },
+          ].map((item) => (
+            <div key={item.label} className="p-3 rounded-xl bg-surface-container/50 border border-outline-variant/20 flex flex-col justify-between">
+              <div className="flex items-center gap-2 text-xs text-on-surface-variant font-medium">
+                <span className={`p-1 rounded-lg ${item.color}`}>
+                  <span className="material-symbols-outlined text-[15px] block">{item.icon}</span>
+                </span>
+                <span className="truncate">{item.label}</span>
+              </div>
+              <div className="mt-2 flex items-baseline gap-1">
+                <span className="font-display text-2xl font-bold text-on-surface">
+                  {loading ? "..." : item.value}
+                </span>
+                <span className="text-xs text-on-surface-variant font-medium">{item.unit}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Catatan jika ada */}
+        {!loading && data?.student?.catatanGds && (
+          <div className="mt-3 p-3 rounded-xl bg-primary/5 border border-primary/20 text-xs text-primary flex items-start gap-2">
+            <span className="material-symbols-outlined text-[16px] shrink-0 mt-0.5">info</span>
+            <div>
+              <span className="font-semibold">Catatan Kedisiplinan: </span>
+              {data.student.catatanGds}
+            </div>
+          </div>
+        )}
+        {!loading && data?.student?.catatanKehadiran && (
+          <div className="mt-2 p-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+            <span className="material-symbols-outlined text-[16px] shrink-0 mt-0.5">event_note</span>
+            <div>
+              <span className="font-semibold">Catatan Presensi: </span>
+              {data.student.catatanKehadiran}
+            </div>
+          </div>
         )}
       </Card>
     </div>

@@ -79,6 +79,8 @@ export async function applyGdsPoints(points: GdsStudentPoint[]) {
   for (const row of points) {
     const patch: Record<string, any> = {
       poinGds: Math.max(0, Math.round(row.poin)),
+      isGdsSubmitted: true,
+      gdsSubmittedAt: new Date(),
       updatedAt: new Date(),
     };
     if (row.catatan !== undefined) {

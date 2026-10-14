@@ -87,6 +87,8 @@ export async function applyKehadiranRekap(rows: KehadiranRekap[]) {
       sakit: Math.max(0, Math.round(row.sakit || 0)),
       izin: Math.max(0, Math.round(row.izin || 0)),
       alpa: Math.max(0, Math.round(row.alpa || 0)),
+      isKehadiranSubmitted: true,
+      kehadiranSubmittedAt: new Date(),
       updatedAt: new Date(),
     };
     if (row.catatan !== undefined) {
