@@ -48,6 +48,7 @@ import {
 import { syncMembersFromIdp, upsertLocalFromSsoMember } from "../../services/sso-member-sync.js";
 import { isSsoConfigured } from "../../services/sso-kredensia.js";
 import { cleanUrlProtocol, env, ssoApiBaseUrl, ssoClientId, getGoogleClientId, getGoogleClientSecret, isGoogleConfigured } from "../../env.js";
+import { sortClasses, sortSubjects, sortTeachers } from "../../utils/sort.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
 
 export const adminRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -365,9 +366,9 @@ adminRoutes.get("/classes", async (c) => {
   return c.json({
     success: true,
     data: {
-      classes: data,
+      classes: sortClasses(data),
       years,
-      teachers: teacherRows,
+      teachers: sortTeachers(teacherRows),
     },
   });
 });
@@ -527,7 +528,7 @@ adminRoutes.get("/subjects", async (c) => {
     gradeCount: gradeMap.get(r.id) ?? 0,
   }));
 
-  return c.json({ success: true, data: { subjects: data } });
+  return c.json({ success: true, data: { subjects: sortSubjects(data) } });
 });
 
 adminRoutes.post("/subjects", async (c) => {
@@ -760,7 +761,7 @@ adminRoutes.get("/teachers", async (c) => {
     }
   }
 
-  return c.json({ success: true, data: teacherList });
+  return c.json({ success: true, data: sortTeachers(teacherList) });
 });
 
 async function ensureTargetUserExists(userIdOrSsoId: string): Promise<string> {
@@ -3270,7 +3271,7 @@ adminRoutes.get("/sso/kelas", async (c) => {
     }
 
     const result = Array.from(resultMap.values());
-    return c.json({ success: true, data: result });
+    return c.json({ success: true, data: sortClasses(result) });
   } catch (e) {
     return c.json({ success: false, message: e instanceof Error ? e.message : "Gagal memuat data kelas" }, 500);
   }

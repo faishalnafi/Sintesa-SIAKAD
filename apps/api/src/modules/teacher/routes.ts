@@ -22,6 +22,7 @@ import { computeAverage, isValidScore } from "../../utils/grades.js";
 import { env } from "../../env.js";
 import { ssoListKelas } from "../../services/sso-api-client.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
+import { sortClasses, sortSubjects } from "../../utils/sort.js";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -184,7 +185,7 @@ teacherRoutes.get("/classes", async (c) => {
         .orderBy(classes.name);
 
       if (assigned.length > 0) {
-        return c.json({ success: true, data: assigned });
+        return c.json({ success: true, data: sortClasses(assigned) });
       }
     }
   }
@@ -224,7 +225,7 @@ teacherRoutes.get("/classes", async (c) => {
     }
   }
 
-  return c.json({ success: true, data: list });
+  return c.json({ success: true, data: sortClasses(list) });
 });
 
 teacherRoutes.get("/subjects", async (c) => {
@@ -247,7 +248,7 @@ teacherRoutes.get("/subjects", async (c) => {
       .orderBy(subjects.name);
 
     if (assigned.length > 0) {
-      return c.json({ success: true, data: assigned, isLocked: assigned.length === 1 });
+      return c.json({ success: true, data: sortSubjects(assigned), isLocked: assigned.length === 1 });
     }
   }
 
@@ -263,7 +264,7 @@ teacherRoutes.get("/subjects", async (c) => {
     .where(eq(subjects.isActive, true))
     .orderBy(subjects.name);
 
-  return c.json({ success: true, data: all, isLocked: false });
+  return c.json({ success: true, data: sortSubjects(all), isLocked: false });
 });
 
 teacherRoutes.get("/assessment-components", async (c) => {

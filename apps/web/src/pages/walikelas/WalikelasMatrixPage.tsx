@@ -9,6 +9,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { sortClasses } from "@/lib/sort";
 
 type Matrix = {
   class: { id: string; name: string } | null;
@@ -115,7 +116,7 @@ export function WalikelasMatrixPage() {
   const loadClasses = async () => {
     try {
       const res = await api<Array<{ id: string; name: string }>>("/homeroom/classes");
-      const list = res.data ?? [];
+      const list = sortClasses(res.data ?? []);
       setClasses(list);
       if (list.length > 0) {
         setSelectedClassId(list[0].id);

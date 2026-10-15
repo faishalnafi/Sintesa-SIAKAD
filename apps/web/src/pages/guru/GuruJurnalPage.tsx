@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { sortClasses, sortSubjects, sortTeachingHours } from "@/lib/sort";
 
 type ClassItem = { id: string; name: string };
 type SubjectItem = { id: string; name: string; code: string | null };
@@ -79,15 +80,15 @@ export function GuruJurnalPage() {
       ]);
 
       if (cRes.status === "fulfilled" && cRes.value?.data) {
-        setClassesList(cRes.value.data);
+        setClassesList(sortClasses(cRes.value.data));
       }
       if (sRes.status === "fulfilled" && sRes.value?.data) {
         const val = sRes.value.data;
         const list = Array.isArray(val) ? val : ((val as any).subjects || []);
-        setSubjectsList(list);
+        setSubjectsList(sortSubjects(list));
       }
       if (hRes.status === "fulfilled" && hRes.value?.data) {
-        setHoursList(hRes.value.data);
+        setHoursList(sortTeachingHours(hRes.value.data));
       }
     } catch (e) {
       console.error("Gagal memuat konfigurasi jurnal:", e);

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
+import { sortClasses, sortStudents } from "@/lib/sort";
 
 type Keluar = {
   id: string;
@@ -43,9 +44,10 @@ export function KeluarPage() {
         api<{ classes: Klass[] }>("/admin/classes"),
       ]);
       setKeluar(k.data?.keluar ?? []);
-      setSiswaOptions(k.data?.siswaOptions ?? []);
-      setClasses(c.data?.classes ?? []);
-      if (!studentId && k.data?.siswaOptions?.[0]) setStudentId(k.data.siswaOptions[0].id);
+      const sortedSiswa = sortStudents(k.data?.siswaOptions ?? []);
+      setSiswaOptions(sortedSiswa);
+      setClasses(sortClasses(c.data?.classes ?? []));
+      if (!studentId && sortedSiswa[0]) setStudentId(sortedSiswa[0].id);
     } finally {
       setLoading(false);
     }

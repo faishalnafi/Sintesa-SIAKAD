@@ -10,6 +10,7 @@ import { usePagination } from "@/lib/pagination";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
 import { useAuthStore } from "@/store/auth";
 import { downloadGradeTemplate, parseAndValidateGradeTemplate } from "@/lib/gradeTemplateExport";
+import { sortClasses, sortSubjects } from "@/lib/sort";
 
 type Klass = { id: string; name: string };
 type Subject = { id: string; name: string };
@@ -116,14 +117,15 @@ export function GuruNilaiPage() {
         }
       }
 
-      setClasses(combined);
-      if (combined[0]) {
-        setClassId((prev) => prev || combined[0].id);
+      const sortedClasses = sortClasses(combined);
+      setClasses(sortedClasses);
+      if (sortedClasses[0]) {
+        setClassId((prev) => prev || sortedClasses[0].id);
       }
     });
 
     api<Subject[]>("/teacher/subjects").then((res) => {
-      const list = res.data ?? [];
+      const list = sortSubjects(res.data ?? []);
       setSubjects(list);
       setSubjectId((prev) => prev || list[0]?.id || "");
       setIsSubjectLocked(Boolean((res as any).isLocked));

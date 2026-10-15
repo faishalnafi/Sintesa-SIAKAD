@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Swal from "sweetalert2";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -27,6 +28,14 @@ type Report = {
     t2: string | null;
     status: string;
   }>;
+  canDownloadPdf?: boolean;
+  isApproved?: boolean;
+  pendingReason?: string | null;
+  approvalDetails?: {
+    allGradesApproved: boolean;
+    isGdsApproved: boolean;
+    isKehadiranApproved: boolean;
+  };
 };
 
 type AssessmentComponent = {
@@ -114,11 +123,30 @@ export function SiswaRaportPage() {
   const [downloading, setDownloading] = useState(false);
   const pager = usePagination(data?.grades ?? []);
 
+  const canDownload = !loading && Boolean(data?.canDownloadPdf);
+
   const handleDownloadPdf = async () => {
+    if (!canDownload) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Raport Belum Dapat Diunduh",
+        text: data?.pendingReason || "Raport belum disetujui lengkap oleh Wali Kelas (nilai mata pelajaran, kehadiran, dan kedisiplinan).",
+        confirmButtonColor: "#2563eb",
+      });
+      return;
+    }
+
     setDownloading(true);
     try {
       const res = await fetch("/api/student/report/pdf", { credentials: "include" });
-      if (!res.ok) throw new Error(`Gagal mengunduh raport (${res.status})`);
+      if (!res.ok) {
+        let errMessage = `Gagal mengunduh raport (${res.status})`;
+        try {
+          const errJson = await res.json();
+          if (errJson?.message) errMessage = errJson.message;
+        } catch {}
+        throw new Error(errMessage);
+      }
       const disposition = res.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="?([^";]+)"?/);
       const filename = match?.[1] ?? "raport.pdf";
@@ -132,7 +160,12 @@ export function SiswaRaportPage() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Gagal mengunduh raport");
+      await Swal.fire({
+        icon: "error",
+        title: "Unduh Gagal",
+        text: e instanceof Error ? e.message : "Gagal mengunduh raport",
+        confirmButtonColor: "#2563eb",
+      });
     } finally {
       setDownloading(false);
     }
@@ -165,7 +198,15 @@ export function SiswaRaportPage() {
   }, []);
 
   useRealtimeEvent(
-    ["grade_approved", "grade_rejected", "grade_deleted", "subject_updated"],
+    [
+      "grade_approved",
+      "grade_rejected",
+      "grade_deleted",
+      "grade_data_restored",
+      "student_updated",
+      "sync_completed",
+      "subject_updated",
+    ],
     () => {
       fetchReport(true);
       fetchComponents();
@@ -174,8 +215,6 @@ export function SiswaRaportPage() {
 
   const kkm = getKkm(data?.student?.className);
   const visibleComponents = assessmentComponents.filter((c) => c.status !== "inactive");
-
-  const canDownload = !loading && pager.total > 0;
 
   return (
     <div className="space-y-4">
@@ -195,14 +234,40 @@ export function SiswaRaportPage() {
         <button
           type="button"
           onClick={handleDownloadPdf}
-          disabled={downloading || pager.total === 0}
-          title={pager.total === 0 ? "Raport belum disetujui wali kelas" : "Unduh Raport Siswa (PDF)"}
+          disabled={downloading || !canDownload}
+          title={
+            !canDownload
+              ? (data?.pendingReason || "Raport belum disetujui lengkap oleh wali kelas")
+              : "Unduh Raport Siswa (PDF)"
+          }
           className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-on-primary text-sm font-semibold shadow-sm hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <span className="material-symbols-outlined text-[18px]">download</span>
+          <span className="material-symbols-outlined text-[18px]">
+            {!canDownload ? "lock" : "download"}
+          </span>
           {downloading ? "Menyiapkan PDF..." : "Unduh Raport (PDF)"}
         </button>
       </div>
+
+      {!loading && !canDownload && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 flex items-start gap-3">
+          <span className="material-symbols-outlined text-amber-600 dark:text-amber-400 text-xl shrink-0 mt-0.5">
+            lock_clock
+          </span>
+          <div className="text-sm">
+            <p className="font-semibold text-amber-900 dark:text-amber-100">
+              Raport PDF Belum Dapat Diunduh
+            </p>
+            <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
+              {data?.pendingReason || "Menunggu persetujuan lengkap dari Wali Kelas (nilai mata pelajaran, kehadiran, dan kedisiplinan)."}
+            </p>
+            <p className="mt-1 text-xs opacity-90 text-amber-700 dark:text-amber-300">
+              Nilai mata pelajaran hanya akan tampil di web dan dapat diunduh setelah disetujui oleh wali kelas. Rekap presensi dan kedisiplinan tetap dapat dilihat secara langsung di bawah.
+            </p>
+          </div>
+        </div>
+      )}
+
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm table-sticky-name min-w-[640px]">
@@ -242,8 +307,11 @@ export function SiswaRaportPage() {
           </table>
         </div>
         {!loading && pager.total === 0 && (
-          <div className="p-6 text-sm text-on-surface-variant">
-            Belum ada raport approved. Minta guru submit &amp; wali kelas approve dulu.
+          <div className="p-6 text-sm text-on-surface-variant flex items-center gap-2">
+            <span className="material-symbols-outlined text-base text-amber-500">schedule</span>
+            <span>
+              Nilai mata pelajaran belum disetujui oleh wali kelas. Nilai akan otomatis tampil setelah wali kelas melakukan persetujuan.
+            </span>
           </div>
         )}
         {!loading && pager.total > 0 && (

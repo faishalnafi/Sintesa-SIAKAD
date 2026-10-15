@@ -16,6 +16,7 @@ import { requireRoles } from "../../middlewares/rbac.js";
 import { isGdsConfigured, fetchGdsPoints } from "../../services/integrations/gds.js";
 import { isKehadiranConfigured, fetchKehadiranRekap, unlockStudentScoreInPasti } from "../../services/integrations/kehadiran.js";
 import { broadcastRealtimeEvent } from "../../services/realtime.js";
+import { sortClasses } from "../../utils/sort.js";
 
 export const homeroomRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -24,7 +25,7 @@ homeroomRoutes.use("*", requireAuth, requireRoles("walikelas", "admin", "superad
 async function resolveHomeroomClass(userId: string, roles: string[]) {
   if (roles.includes("admin") || roles.includes("superadmin")) {
     const all = await db.select().from(classes).orderBy(classes.name);
-    return all;
+    return sortClasses(all);
   }
   // Ambil kelas yang ditugaskan ke Guru ini dari tabel homeroom_assignments
   const assigned = await db
@@ -46,7 +47,7 @@ async function resolveHomeroomClass(userId: string, roles: string[]) {
     .where(and(eq(homeroomAssignments.userId, userId), eq(classes.isActive, true)))
     .orderBy(classes.name);
 
-  return assigned;
+  return sortClasses(assigned);
 }
 
 homeroomRoutes.get("/classes", async (c) => {

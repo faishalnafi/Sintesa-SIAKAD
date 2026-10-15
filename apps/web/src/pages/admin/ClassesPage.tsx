@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { sortClasses } from "@/lib/sort";
 
 type TahunPelajaranRef = {
   id: string;
@@ -91,7 +92,7 @@ export function ClassesPage() {
       const params = new URLSearchParams();
       if (filterAktif) params.set("aktif", "true");
       const res = await api<Kelas[]>(`/admin/sso/kelas?${params}`);
-      setData(res.data ?? []);
+      setData(sortClasses(res.data ?? []));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Gagal memuat data kelas dari SSO.");
     } finally {

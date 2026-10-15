@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
+import { sortAcademicYears } from "@/lib/sort";
 
 type Alumni = {
   id: string;
@@ -45,8 +46,9 @@ export function AlumniPage() {
       );
       setAlumni(res.data?.alumni ?? []);
       setPending(res.data?.pending ?? []);
-      setYears(res.data?.years ?? []);
-      if (!purgeYearId && res.data?.years?.[0]) setPurgeYearId(res.data.years[0].id);
+      const sortedYears = sortAcademicYears(res.data?.years ?? []);
+      setYears(sortedYears);
+      if (!purgeYearId && sortedYears[0]) setPurgeYearId(sortedYears[0].id);
     } finally {
       setLoading(false);
     }

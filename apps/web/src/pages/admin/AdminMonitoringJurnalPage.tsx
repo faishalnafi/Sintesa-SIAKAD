@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { sortClasses, sortTeachers } from "@/lib/sort";
 
 type ClassItem = { id: string; name: string };
 type TeacherItem = { id: string; name: string; nip?: string | null };
@@ -91,7 +92,7 @@ export function AdminMonitoringJurnalPage() {
         }
       }
 
-      setClassesList(combinedClasses);
+      setClassesList(sortClasses(combinedClasses));
       if (combinedClasses.length > 0) {
         setSelectedClassId(combinedClasses[0].id);
       }
@@ -108,7 +109,7 @@ export function AdminMonitoringJurnalPage() {
             seenTNames.add(tName.toLowerCase());
           }
         }
-        setTeachersList(uniqueTeachers);
+        setTeachersList(sortTeachers(uniqueTeachers));
       }
     } catch (e) {
       console.error("Gagal memuat data kelas/guru:", e);

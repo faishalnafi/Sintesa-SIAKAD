@@ -9,6 +9,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { SearchableSelect } from "@/components/ui/SearchableSelect";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { sortClasses, sortSubjects, sortTeachers, sortTeachingHours } from "@/lib/sort";
 
 type Subject = {
   id: string;
@@ -186,7 +187,7 @@ export function SubjectsPage() {
     setLoadingHours(true);
     try {
       const res = await api<Array<{ id: string; label: string; startTime: string; endTime: string }>>("/admin/teaching-hours");
-      setTeachingHoursList(res.data ?? []);
+      setTeachingHoursList(sortTeachingHours(res.data ?? []));
     } catch (e) {
       console.error("loadTeachingHours error:", e);
     } finally {
@@ -226,7 +227,7 @@ export function SubjectsPage() {
       if (filterActive) params.set("active", filterActive);
       const q = params.toString() ? `?${params}` : "";
       const res = await api<{ subjects: Subject[] }>(`/admin/subjects${q}`);
-      setRows(res.data?.subjects ?? []);
+      setRows(sortSubjects(res.data?.subjects ?? []));
     } finally {
       setLoading(false);
     }
@@ -260,10 +261,10 @@ export function SubjectsPage() {
       ]);
 
       if (tRes.status === "fulfilled" && tRes.value?.data) {
-        setTeachers(tRes.value.data);
+        setTeachers(sortTeachers(tRes.value.data));
       }
       if (htRes.status === "fulfilled" && htRes.value?.data) {
-        setHomeroomTeachers(htRes.value.data);
+        setHomeroomTeachers(sortTeachers(htRes.value.data));
       }
       if (aRes.status === "fulfilled" && aRes.value?.data) {
         setAssignments(aRes.value.data);
@@ -297,7 +298,7 @@ export function SubjectsPage() {
         }
       }
 
-      setClassesList(combinedClasses);
+      setClassesList(sortClasses(combinedClasses));
 
       if (hRes.status === "fulfilled" && hRes.value?.data) {
         setHomeroomAssignmentsList(hRes.value.data);

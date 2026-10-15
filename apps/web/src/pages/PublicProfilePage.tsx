@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
+import { sortAcademicYears } from "@/lib/sort";
 
 function computeMD5(str: string): string {
   function rotateLeft(lValue: number, iShiftBits: number) {
@@ -218,6 +219,9 @@ export function PublicProfilePage() {
       const url = `/public/profile/${uuid}${year ? `?academicYear=${encodeURIComponent(year)}` : ""}`;
       const res = await api<ProfileData>(url);
       if (res.data) {
+        if (res.data.availableYears) {
+          res.data.availableYears = sortAcademicYears(res.data.availableYears);
+        }
         setData(res.data);
         if (!selectedYear) {
           setSelectedYear(res.data.selectedYear);

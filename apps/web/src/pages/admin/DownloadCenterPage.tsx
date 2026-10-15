@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useAuthStore } from "@/store/auth";
+import { sortClasses, sortTeachers, sortSubjects } from "@/lib/sort";
 import {
   downloadJournalRecapExcel,
   formatTeachingHourLabel,
@@ -176,7 +177,7 @@ export function DownloadCenterPage() {
             }
           }
 
-          setClassesList(combinedClasses);
+          setClassesList(sortClasses(combinedClasses));
           if (combinedClasses.length > 0) {
             setSelectedClassId(combinedClasses[0].id);
             setGradeClassId(combinedClasses[0].id);
@@ -194,7 +195,7 @@ export function DownloadCenterPage() {
                 seenTNames.add(tName.toLowerCase());
               }
             }
-            setTeachersList(uniqueTeachers);
+            setTeachersList(sortTeachers(uniqueTeachers));
           }
         } else {
           // POV Guru Pribadi: muat daftar kelas dari endpoint guru & kunci guru ke diri sendiri
@@ -229,7 +230,7 @@ export function DownloadCenterPage() {
             }
           }
 
-          setClassesList(combinedClasses);
+          setClassesList(sortClasses(combinedClasses));
           setSelectedClassId("");
           if (combinedClasses.length > 0) {
             setGradeClassId(combinedClasses[0].id);
@@ -368,6 +369,9 @@ export function DownloadCenterPage() {
 
         const res = await api<GradeExportPayload>(`/admin/grades/export?${params.toString()}`);
         if (res.data) {
+          if (res.data.subjects) {
+            res.data.subjects = sortSubjects(res.data.subjects);
+          }
           setGradeData(res.data);
           if (!isAdmin && res.data.subjects.length === 1 && !gradeSubjectId) {
             setGradeSubjectId(res.data.subjects[0].id);
@@ -384,13 +388,13 @@ export function DownloadCenterPage() {
             const rawSubjs = Array.isArray(sRes.data)
               ? sRes.data
               : ((sRes.data as any)?.subjects ?? []);
-            const subjects: ExportGradeSubject[] = rawSubjs.map((s: any) => ({
+            const subjects: ExportGradeSubject[] = sortSubjects(rawSubjs.map((s: any) => ({
               id: s.id,
               code: s.code || s.name,
               name: s.name,
               type: s.type || "umum",
               teacherNames: user?.name || null,
-            }));
+            })));
             const targetSubjId = gradeSubjectId || subjects[0]?.id || "";
             let roster: ExportGradeStudent[] = [];
             let grades: ExportGradeRecord[] = [];
