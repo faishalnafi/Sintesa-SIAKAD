@@ -39,7 +39,42 @@ const TYPE_OPTIONS = [
   { value: "lainnya", label: "Lainnya" },
 ];
 
+type TabType = "mapel" | "guru" | "walikelas" | "jam" | "jadwal" | "penilaian";
+
 export function SubjectsPage() {
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash.replace("#", "").toLowerCase();
+      if (["mapel", "guru", "walikelas", "jam", "jadwal", "penilaian"].includes(hash)) {
+        return hash as TabType;
+      }
+      const searchParams = new URLSearchParams(window.location.search);
+      const tabParam = searchParams.get("tab")?.toLowerCase();
+      if (tabParam && ["mapel", "guru", "walikelas", "jam", "jadwal", "penilaian"].includes(tabParam)) {
+        return tabParam as TabType;
+      }
+    }
+    return "mapel";
+  });
+
+  const handleTabChange = (tabId: TabType) => {
+    setActiveTab(tabId);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#${tabId}`);
+    }
+  };
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace("#", "").toLowerCase();
+      if (["mapel", "guru", "walikelas", "jam", "jadwal", "penilaian"].includes(hash)) {
+        setActiveTab(hash as TabType);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
   const [rows, setRows] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -510,6 +545,7 @@ export function SubjectsPage() {
     status: "active" | "disabled" | "inactive";
     sortOrder: number;
   }) => {
+    setActiveTab("penilaian");
     setEditingCompId(c.id);
     setCompName(c.name);
     setCompCode(c.code);
@@ -565,6 +601,138 @@ export function SubjectsPage() {
     return { total, aktif, nonaktif: total - aktif, umum };
   }, [rows]);
 
+  const currentTabStats = useMemo(() => {
+    switch (activeTab) {
+      case "mapel":
+        return [
+          { label: "Total mapel", value: stats.total, icon: "menu_book" },
+          { label: "Aktif", value: stats.aktif, icon: "check_circle" },
+          { label: "Nonaktif", value: stats.nonaktif, icon: "cancel" },
+          { label: "Jenis umum", value: stats.umum, icon: "category" },
+        ];
+      case "guru": {
+        const assignedTeachers = new Set(assignments.map((a) => a.userId)).size;
+        const mappedSubjects = new Set(assignments.map((a) => a.subjectId)).size;
+        return [
+          { label: "Total Penugasan", value: assignments.length, icon: "assignment" },
+          { label: "Guru Bertugas", value: assignedTeachers, icon: "school" },
+          { label: "Mapel Terpetakan", value: mappedSubjects, icon: "book" },
+          { label: "Total Guru", value: teachers.length, icon: "groups" },
+        ];
+      }
+      case "walikelas": {
+        const assignedClasses = new Set(homeroomAssignmentsList.map((h) => h.classId)).size;
+        const assignedTeachers = new Set(homeroomAssignmentsList.map((h) => h.userId)).size;
+        return [
+          { label: "Total Wali Kelas", value: homeroomAssignmentsList.length, icon: "supervisor_account" },
+          { label: "Kelas Terisi", value: assignedClasses, icon: "meeting_room" },
+          { label: "Total Kelas", value: classesList.length, icon: "domain" },
+          { label: "Guru Wali", value: assignedTeachers, icon: "person" },
+        ];
+      }
+      case "jam": {
+        const first = teachingHoursList[0]?.startTime ? `Pukul ${teachingHoursList[0].startTime}` : "—";
+        const last = teachingHoursList[teachingHoursList.length - 1]?.endTime
+          ? `Pukul ${teachingHoursList[teachingHoursList.length - 1].endTime}`
+          : "—";
+        return [
+          { label: "Total Jam KBM", value: teachingHoursList.length, icon: "schedule" },
+          { label: "Mulai Pertama", value: first, icon: "login" },
+          { label: "Selesai Terakhir", value: last, icon: "logout" },
+          { label: "Status Jam", value: teachingHoursList.length > 0 ? "Tersedia" : "Kosong", icon: "timelapse" },
+        ];
+      }
+      case "jadwal":
+        return [
+          { label: "Status Fitur", value: "On Going", icon: "pending" },
+          { label: "Modul Rencana", value: "Jadwal Guru", icon: "calendar_month" },
+          { label: "Integrasi", value: "Jurnal KBM", icon: "sync" },
+          { label: "Hari KBM", value: "Senin – Sabtu", icon: "date_range" },
+        ];
+      case "penilaian": {
+        const activeCols = assessmentComponentsList.filter((c) => c.status === "active").length;
+        const disabledCols = assessmentComponentsList.filter((c) => c.status === "disabled").length;
+        const ujianCount = assessmentComponentsList.filter((c) => c.type === "UJIAN").length;
+        const tugasCount = assessmentComponentsList.filter((c) => c.type === "TUGAS").length;
+        return [
+          { label: "Total Komponen", value: assessmentComponentsList.length, icon: "fact_check" },
+          { label: "Kolom Aktif", value: activeCols, icon: "check_circle" },
+          { label: "Terkunci / Disabled", value: disabledCols, icon: "lock" },
+          { label: "Komposisi", value: `${ujianCount} Ujian · ${tugasCount} Tugas`, icon: "pie_chart" },
+        ];
+      }
+      default:
+        return [
+          { label: "Total mapel", value: stats.total, icon: "menu_book" },
+          { label: "Aktif", value: stats.aktif, icon: "check_circle" },
+          { label: "Nonaktif", value: stats.nonaktif, icon: "cancel" },
+          { label: "Jenis umum", value: stats.umum, icon: "category" },
+        ];
+    }
+  }, [
+    activeTab,
+    stats,
+    assignments,
+    teachers.length,
+    homeroomAssignmentsList,
+    classesList.length,
+    teachingHoursList,
+    assessmentComponentsList,
+  ]);
+
+  const tabs: Array<{
+    id: TabType;
+    label: string;
+    icon: string;
+    count: number | string;
+    description: string;
+    isOngoing?: boolean;
+  }> = [
+    {
+      id: "mapel",
+      label: "Mata Pelajaran",
+      icon: "menu_book",
+      count: stats.total,
+      description: "Master data dan daftar mata pelajaran sekolah",
+    },
+    {
+      id: "guru",
+      label: "Penugasan Guru",
+      icon: "school",
+      count: assignments.length,
+      description: "Pemetaan guru mata pelajaran",
+    },
+    {
+      id: "walikelas",
+      label: "Wali Kelas",
+      icon: "supervisor_account",
+      count: homeroomAssignmentsList.length,
+      description: "Pemetaan wali kelas per rombel",
+    },
+    {
+      id: "jam",
+      label: "Jam Mengajar",
+      icon: "schedule",
+      count: teachingHoursList.length,
+      description: "Konfigurasi jam pelajaran & jadwal KBM",
+    },
+    {
+      id: "jadwal",
+      label: "Mapping Jadwal",
+      icon: "calendar_month",
+      count: "On Going",
+      description: "Pemetaan jadwal pelajaran & hari mengajar guru (On Going)",
+      isOngoing: true,
+    },
+    {
+      id: "penilaian",
+      label: "Kolom Penilaian",
+      icon: "fact_check",
+      count: assessmentComponentsList.length,
+      description: "Konfigurasi kolom komponen penilaian",
+    },
+  ];
+
   const pager = usePagination(rows, {
     resetKey: `${filterType}|${filterActive}`,
   });
@@ -575,6 +743,7 @@ export function SubjectsPage() {
   };
 
   const startEdit = (s: Subject) => {
+    setActiveTab("mapel");
     setEditingId(s.id);
     setForm({
       name: s.name,
@@ -670,20 +839,61 @@ export function SubjectsPage() {
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: "Total mapel", value: stats.total },
-          { label: "Aktif", value: stats.aktif },
-          { label: "Nonaktif", value: stats.nonaktif },
-          { label: "Jenis umum", value: stats.umum },
-        ].map((s) => (
-          <Card key={s.label} className="p-4">
-            <p className="app-label text-[11px]">{s.label}</p>
+        {currentTabStats.map((s) => (
+          <Card key={s.label} className="p-4 transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <p className="app-label text-[11px]">{s.label}</p>
+              {s.icon && (
+                <span className="material-symbols-outlined text-[18px] text-[var(--accent)] opacity-80">
+                  {s.icon}
+                </span>
+              )}
+            </div>
             <p className="font-display text-2xl font-bold mt-1 tabular-nums">{s.value}</p>
           </Card>
         ))}
       </div>
 
-      <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6">
+      {/* Tab Navigation Menu / Organizer Header */}
+      <div
+        className="flex items-center gap-1.5 p-1.5 rounded-2xl border overflow-x-auto no-scrollbar shadow-xs"
+        style={{ background: "var(--card)", borderColor: "var(--divider)" }}
+      >
+        {tabs.map((tab) => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => handleTabChange(tab.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap transition-all duration-200 cursor-pointer ${
+                active
+                  ? "bg-[var(--accent)] text-white shadow-sm font-bold"
+                  : "app-muted hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+              }`}
+              title={tab.description}
+            >
+              <span className="material-symbols-outlined text-[19px]">{tab.icon}</span>
+              <span>{tab.label}</span>
+              <span
+                className={`ml-1 px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums transition-colors ${
+                  active
+                    ? "bg-white/25 text-white"
+                    : tab.isOngoing
+                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                    : "bg-[var(--hover)] text-[var(--muted)] border border-[var(--divider)]"
+                }`}
+              >
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab Content 1: Mata Pelajaran */}
+      {activeTab === "mapel" && (
+        <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6">
         <Card className="p-5 md:p-6 space-y-4 h-fit lg:sticky lg:top-20">
           <div>
             <h2 className="font-display font-bold text-lg">
@@ -879,15 +1089,17 @@ export function SubjectsPage() {
           )}
         </Card>
       </div>
+      )}
 
-      <hr className="border-[var(--divider)] my-8" />
+      {/* Tab Content 2: Penugasan Guru */}
+      {activeTab === "guru" && (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <h2 className="font-display font-bold text-xl">Penugasan Guru (Tugas Guru)</h2>
+            <p className="text-xs app-muted">Pasangkan guru yang diimpor dari SSO ke mata pelajaran di SIAKAD.</p>
+          </div>
 
-      <div className="space-y-3">
-        <h2 className="font-display font-bold text-xl">Penugasan Guru (Tugas Guru)</h2>
-        <p className="text-xs app-muted">Pasangkan guru yang diimpor dari SSO ke mata pelajaran di SIAKAD.</p>
-      </div>
-
-      <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6 mt-4">
+          <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6">
         <Card className="p-5 md:p-6 space-y-4 h-fit">
           <div>
             <h2 className="font-display font-bold text-lg">Tugaskan Guru</h2>
@@ -1001,15 +1213,18 @@ export function SubjectsPage() {
           )}
         </Card>
       </div>
+        </div>
+      )}
 
-      <hr className="border-[var(--divider)] my-8" />
+      {/* Tab Content 3: Wali Kelas */}
+      {activeTab === "walikelas" && (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <h2 className="font-display font-bold text-xl">Penugasan Wali Kelas (Tugas Wali Kelas)</h2>
+            <p className="text-xs app-muted">Pasangkan guru sebagai Wali Kelas ke rombel/kelas di SIAKAD.</p>
+          </div>
 
-      <div className="space-y-3">
-        <h2 className="font-display font-bold text-xl">Penugasan Wali Kelas (Tugas Wali Kelas)</h2>
-        <p className="text-xs app-muted">Pasangkan guru sebagai Wali Kelas ke rombel/kelas di SIAKAD.</p>
-      </div>
-
-      <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6 mt-4">
+          <div className="grid lg:grid-cols-[320px_1fr] gap-4 md:gap-6">
         <Card className="p-5 md:p-6 space-y-4 h-fit">
           <div>
             <h2 className="font-display font-bold text-lg">Tugaskan Wali Kelas</h2>
@@ -1121,15 +1336,18 @@ export function SubjectsPage() {
           )}
         </Card>
       </div>
+        </div>
+      )}
 
-      <hr className="border-[var(--divider)] my-8" />
+      {/* Tab Content 4: Jam Mengajar */}
+      {activeTab === "jam" && (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <h2 className="font-display font-bold text-xl">Konfigurasi Jam Mengajar</h2>
+            <p className="text-xs app-muted">Atur pembagian jam pelajaran untuk pengisian Jurnal Guru.</p>
+          </div>
 
-      <div className="space-y-3">
-        <h2 className="font-display font-bold text-xl">Konfigurasi Jam Mengajar</h2>
-        <p className="text-xs app-muted">Atur pembagian jam pelajaran untuk pengisian Jurnal Guru.</p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start mt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* Form Tambah Jam */}
         <Card>
           <CardHeader title="Tambah Jam Mengajar" />
@@ -1240,19 +1458,84 @@ export function SubjectsPage() {
           )}
         </Card>
       </div>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Konfigurasi Kolom Penilaian (Assessment Components) */}
-      {/* ------------------------------------------------------------------ */}
-      <div className="space-y-4 pt-4 border-t app-divider">
-        <div>
-          <h2 className="font-display font-bold text-lg">Konfigurasi Kolom Penilaian</h2>
-          <p className="text-xs app-muted mt-0.5">
-            Atur kolom komponen nilai yang akan tampil pada tabel Input Nilai Guru dan Raport/Dashboard Siswa.
-          </p>
         </div>
+      )}
 
-        <div className="grid lg:grid-cols-3 gap-6">
+      {/* Tab Content 5: Mapping Jadwal Mengajar (On Going) */}
+      {activeTab === "jadwal" && (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <h2 className="font-display font-bold text-xl">Mapping Jadwal Mengajar Guru</h2>
+              <Badge status="pending">Tahap Pengembangan · On Going</Badge>
+            </div>
+            <p className="text-xs app-muted">
+              Fitur pemetaan jadwal KBM harian guru (Hari, Jam Ke, Kelas, dan Mapel) untuk otomatisasi pengisian Jurnal Guru.
+            </p>
+          </div>
+
+          <Card className="p-8 md:p-12 text-center border-dashed border-2" style={{ borderColor: "var(--divider)" }}>
+            <div className="max-w-md mx-auto space-y-4">
+              <div
+                className="w-16 h-16 rounded-3xl mx-auto flex items-center justify-center shadow-inner"
+                style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+              >
+                <span className="material-symbols-outlined text-[36px]">calendar_month</span>
+              </div>
+
+              <div>
+                <h3 className="font-display font-bold text-lg" style={{ color: "var(--fg)" }}>
+                  Fitur Mapping Jadwal Sedang Dipersiapkan
+                </h3>
+                <p className="text-sm app-muted mt-1.5 leading-relaxed">
+                  Modul ini akan memungkinkan Super Admin dan Bagian Kurikulum untuk memetakan jadwal mengajar guru per hari (Senin–Sabtu), jam ke berapa, rombel kelas, dan mata pelajaran secara terstruktur.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left pt-2">
+                <div className="p-3.5 rounded-xl border border-[var(--divider)] bg-[var(--hover)]/50">
+                  <div className="flex items-center gap-2 font-semibold text-xs" style={{ color: "var(--fg)" }}>
+                    <span className="material-symbols-outlined text-[18px] text-[var(--accent)]">auto_stories</span>
+                    Otomatisasi Jurnal
+                  </div>
+                  <p className="text-[11px] app-muted mt-1">
+                    Guru langsung melihat jadwal mengajar hari ini saat membuka menu Jurnal Mengajar.
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-xl border border-[var(--divider)] bg-[var(--hover)]/50">
+                  <div className="flex items-center gap-2 font-semibold text-xs" style={{ color: "var(--fg)" }}>
+                    <span className="material-symbols-outlined text-[18px] text-[var(--accent)]">date_range</span>
+                    Jadwal Mingguan
+                  </div>
+                  <p className="text-[11px] app-muted mt-1">
+                    Matriks jadwal pelajaran per kelas dan per guru mengajar tiap semester aktif.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-semibold px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
+                  <span className="material-symbols-outlined text-[16px]">construction</span>
+                  Status: Dalam Proses Perancangan Skema Database & Antarmuka
+                </span>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Tab Content 6: Konfigurasi Kolom Penilaian */}
+      {activeTab === "penilaian" && (
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <h2 className="font-display font-bold text-xl">Konfigurasi Kolom Penilaian</h2>
+            <p className="text-xs app-muted">
+              Atur kolom komponen nilai yang akan tampil pada tabel Input Nilai Guru dan Raport/Dashboard Siswa.
+            </p>
+          </div>
+
+          <div className="grid lg:grid-cols-3 gap-6">
           {/* Form Tambah/Edit Kolom Penilaian */}
           <Card className="p-5 md:p-6 space-y-4 h-fit">
             <div>
@@ -1437,6 +1720,7 @@ export function SubjectsPage() {
           </Card>
         </div>
       </div>
+      )}
     </div>
   );
 }

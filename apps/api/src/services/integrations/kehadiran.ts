@@ -7,10 +7,10 @@
  * Detail presensi harian tetap di app Kehadiran; SINTESA hanya agregat per siswa
  * untuk matrix walikelas & dashboard siswa.
  */
-import { eq } from "drizzle-orm";
+import { eq, or, and, isNull } from "drizzle-orm";
 import { env } from "../../env.js";
 import { db } from "../../db/index.js";
-import { externalSyncLogs, students } from "../../db/schema/index.js";
+import { externalSyncLogs, students, grades } from "../../db/schema/index.js";
 import { isGdsConfigured } from "./gds.js";
 
 export type KehadiranRekap = {
@@ -82,7 +82,40 @@ export async function fetchKehadiranRekap(): Promise<KehadiranRekap[]> {
 
 export async function applyKehadiranRekap(rows: KehadiranRekap[]) {
   let updated = 0;
+  let lockedCount = 0;
   for (const row of rows) {
+    if (!row.nisn && !row.nis) continue;
+
+    const conds = [];
+    if (row.nisn) {
+      conds.push(eq(students.nisn, row.nisn));
+      conds.push(eq(students.nis, row.nisn));
+    }
+    if (row.nis && row.nis !== row.nisn) {
+      conds.push(eq(students.nis, row.nis));
+      conds.push(eq(students.nisn, row.nis));
+    }
+
+    const [st] = await db
+      .select({ id: students.id })
+      .from(students)
+      .where(or(...conds))
+      .limit(1);
+
+    if (!st) continue;
+
+    // Cek apakah raport siswa sudah disetujui (Approved) oleh Wali Kelas
+    const [approvedGrade] = await db
+      .select({ id: grades.id })
+      .from(grades)
+      .where(and(eq(grades.studentId, st.id), eq(grades.status, "approved"), isNull(grades.deletedAt)))
+      .limit(1);
+
+    if (approvedGrade) {
+      lockedCount++;
+      continue;
+    }
+
     const patch: Record<string, any> = {
       sakit: Math.max(0, Math.round(row.sakit || 0)),
       izin: Math.max(0, Math.round(row.izin || 0)),
@@ -94,28 +127,15 @@ export async function applyKehadiranRekap(rows: KehadiranRekap[]) {
     if (row.catatan !== undefined) {
       patch.catatanKehadiran = row.catatan || null;
     }
-    
-    if (row.nisn) {
-      const r = await db
-        .update(students)
-        .set(patch)
-        .where(eq(students.nisn, row.nisn))
-        .returning({ id: students.id });
-      if (r[0]) {
-        updated += 1;
-        continue;
-      }
-    }
-    if (row.nis) {
-      const r = await db
-        .update(students)
-        .set(patch)
-        .where(eq(students.nis, row.nis))
-        .returning({ id: students.id });
-      if (r[0]) updated += 1;
-    }
+
+    const r = await db
+      .update(students)
+      .set(patch)
+      .where(eq(students.id, st.id))
+      .returning({ id: students.id });
+    if (r[0]) updated += 1;
   }
-  return { updated, total: rows.length };
+  return { updated, total: rows.length, lockedCount };
 }
 
 export async function syncKehadiran() {

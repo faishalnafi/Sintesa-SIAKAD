@@ -513,8 +513,8 @@ export function WalikelasMatrixPage() {
             disabled={busy || !selectedClassId || Boolean(summary && summary.ready === 0)}
             title={
               summary && summary.ready === 0
-                ? "Tidak ada siswa yang semua mapelnya sudah Submitted"
-                : "Approve raport bagi semua siswa yang seluruh mapelnya sudah Submitted"
+                ? "Tidak ada siswa yang siap disetujui. Pastikan seluruh guru mapel dan aplikasi PASTI (GDS & Kehadiran) telah melakukan pengiriman data (Submit)."
+                : "Approve raport bagi semua siswa yang seluruh mapel dan data aplikasi PASTI-nya sudah Submitted"
             }
           >
             <span className="material-symbols-outlined text-[18px]">verified</span>
@@ -712,10 +712,12 @@ export function WalikelasMatrixPage() {
                                 ? "Siap Disetujui"
                                 : s.status === "approved"
                                 ? "Disetujui"
+                                : s.status === "draft" && s.submissionMissingReason
+                                ? "Draft Mapel & PASTI"
                                 : s.status === "draft"
                                 ? `Draft (${s.draftCount ?? 1} Mapel)`
                                 : s.submissionMissingReason
-                                ? "Menunggu GDS/BK"
+                                ? "Menunggu PASTI"
                                 : s.status === "incomplete"
                                 ? "Belum Lengkap"
                                 : s.status}
@@ -745,7 +747,7 @@ export function WalikelasMatrixPage() {
                                   className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !py-1 !px-2.5 text-xs gap-1 shadow-sm font-medium"
                                   disabled={busy}
                                   onClick={() => handleApproveSingle(s.studentId, s.name)}
-                                  title="Semua mapel sudah Submitted dan data GDS/BK lengkap. Klik untuk menyetujui raport."
+                                  title="Semua mapel sudah Submitted dan data PASTI (GDS & Kehadiran) lengkap. Klik untuk menyetujui raport."
                                 >
                                   <span className="material-symbols-outlined text-[16px]">verified</span>
                                   Approve Raport
@@ -753,10 +755,10 @@ export function WalikelasMatrixPage() {
                               ) : s.status === "draft" ? (
                                 <span
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium border border-amber-500/20"
-                                  title={`${s.draftCount ?? "Ada"} mapel masih berstatus Draft (belum disubmit oleh guru mapel). Semua mapel harus Submitted sebelum bisa diapprove.`}
+                                  title={`${s.draftCount ?? "Ada"} mapel masih berstatus Draft.${s.submissionMissingReason ? ` Dan ${s.submissionMissingReason}.` : ""} Seluruh mapel dan aplikasi PASTI wajib Submitted sebelum raport dapat disetujui.`}
                                 >
                                   <span className="material-symbols-outlined text-[14px]">pending_actions</span>
-                                  Ada Mapel Draft
+                                  {s.submissionMissingReason ? "Draft & Menunggu PASTI" : "Ada Mapel Draft"}
                                 </span>
                               ) : (
                                 <span
@@ -766,7 +768,7 @@ export function WalikelasMatrixPage() {
                                   <span className="material-symbols-outlined text-[14px]">
                                     {s.submissionMissingReason ? "hourglass_empty" : "lock"}
                                   </span>
-                                  {s.submissionMissingReason ? "Menunggu Data" : "Belum Lengkap"}
+                                  {s.submissionMissingReason ? "Menunggu Data PASTI" : "Belum Lengkap"}
                                 </span>
                               )}
 

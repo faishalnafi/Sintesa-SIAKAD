@@ -543,6 +543,33 @@ teacherRoutes.patch("/grades/draft", async (c) => {
     }
   }
 
+  // Cek apakah nilai mapel di kelas ini sudah disetujui (Approved) oleh Wali Kelas
+  const approvedExisting = await db
+    .select({ id: grades.id })
+    .from(grades)
+    .where(
+      and(
+        or(eq(grades.classId, targetClassId), eq(grades.classId, body.classId)),
+        eq(grades.subjectId, body.subjectId),
+        eq(grades.academicYear, body.academicYear),
+        eq(grades.semester, body.semester),
+        eq(grades.status, "approved"),
+        isNull(grades.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  if (approvedExisting.length > 0) {
+    return c.json(
+      {
+        success: false,
+        isApprovedLocked: true,
+        message: "Nilai mata pelajaran ini telah disetujui (Approved) oleh Wali Kelas dan telah dikunci. Guru Mapel tidak dapat mengubah atau mengirim draft nilai lagi. Silakan hubungi Wali Kelas jika diperlukan koreksi ulang.",
+      },
+      403,
+    );
+  }
+
   const saved = [];
 
   for (const item of body.items) {
@@ -567,7 +594,18 @@ teacherRoutes.patch("/grades/draft", async (c) => {
       )
       .limit(1);
 
-    if (existing && (existing.status === "submitted" || existing.status === "approved")) {
+    if (existing && existing.status === "approved") {
+      return c.json(
+        {
+          success: false,
+          isApprovedLocked: true,
+          message: "Nilai siswa telah disetujui (Approved) oleh Wali Kelas dan dikunci. Hubungi Wali Kelas jika diperlukan koreksi ulang.",
+        },
+        403,
+      );
+    }
+
+    if (existing && existing.status === "submitted") {
       continue;
     }
 
@@ -664,6 +702,33 @@ const submitSchema = z.object({
     }
   }
 
+  // Cek apakah nilai mapel ini sudah disetujui (Approved) oleh Wali Kelas
+  const approvedRows = await db
+    .select({ id: grades.id })
+    .from(grades)
+    .where(
+      and(
+        or(eq(grades.classId, targetClassId), eq(grades.classId, body.classId)),
+        eq(grades.subjectId, body.subjectId),
+        eq(grades.academicYear, body.academicYear),
+        eq(grades.semester, body.semester),
+        eq(grades.status, "approved"),
+        isNull(grades.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  if (approvedRows.length > 0) {
+    return c.json(
+      {
+        success: false,
+        isApprovedLocked: true,
+        message: "Nilai mata pelajaran ini telah disetujui (Approved) oleh Wali Kelas dan telah dikunci. Anda tidak dapat mengirim nilai lagi. Silakan hubungi Wali Kelas jika ingin meminta koreksi ulang.",
+      },
+      403,
+    );
+  }
+
   // 1. Ambil komponen penilaian yang aktif (misal UH1, T1, STS)
   const activeComps = await db
     .select()
@@ -731,6 +796,32 @@ const submitSchema = z.object({
   }
 
   if (toSubmitIds.length === 0) {
+    // Cek apakah seluruh baris sebenarnya sudah berstatus submitted
+    const submittedRows = await db
+      .select({ id: grades.id })
+      .from(grades)
+      .where(
+        and(
+          or(eq(grades.classId, targetClassId), eq(grades.classId, body.classId)),
+          eq(grades.subjectId, body.subjectId),
+          eq(grades.academicYear, body.academicYear),
+          eq(grades.semester, body.semester),
+          eq(grades.status, "submitted"),
+          isNull(grades.deletedAt),
+        ),
+      )
+      .limit(1);
+
+    if (submittedRows.length > 0) {
+      return c.json(
+        {
+          success: false,
+          message: "Seluruh nilai mata pelajaran ini sudah berhasil dikirim (Submitted) ke Wali Kelas dan sedang menunggu persetujuan.",
+        },
+        400,
+      );
+    }
+
     return c.json(
       {
         success: false,

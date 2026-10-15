@@ -1468,6 +1468,25 @@ function SyncSourceConfigModal({
                 {copied === "post" ? "Copied!" : "Copy URL"}
               </button>
             </div>
+            <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-[var(--surface)] border" style={{ borderColor: "var(--input-border)" }}>
+              <span className="truncate"><strong>Status API (Lock Check):</strong> /api/v1/pasti/status</span>
+              <button
+                type="button"
+                onClick={() => copyText(`${window.location.origin}/api/v1/pasti/status`, "status")}
+                className="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 shrink-0 font-sans font-medium"
+              >
+                {copied === "status" ? "Copied!" : "Copy URL"}
+              </button>
+            </div>
+            <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-800 dark:text-amber-300 text-[11px] font-sans space-y-1">
+              <div className="font-semibold flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px]">lock</span>
+                Aturan Penguncian (Approval Lock):
+              </div>
+              <p className="text-[10px] leading-relaxed">
+                Jika raport siswa sudah disetujui (Approved) oleh Wali Kelas, SINTESA akan mengunci data siswa tersebut dan menolak (HTTP 423) pembaruan data dari PASTI sampai Wali Kelas melakukan koreksi ulang.
+              </p>
+            </div>
             <button
               type="button"
               onClick={() => setShowDocs(!showDocs)}

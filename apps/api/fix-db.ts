@@ -59,7 +59,12 @@ async function main() {
     await db.execute(sql`ALTER TABLE teacher_journals ADD COLUMN IF NOT EXISTS group_id uuid;`);
     await db.execute(sql`ALTER TABLE teacher_journals ADD COLUMN IF NOT EXISTS deleted_at timestamp with time zone;`);
     await db.execute(sql`ALTER TABLE grades ADD COLUMN IF NOT EXISTS deleted_at timestamp with time zone;`);
-    console.log("SUCCESS: group_id & deleted_at columns verified!");
+    await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_username varchar(100);`);
+    await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS is_gds_submitted boolean DEFAULT false NOT NULL;`);
+    await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS is_kehadiran_submitted boolean DEFAULT false NOT NULL;`);
+    await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS gds_submitted_at timestamp with time zone;`);
+    await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS kehadiran_submitted_at timestamp with time zone;`);
+    console.log("SUCCESS: group_id, deleted_at, and sso/tracking columns verified!");
   } catch (err: any) {
     console.error("ERROR (alter table):", err.message);
   }
