@@ -64,6 +64,13 @@ async function main() {
     await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS is_kehadiran_submitted boolean DEFAULT false NOT NULL;`);
     await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS gds_submitted_at timestamp with time zone;`);
     await db.execute(sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS kehadiran_submitted_at timestamp with time zone;`);
+    await db.execute(sql`
+      UPDATE students
+      SET is_gds_submitted = true, is_kehadiran_submitted = true
+      WHERE id IN (
+        SELECT student_id FROM grades WHERE status = 'approved' AND deleted_at IS NULL GROUP BY student_id
+      );
+    `);
     console.log("SUCCESS: group_id, deleted_at, and sso/tracking columns verified!");
   } catch (err: any) {
     console.error("ERROR (alter table):", err.message);

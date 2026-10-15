@@ -417,6 +417,15 @@ homeroomRoutes.post("/approve", async (c) => {
       });
     }
 
+    await db
+      .update(students)
+      .set({
+        isGdsSubmitted: true,
+        isKehadiranSubmitted: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(students.id, st.id));
+
     approvedList.push({ id: st.id, name: st.name });
   }
 

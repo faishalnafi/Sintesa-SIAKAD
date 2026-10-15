@@ -33,6 +33,12 @@ import {
       ALTER TABLE students ADD COLUMN IF NOT EXISTS gds_submitted_at TIMESTAMP WITH TIME ZONE;
       ALTER TABLE students ADD COLUMN IF NOT EXISTS kehadiran_submitted_at TIMESTAMP WITH TIME ZONE;
 
+      UPDATE students
+      SET is_gds_submitted = TRUE, is_kehadiran_submitted = TRUE
+      WHERE id IN (
+        SELECT student_id FROM grades WHERE status = 'approved' AND deleted_at IS NULL GROUP BY student_id
+      );
+
       CREATE TABLE IF NOT EXISTS teacher_subjects (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

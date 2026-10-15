@@ -108,10 +108,11 @@ async function checkStudentApprovalStatus(
   const submittedCount = studentGrades.filter((g) => g.status === "submitted").length;
   const allGradesApproved = hasGrades && studentGrades.every((g) => g.status === "approved");
 
-  const isGdsApproved = Boolean(student.isGdsSubmitted);
-  const isKehadiranApproved = Boolean(student.isKehadiranSubmitted);
-
-  const isFullyApproved = allGradesApproved && isGdsApproved && isKehadiranApproved;
+  // Jika nilai mata pelajaran sudah disetujui (Approved) oleh Wali Kelas di matriks persetujuan,
+  // maka raport siswa secara resmi telah sah/disetujui dan berhak diunduh sebagai PDF.
+  const isFullyApproved = allGradesApproved;
+  const isGdsApproved = Boolean(student.isGdsSubmitted || allGradesApproved);
+  const isKehadiranApproved = Boolean(student.isKehadiranSubmitted || allGradesApproved);
 
   const pendingReasons: string[] = [];
   if (!allGradesApproved) {
@@ -124,12 +125,6 @@ async function checkStudentApprovalStatus(
     } else {
       pendingReasons.push("nilai mata pelajaran belum disetujui wali kelas");
     }
-  }
-  if (!isKehadiranApproved) {
-    pendingReasons.push("kehadiran BK (belum diserahkan)");
-  }
-  if (!isGdsApproved) {
-    pendingReasons.push("kedisiplinan GDS (belum diserahkan)");
   }
 
   const pendingMessage = !isFullyApproved
