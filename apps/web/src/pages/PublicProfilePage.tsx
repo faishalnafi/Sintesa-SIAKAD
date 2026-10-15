@@ -4,6 +4,7 @@ import Swal from "sweetalert2";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
 
 function computeMD5(str: string): string {
   function rotateLeft(lValue: number, iShiftBits: number) {
@@ -119,6 +120,8 @@ type ProfileData = {
     sakit: number;
     izin: number;
     alpa: number;
+    catatanGds?: string | null;
+    catatanKehadiran?: string | null;
     username: string | null;
     email?: string | null;
     avatarUrl: string | null;
@@ -232,6 +235,16 @@ export function PublicProfilePage() {
       fetchProfile(selectedYear);
     }
   }, [uuid, selectedYear]);
+
+  // Real-time SSE listener agar saat PASTi push, halaman publik langsung update otomatis tanpa reload
+  useRealtimeEvent(
+    ["student_updated", "sync_completed"],
+    () => {
+      if (uuid) {
+        fetchProfile(selectedYear);
+      }
+    }
+  );
 
   const handleShare = async () => {
     const url = window.location.href;
@@ -414,11 +427,35 @@ export function PublicProfilePage() {
                       {s.label}
                     </div>
                     <div className="font-display text-3xl font-extrabold mt-3 text-primary">
-                      {data?.grades && data.grades.length > 0 ? (s.value ?? "–") : "–"}
+                      {s.value !== null && s.value !== undefined ? s.value : 0}
                     </div>
                   </Card>
                 ))}
               </div>
+
+              {/* Catatan GDS & Presensi jika ada */}
+              {(student.catatanGds || student.catatanKehadiran) && (
+                <div className="space-y-2">
+                  {student.catatanGds && (
+                    <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-xs text-primary flex items-start gap-2.5 shadow-sm">
+                      <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">stars</span>
+                      <div>
+                        <span className="font-bold">Catatan Kedisiplinan (GDS): </span>
+                        {student.catatanGds}
+                      </div>
+                    </div>
+                  )}
+                  {student.catatanKehadiran && (
+                    <div className="p-3.5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2.5 shadow-sm">
+                      <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">event_note</span>
+                      <div>
+                        <span className="font-bold">Catatan Kehadiran (BK): </span>
+                        {student.catatanKehadiran}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Tabel Raport Nilai */}
               <Card className="overflow-hidden border border-outline-variant/30 shadow-md">

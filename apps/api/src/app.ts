@@ -8,10 +8,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { eq, or, and, sql, desc, asc } from "drizzle-orm";
+import { eq, or, and, sql, desc, asc, isNull } from "drizzle-orm";
 import { env } from "./env.js";
 import { db } from "./db/index.js";
 import { academicYears, classes, students, users, subjects, grades, assessmentComponents, apiKeys } from "./db/schema/index.js";
+import { broadcastRealtimeEvent } from "./services/realtime.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { adminRoutes } from "./modules/admin/routes.js";
 import { teacherRoutes } from "./modules/teacher/routes.js";
@@ -29,6 +30,11 @@ import {
   try {
     await db.execute(sql`
       ALTER TABLE grades DROP COLUMN IF EXISTS average;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_username VARCHAR(100);
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS is_gds_submitted BOOLEAN DEFAULT FALSE NOT NULL;
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS is_kehadiran_submitted BOOLEAN DEFAULT FALSE NOT NULL;
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS gds_submitted_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE students ADD COLUMN IF NOT EXISTS kehadiran_submitted_at TIMESTAMP WITH TIME ZONE;
 
       CREATE TABLE IF NOT EXISTS teacher_subjects (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -349,130 +355,451 @@ async function validateApiKeyMiddleware(c: any, next: any) {
 
 app.use("/api/v1/*", validateApiKeyMiddleware);
 
-// Integration endpoint for external consumer apps (siswa-manage, GDS, Kehadiran)
+// Integration endpoint for external consumer apps (siswa-manage, GDS, Kehadiran, PASTI)
 app.get("/api/v1/students", async (c) => {
   const rows = await db
     .select({
       id: students.id,
-      nisn: students.nisn,
+      nis: students.nis,
+      nisn: sql<string>`COALESCE(${students.nisn}, ${students.nis})`,
       name: students.name,
       kelasLabel: students.kelasLabel,
-      academicYear: academicYears.name,
+      classId: students.classId,
+      academicYear: sql<string>`COALESCE(${academicYears.name}, ${classes.academicYear}, '2026/2027')`,
+      poinGds: students.poinGds,
+      catatanGds: students.catatanGds,
+      isGdsSubmitted: students.isGdsSubmitted,
+      gdsSubmittedAt: students.gdsSubmittedAt,
+      sakit: students.sakit,
+      izin: students.izin,
+      alpa: students.alpa,
+      catatanKehadiran: students.catatanKehadiran,
+      isKehadiranSubmitted: students.isKehadiranSubmitted,
+      kehadiranSubmittedAt: students.kehadiranSubmittedAt,
     })
     .from(students)
     .leftJoin(classes, eq(students.classId, classes.id))
     .leftJoin(academicYears, eq(students.academicYearId, academicYears.id))
     .where(eq(students.memberStatus, "siswa"));
-  return c.json({ success: true, data: rows });
+
+  // Cari seluruh siswa yang raportnya sudah disetujui (Approved) oleh Wali Kelas
+  const approvedRecords = await db
+    .select({ studentId: grades.studentId })
+    .from(grades)
+    .where(and(eq(grades.status, "approved"), isNull(grades.deletedAt)))
+    .groupBy(grades.studentId);
+  const approvedSet = new Set(approvedRecords.map((r) => r.studentId));
+
+  const data = rows.map((s) => {
+    const isApproved = approvedSet.has(s.id);
+    return {
+      ...s,
+      isApproved,
+      isLocked: isApproved,
+      lockReason: isApproved
+        ? "Raport siswa telah disetujui (Approved) oleh Wali Kelas dan terkunci."
+        : null,
+    };
+  });
+
+  return c.json({ success: true, data });
 });
 
-// Webhook Push API: Menerima PUSH Poin GDS dari Aplikasi Pihak Ketiga
+// Endpoint Informasi Status Integrasi PASTI (cek lock & status per siswa atau per kelas)
+app.get("/api/v1/pasti/status", async (c) => {
+  const nisn = c.req.query("nisn");
+  const nis = c.req.query("nis");
+  const studentId = c.req.query("studentId");
+  const classId = c.req.query("classId");
+
+  const conds = [];
+  if (studentId) conds.push(eq(students.id, studentId));
+  if (nisn) {
+    conds.push(eq(students.nisn, nisn));
+    conds.push(eq(students.nis, nisn));
+  }
+  if (nis && nis !== nisn) {
+    conds.push(eq(students.nis, nis));
+    conds.push(eq(students.nisn, nis));
+  }
+  if (classId) conds.push(eq(students.classId, classId));
+
+  const rows = await db
+    .select({
+      id: students.id,
+      nis: students.nis,
+      nisn: sql<string>`COALESCE(${students.nisn}, ${students.nis})`,
+      name: students.name,
+      kelasLabel: students.kelasLabel,
+      classId: students.classId,
+      academicYear: sql<string>`COALESCE(${academicYears.name}, ${classes.academicYear}, '2026/2027')`,
+      poinGds: students.poinGds,
+      catatanGds: students.catatanGds,
+      isGdsSubmitted: students.isGdsSubmitted,
+      gdsSubmittedAt: students.gdsSubmittedAt,
+      sakit: students.sakit,
+      izin: students.izin,
+      alpa: students.alpa,
+      catatanKehadiran: students.catatanKehadiran,
+      isKehadiranSubmitted: students.isKehadiranSubmitted,
+      kehadiranSubmittedAt: students.kehadiranSubmittedAt,
+    })
+    .from(students)
+    .leftJoin(classes, eq(students.classId, classes.id))
+    .leftJoin(academicYears, eq(students.academicYearId, academicYears.id))
+    .where(and(eq(students.memberStatus, "siswa"), conds.length > 0 ? or(...conds) : sql`true`));
+
+  const approvedRecords = await db
+    .select({ studentId: grades.studentId })
+    .from(grades)
+    .where(and(eq(grades.status, "approved"), isNull(grades.deletedAt)))
+    .groupBy(grades.studentId);
+  const approvedSet = new Set(approvedRecords.map((r) => r.studentId));
+
+  const data = rows.map((s) => {
+    const isApproved = approvedSet.has(s.id);
+    return {
+      ...s,
+      isApproved,
+      isLocked: isApproved,
+      lockReason: isApproved
+        ? "Raport siswa telah disetujui (Approved) oleh Wali Kelas dan telah dikunci. Hubungi Wali Kelas jika ingin meminta koreksi ulang."
+        : null,
+      statusPasti: {
+        gds: s.isGdsSubmitted ? "submitted" : "draft",
+        kehadiran: s.isKehadiranSubmitted ? "submitted" : "draft",
+        canEdit: !isApproved,
+      },
+    };
+  });
+
+  return c.json({
+    success: true,
+    total: data.length,
+    lockedCount: data.filter((d) => d.isLocked).length,
+    data,
+  });
+});
+
+// Webhook Push API: Menerima PUSH Poin GDS dari Aplikasi Pihak Ketiga (PASTI GDS)
 app.post("/api/v1/webhooks/gds", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const points = (body.points || body.data || []) as Array<{ nisn: string; poin: number; catatan?: string }>;
+    const points = (body.points || body.data || []) as Array<{
+      student_id?: string;
+      id?: string;
+      studentId?: string;
+      sintesa_student_id?: string;
+      nisn?: string;
+      nis?: string;
+      poin: number;
+      catatan?: string;
+    }>;
     if (!Array.isArray(points) || points.length === 0) {
       return c.json({ success: false, message: "Payload 'points' array wajib diisi" }, 400);
     }
+
     let updated = 0;
-    for (const p of points) {
-      if (!p.nisn) continue;
+    const lockedStudents: Array<{ id: string; name: string; nisn?: string | null; reason: string }> = [];
 
-      const setData: Record<string, unknown> = {
-        poinGds: Number(p.poin) || 0,
-        updatedAt: new Date(),
-      };
-      // Simpan catatan jika dikirim (null = hapus, undefined = biarkan)
-      if (p.catatan !== undefined) setData.catatanGds = p.catatan || null;
+    const chunkSize = 20;
+    for (let i = 0; i < points.length; i += chunkSize) {
+      const chunk = points.slice(i, i + chunkSize);
+      await Promise.all(
+        chunk.map(async (p) => {
+          const studentId = p.student_id || p.id || p.studentId || p.sintesa_student_id;
+          const nisn = p.nisn ? String(p.nisn).trim() : null;
+          const nis = p.nis ? String(p.nis).trim() : null;
 
-      const [res] = await db
-        .update(students)
-        .set(setData)
-        .where(eq(students.nisn, p.nisn))
-        .returning({ id: students.id });
-      if (res) updated++;
+          if (!studentId && !nisn && !nis) return;
+
+          const conditions = [];
+          if (studentId) conditions.push(eq(students.id, studentId));
+          if (nisn) {
+            conditions.push(eq(students.nisn, nisn));
+            conditions.push(eq(students.nis, nisn));
+          }
+          if (nis && nis !== nisn) {
+            conditions.push(eq(students.nis, nis));
+            conditions.push(eq(students.nisn, nis));
+          }
+
+          const [targetStudent] = await db
+            .select({ id: students.id, name: students.name, nisn: students.nisn, nis: students.nis })
+            .from(students)
+            .where(or(...conditions))
+            .limit(1);
+
+          if (!targetStudent) return;
+
+          // Periksa apakah siswa sudah di-approve oleh Wali Kelas
+          const [approvedGrade] = await db
+            .select({ id: grades.id })
+            .from(grades)
+            .where(
+              and(
+                eq(grades.studentId, targetStudent.id),
+                eq(grades.status, "approved"),
+                isNull(grades.deletedAt),
+              ),
+            )
+            .limit(1);
+
+          if (approvedGrade) {
+            lockedStudents.push({
+              id: targetStudent.id,
+              name: targetStudent.name,
+              nisn: targetStudent.nisn || targetStudent.nis,
+              reason: "Raport siswa telah disetujui (Approved) oleh Wali Kelas dan telah dikunci.",
+            });
+            return;
+          }
+
+          const setData: Record<string, unknown> = {
+            poinGds: Number(p.poin) || 0,
+            isGdsSubmitted: true,
+            gdsSubmittedAt: new Date(),
+            updatedAt: new Date(),
+          };
+          if (p.catatan !== undefined) setData.catatanGds = p.catatan || null;
+
+          const [res] = await db
+            .update(students)
+            .set(setData)
+            .where(eq(students.id, targetStudent.id))
+            .returning({ id: students.id });
+          if (res) updated++;
+        }),
+      );
     }
-    return c.json({ success: true, message: `Berhasil memperbarui ${updated} poin GDS siswa.`, updated });
+
+    if (updated > 0) {
+      broadcastRealtimeEvent({
+        type: "student_updated",
+        source: "gds",
+      });
+    }
+
+    if (updated === 0 && lockedStudents.length > 0) {
+      return c.json(
+        {
+          success: false,
+          locked: true,
+          message: `Pengiriman data GDS ditolak karena seluruh siswa terpilih (${lockedStudents.length} siswa) telah disetujui (Approved) oleh Wali Kelas dan telah dikunci. Hubungi Wali Kelas jika ingin meminta koreksi ulang.`,
+          updated: 0,
+          lockedCount: lockedStudents.length,
+          lockedStudents,
+        },
+        423,
+      );
+    }
+
+    if (lockedStudents.length > 0) {
+      return c.json({
+        success: true,
+        message: `Berhasil memperbarui ${updated} poin GDS siswa. Sebanyak ${lockedStudents.length} siswa dilewati karena raport telah disetujui (Approved) oleh Wali Kelas.`,
+        updated,
+        lockedCount: lockedStudents.length,
+        lockedStudents,
+      });
+    }
+
+    return c.json({
+      success: true,
+      message: `Berhasil memperbarui ${updated} poin GDS siswa.`,
+      updated,
+      lockedCount: 0,
+    });
   } catch (e) {
     return c.json({ success: false, message: e instanceof Error ? e.message : "Webhook error" }, 500);
   }
 });
 
-// Webhook Push API: Menerima PUSH Absensi BK/Kehadiran dari Aplikasi Pihak Ketiga
+// Webhook Push API: Menerima PUSH Absensi BK/Kehadiran dari Aplikasi Pihak Ketiga (PASTI Kehadiran)
 app.post("/api/v1/webhooks/kehadiran", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const rekap = (body.rekap || body.data || []) as Array<{ nisn: string; sakit?: number; izin?: number; alpa?: number; catatan?: string }>;
+    const rekap = (body.rekap || body.data || []) as Array<{
+      student_id?: string;
+      id?: string;
+      studentId?: string;
+      sintesa_student_id?: string;
+      nisn?: string;
+      nis?: string;
+      sakit?: number;
+      izin?: number;
+      alpa?: number;
+      catatan?: string;
+    }>;
     if (!Array.isArray(rekap) || rekap.length === 0) {
       return c.json({ success: false, message: "Payload 'rekap' array wajib diisi" }, 400);
     }
+
     let updated = 0;
-    for (const r of rekap) {
-      if (!r.nisn) continue;
+    const lockedStudents: Array<{ id: string; name: string; nisn?: string | null; reason: string }> = [];
 
-      const setData: Record<string, unknown> = {
-        sakit: Number(r.sakit) || 0,
-        izin: Number(r.izin) || 0,
-        alpa: Number(r.alpa) || 0,
-        updatedAt: new Date(),
-      };
-      // Simpan catatan jika dikirim (null = hapus, undefined = biarkan)
-      if (r.catatan !== undefined) setData.catatanKehadiran = r.catatan || null;
+    const chunkSize = 20;
+    for (let i = 0; i < rekap.length; i += chunkSize) {
+      const chunk = rekap.slice(i, i + chunkSize);
+      await Promise.all(
+        chunk.map(async (r) => {
+          const studentId = r.student_id || r.id || r.studentId || r.sintesa_student_id;
+          const nisn = r.nisn ? String(r.nisn).trim() : null;
+          const nis = r.nis ? String(r.nis).trim() : null;
 
-      const [res] = await db
-        .update(students)
-        .set(setData)
-        .where(eq(students.nisn, r.nisn))
-        .returning({ id: students.id });
-      if (res) updated++;
+          if (!studentId && !nisn && !nis) return;
+
+          const conditions = [];
+          if (studentId) conditions.push(eq(students.id, studentId));
+          if (nisn) {
+            conditions.push(eq(students.nisn, nisn));
+            conditions.push(eq(students.nis, nisn));
+          }
+          if (nis && nis !== nisn) {
+            conditions.push(eq(students.nis, nis));
+            conditions.push(eq(students.nisn, nis));
+          }
+
+          const [targetStudent] = await db
+            .select({ id: students.id, name: students.name, nisn: students.nisn, nis: students.nis })
+            .from(students)
+            .where(or(...conditions))
+            .limit(1);
+
+          if (!targetStudent) return;
+
+          // Periksa apakah siswa sudah di-approve oleh Wali Kelas
+          const [approvedGrade] = await db
+            .select({ id: grades.id })
+            .from(grades)
+            .where(
+              and(
+                eq(grades.studentId, targetStudent.id),
+                eq(grades.status, "approved"),
+                isNull(grades.deletedAt),
+              ),
+            )
+            .limit(1);
+
+          if (approvedGrade) {
+            lockedStudents.push({
+              id: targetStudent.id,
+              name: targetStudent.name,
+              nisn: targetStudent.nisn || targetStudent.nis,
+              reason: "Raport siswa telah disetujui (Approved) oleh Wali Kelas dan telah dikunci.",
+            });
+            return;
+          }
+
+          const setData: Record<string, unknown> = {
+            sakit: Number(r.sakit) || 0,
+            izin: Number(r.izin) || 0,
+            alpa: Number(r.alpa) || 0,
+            isKehadiranSubmitted: true,
+            kehadiranSubmittedAt: new Date(),
+            updatedAt: new Date(),
+          };
+          if (r.catatan !== undefined) setData.catatanKehadiran = r.catatan || null;
+
+          const [res] = await db
+            .update(students)
+            .set(setData)
+            .where(eq(students.id, targetStudent.id))
+            .returning({ id: students.id });
+          if (res) updated++;
+        }),
+      );
     }
-    return c.json({ success: true, message: `Berhasil memperbarui ${updated} rekap absensi siswa.`, updated });
+
+    if (updated > 0) {
+      broadcastRealtimeEvent({
+        type: "student_updated",
+        source: "kehadiran",
+      });
+    }
+
+    if (updated === 0 && lockedStudents.length > 0) {
+      return c.json(
+        {
+          success: false,
+          locked: true,
+          message: `Pengiriman data kehadiran ditolak karena seluruh siswa terpilih (${lockedStudents.length} siswa) telah disetujui (Approved) oleh Wali Kelas dan telah dikunci. Hubungi Wali Kelas jika ingin meminta koreksi ulang.`,
+          updated: 0,
+          lockedCount: lockedStudents.length,
+          lockedStudents,
+        },
+        423,
+      );
+    }
+
+    if (lockedStudents.length > 0) {
+      return c.json({
+        success: true,
+        message: `Berhasil memperbarui ${updated} rekap absensi siswa. Sebanyak ${lockedStudents.length} siswa dilewati karena raport telah disetujui (Approved) oleh Wali Kelas.`,
+        updated,
+        lockedCount: lockedStudents.length,
+        lockedStudents,
+      });
+    }
+
+    return c.json({
+      success: true,
+      message: `Berhasil memperbarui ${updated} rekap absensi siswa.`,
+      updated,
+      lockedCount: 0,
+    });
   } catch (e) {
     return c.json({ success: false, message: e instanceof Error ? e.message : "Webhook error" }, 500);
   }
 });
-
-
 
 app.get("/api/public/profile/:uuid", async (c) => {
   const uuid = c.req.param("uuid");
   const academicYearParam = c.req.query("academicYear");
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
 
-  // 1. Ambil data siswa + user
-  const [studentData] = await db
-    .select({
-      id: students.id,
-      name: students.name,
-      nisn: students.nisn,
-      kelasLabel: students.kelasLabel,
-      poinGds: students.poinGds,
-      sakit: students.sakit,
-      izin: students.izin,
-      alpa: students.alpa,
-      username: users.username,
-      avatarUrl: users.avatarUrl,
-      alamat: students.alamat,
-      emailPribadi: students.emailPribadi,
-      noTelepon: students.noTelepon,
-      classId: students.classId,
-      gradeLevel: classes.gradeLevel,
-      className: classes.name,
-      jurusan: classes.jurusan,
-    })
-    .from(students)
-    .leftJoin(users, eq(students.userId, users.id))
-    .leftJoin(classes, eq(students.classId, classes.id))
-    .where(
-      or(
-        eq(students.id, uuid),
-        eq(students.userId, uuid),
-        eq(students.ssoMemberId, uuid),
-        eq(users.ssoId, uuid)
-      )
-    )
-    .limit(1);
+  // 1. Query data user + student secara fleksibel (support UUID, sso_username, username, sso_id, nisn, nis)
+  const [row] = await db.execute<any>(sql`
+    SELECT 
+      s.id as student_id,
+      s.name as student_name,
+      s.nis,
+      s.nisn,
+      s.kelas_label,
+      s.poin_gds,
+      s.sakit,
+      s.izin,
+      s.alpa,
+      s.catatan_gds,
+      s.catatan_kehadiran,
+      s.alamat,
+      s.email_pribadi,
+      s.no_telepon,
+      s.class_id,
+      c.grade_level,
+      c.name as class_name,
+      c.jurusan,
+      u.id as user_id,
+      u.name as user_name,
+      u.username,
+      u.sso_username,
+      u.avatar_url,
+      u.email
+    FROM users u
+    LEFT JOIN students s ON s.user_id = u.id
+    LEFT JOIN classes c ON s.class_id = c.id
+    WHERE 
+      (${isUuid} AND (u.id = ${isUuid ? uuid : null} OR s.id = ${isUuid ? uuid : null}))
+      OR u.sso_username = ${uuid}
+      OR u.username = ${uuid}
+      OR u.sso_id = ${uuid}
+      OR s.sso_member_id = ${uuid}
+      OR s.nisn = ${uuid}
+      OR s.nis = ${uuid}
+    LIMIT 1
+  `);
 
-  if (!studentData) {
+  if (!row) {
     return c.json({ success: false, message: "Profil tidak ditemukan" }, 404);
   }
 
@@ -486,54 +813,138 @@ app.get("/api/public/profile/:uuid", async (c) => {
     .from(academicYears)
     .orderBy(desc(academicYears.name));
 
-  const activeYear = availableYears.find((y) => y.isActive)?.name || "2025/2026";
-  const selectedYear = academicYearParam || activeYear;
+  const activeYear = availableYears.find((y) => y.isActive)?.name || "2026/2027";
+  let selectedYear = academicYearParam || activeYear;
 
-  // 3. Ambil data nilai raport pada tahun pelajaran terpilih
-  const gradesRows = await db
-    .select({
-      id: grades.id,
-      subjectId: grades.subjectId,
-      subjectName: subjects.name,
-      uh1: grades.uh1,
-      t1: grades.t1,
-      sts: grades.sts,
-      uh2: grades.uh2,
-      t2: grades.t2,
-      status: grades.status,
-    })
-    .from(grades)
-    .innerJoin(subjects, eq(grades.subjectId, subjects.id))
-    .where(
-      and(
-        eq(grades.studentId, studentData.id),
-        eq(grades.academicYear, selectedYear),
-        eq(grades.status, "approved"),
-      )
-    );
+  let gradesRows: any[] = [];
+  if (row.student_id) {
+    gradesRows = await db
+      .select({
+        id: grades.id,
+        subjectId: grades.subjectId,
+        subjectName: subjects.name,
+        uh1: grades.uh1,
+        t1: grades.t1,
+        sts: grades.sts,
+        uh2: grades.uh2,
+        t2: grades.t2,
+        status: grades.status,
+      })
+      .from(grades)
+      .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+      .where(
+        and(
+          eq(grades.studentId, row.student_id),
+          eq(grades.academicYear, selectedYear),
+          eq(grades.status, "approved"),
+        )
+      );
 
-  // Ambil komponen penilaian
+    // Fallback jika tahun ajaran aktif belum memiliki nilai rapor approved
+    if (gradesRows.length === 0 && !academicYearParam) {
+      const [latestGrade] = await db
+        .select({ academicYear: grades.academicYear })
+        .from(grades)
+        .where(and(eq(grades.studentId, row.student_id), eq(grades.status, "approved")))
+        .limit(1);
+      if (latestGrade?.academicYear) {
+        selectedYear = latestGrade.academicYear;
+        gradesRows = await db
+          .select({
+            id: grades.id,
+            subjectId: grades.subjectId,
+            subjectName: subjects.name,
+            uh1: grades.uh1,
+            t1: grades.t1,
+            sts: grades.sts,
+            uh2: grades.uh2,
+            t2: grades.t2,
+            status: grades.status,
+          })
+          .from(grades)
+          .innerJoin(subjects, eq(grades.subjectId, subjects.id))
+          .where(
+            and(
+              eq(grades.studentId, row.student_id),
+              eq(grades.academicYear, selectedYear),
+              eq(grades.status, "approved"),
+            )
+          );
+      }
+    }
+
+    // Filter out dummy/unused religion subjects: khusus mapel agama hanya tampil 1 saja
+    const religionRows = gradesRows.filter((g) => /agama/i.test(g.subjectName));
+    if (religionRows.length > 1) {
+      const hasRealScore = (g: any) =>
+        [g.uh1, g.t1, g.sts, g.uh2, g.t2].some((v: any) => v !== null && v !== undefined && Number(v) > 0);
+
+      const nonMuslimRows = religionRows.filter((g) => /kristen|katolik|katholik|hindu|buddha|khonghucu/i.test(g.subjectName));
+      const muslimRows = religionRows.filter((g) => /islam|budi pekerti/i.test(g.subjectName));
+
+      const validNonMuslim = nonMuslimRows.find(hasRealScore);
+      const muslimHasScore = muslimRows.some(hasRealScore);
+
+      let chosenReligion: any;
+      if (validNonMuslim && !muslimHasScore) {
+        chosenReligion = validNonMuslim;
+      } else if (muslimRows.length > 0) {
+        chosenReligion = muslimRows[0];
+      } else {
+        chosenReligion = religionRows[0];
+      }
+
+      gradesRows = gradesRows.filter(
+        (g) => !/agama/i.test(g.subjectName) || g === chosenReligion,
+      );
+    }
+  }
+
   const compList = await db
     .select()
     .from(assessmentComponents)
     .orderBy(asc(assessmentComponents.sortOrder), asc(assessmentComponents.createdAt));
 
+  const finalName = row.student_name || row.user_name;
+  const finalUsername = row.sso_username || row.username;
+  const displayUsername = row.sso_username || (row.username && row.username !== row.nisn ? row.username : row.nisn);
+
   return c.json({
     success: true,
     data: {
       student: {
-        ...studentData,
-        email: studentData.emailPribadi || null,
+        id: row.user_id,
+        studentId: row.student_id,
+        name: finalName,
+        nisn: row.nisn || row.nis || (row.student_id ? null : row.username),
+        kelasLabel: row.kelas_label || (row.student_id ? "Siswa" : "Civitas Akademika"),
+        poinGds: row.poin_gds || 0,
+        sakit: row.sakit || 0,
+        izin: row.izin || 0,
+        alpa: row.alpa || 0,
+        catatanGds: row.catatan_gds || null,
+        catatanKehadiran: row.catatan_kehadiran || null,
+        username: displayUsername,
+        ssoUsername: row.sso_username || null,
+        avatarUrl: row.avatar_url,
+        alamat: row.alamat,
+        emailPribadi: row.email_pribadi || row.email,
+        noTelepon: row.no_telepon,
+        classId: row.class_id,
+        gradeLevel: row.grade_level,
+        className: row.class_name,
+        jurusan: row.jurusan,
+        email: row.email || row.email_pribadi,
         socialLinks: {
-          github: studentData.username || "github_user",
-          gitlab: studentData.username || "gitlab_user",
-          linkedin: studentData.username || "linkedin_user",
-          x: `@${studentData.username || "x_user"}`
+          github: finalUsername || "user",
+          gitlab: finalUsername || "user",
+          linkedin: finalUsername || "user",
+          x: finalUsername ? `@${finalUsername}` : "@user"
         },
-        location: studentData.alamat || "Kota Mojokerto, Jawa Timur, Indonesia",
-        nickname: studentData.username || "Pelajar di Google Developer",
-        jenjang: studentData.gradeLevel ? `Kelas ${studentData.gradeLevel}` : "Kelas X",
-        rombel: studentData.className || studentData.kelasLabel || "X-1",
+        location: row.alamat || "Kota Mojokerto, Jawa Timur, Indonesia",
+        nickname: finalUsername || "Civitas SMAN 3 Mojokerto",
+        jenjang: row.grade_level ? `Kelas ${row.grade_level}` : (row.student_id ? "Siswa" : "Civitas"),
+        rombel: row.class_name || row.kelas_label || (row.student_id ? "Siswa" : "Civitas Akademika"),
       },
       grades: gradesRows,
       assessmentComponents: compList,

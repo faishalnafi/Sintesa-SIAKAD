@@ -181,6 +181,29 @@ async function ensureTargetClassExists(classIdOrSsoId: string): Promise<string> 
 }
 
 teacherRoutes.get("/classes", async (c) => {
+  const user = c.get("user");
+  const isStaff = user.roles.includes("guru") || user.roles.includes("walikelas");
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+
+  if (isStaff && !isAdmin) {
+    const teacherId = await resolveTeacherId(user.id);
+    if (teacherId) {
+      const assigned = await db
+        .select({
+          id: classes.id,
+          name: classes.name,
+        })
+        .from(classSubjects)
+        .innerJoin(classes, eq(classSubjects.classId, classes.id))
+        .where(and(eq(classSubjects.teacherId, teacherId), eq(classes.isActive, true)))
+        .orderBy(classes.name);
+
+      if (assigned.length > 0) {
+        return c.json({ success: true, data: assigned });
+      }
+    }
+  }
+
   const list: Array<{ id: string; name: string }> = [];
   const seenIds = new Set<string>();
 

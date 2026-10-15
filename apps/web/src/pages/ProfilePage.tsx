@@ -29,25 +29,60 @@ export function ProfilePage() {
           Identitas dari Kredensia (mirror lokal). Preferensi tampilan disimpan di perangkat.
         </p>
       </div>
-      <Card className="p-5 space-y-3">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl overflow-hidden bg-primary-container/20 flex items-center justify-center border border-outline-variant/30">
-            {avatarSrc ? (
-              <img
-                src={avatarSrc}
-                alt={user?.name}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <span className="material-symbols-outlined text-primary-container text-3xl">person</span>
-            )}
+      <Card className="p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl overflow-hidden bg-primary-container/20 flex items-center justify-center border border-outline-variant/30 shrink-0">
+              {avatarSrc ? (
+                <img src={avatarSrc} alt={user?.name} className="w-full h-full object-cover" />
+              ) : (
+                <span className="material-symbols-outlined text-primary-container text-3xl">person</span>
+              )}
+            </div>
+            <div>
+              <div className="font-display font-bold text-lg">{user?.name}</div>
+              <div className="text-sm app-muted">{user?.email ?? "—"}</div>
+              <div className="text-xs app-muted mt-1">{(user?.roles ?? []).join(" · ")}</div>
+            </div>
           </div>
-          <div>
-            <div className="font-display font-bold text-lg">{user?.name}</div>
-            <div className="text-sm app-muted">{user?.email ?? "—"}</div>
-            <div className="text-xs app-muted mt-1">{(user?.roles ?? []).join(" · ")}</div>
-          </div>
+          {user?.id && (
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`/u/${user.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-primary-container/15 text-primary-container hover:bg-primary-container/25 transition-colors border border-primary-container/30"
+              >
+                <span className="material-symbols-outlined text-base">public</span>
+                Lihat Profil Publik
+                <span className="material-symbols-outlined text-sm">open_in_new</span>
+              </a>
+              <button
+                type="button"
+                onClick={async () => {
+                  const slug = user.ssoUsername || user.id;
+                  const url = `${window.location.origin}/u/${encodeURIComponent(slug)}`;
+                  try {
+                    await navigator.clipboard.writeText(url);
+                  } catch {
+                    const ta = document.createElement("textarea");
+                    ta.value = url;
+                    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+                    document.body.appendChild(ta);
+                    ta.focus();
+                    ta.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(ta);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-surface-container-high hover:bg-surface-container hover:text-primary transition-colors border border-outline-variant/30 text-on-surface"
+                title="Salin tautan profil publik"
+              >
+                <span className="material-symbols-outlined text-base">content_copy</span>
+                Salin Tautan
+              </button>
+            </div>
+          )}
         </div>
       </Card>
 

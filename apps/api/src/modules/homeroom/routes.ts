@@ -95,6 +95,11 @@ homeroomRoutes.get("/matrix", async (c) => {
     byStudent.set(g.studentId, list);
   }
 
+  let maxClassSubjects = 0;
+  for (const list of byStudent.values()) {
+    if (list.length > maxClassSubjects) maxClassSubjects = list.length;
+  }
+
   // Fetch real-time GDS points
   const gdsMap = new Map<string, { poin: number; catatan?: string | null }>();
   if (isGdsConfigured()) {
@@ -104,6 +109,7 @@ homeroomRoutes.get("/matrix", async (c) => {
         const data = { poin: p.poin || 0, catatan: p.catatan || null };
         if (p.nisn) gdsMap.set(p.nisn, data);
         if (p.nis) gdsMap.set(p.nis, data);
+        if ((p as any).sintesa_student_id) gdsMap.set((p as any).sintesa_student_id, data);
       }
     } catch (e) {
       console.error("Matrix real-time GDS fetch failed:", e);
@@ -119,6 +125,7 @@ homeroomRoutes.get("/matrix", async (c) => {
         const data = { sakit: a.sakit || 0, izin: a.izin || 0, alpa: a.alpa || 0, catatan: a.catatan || null };
         if (a.nisn) attendanceMap.set(a.nisn, data);
         if (a.nis) attendanceMap.set(a.nis, data);
+        if ((a as any).sintesa_student_id) attendanceMap.set((a as any).sintesa_student_id, data);
       }
     } catch (e) {
       console.error("Matrix real-time Kehadiran fetch failed:", e);
@@ -135,26 +142,57 @@ homeroomRoutes.get("/matrix", async (c) => {
       return vals.length > 0 ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : null;
     };
 
-    const allApproved = gs.length > 0 && gs.every((g) => g.status === "approved");
+    const draftGrades = gs.filter((g) => g.status === "draft");
+    const submittedGrades = gs.filter((g) => g.status === "submitted");
+    const approvedGrades = gs.filter((g) => g.status === "approved");
+
+    const allApproved = gs.length > 0 && approvedGrades.length === gs.length;
+    const hasDraft = draftGrades.length > 0;
+    const isMissingSubjects = maxClassSubjects > 0 && gs.length < maxClassSubjects;
+    const missing = gs.length === 0;
+
+    // Semua mapel harus dalam keadaan submitted (atau approved), tidak ada draft, dan tidak ada mapel yang tertinggal
     const allSubmittedOrApproved =
       gs.length > 0 &&
-      gs.every((g) => g.status === "submitted" || g.status === "approved") &&
+      !hasDraft &&
+      !isMissingSubjects &&
+      submittedGrades.length + approvedGrades.length === gs.length &&
       gs.every(
         (g) => g.uh1 !== null || g.t1 !== null || g.sts !== null || g.uh2 !== null || g.t2 !== null
       );
-    const missing = gs.length === 0;
+
+    const isGdsSubmitted = Boolean(s.isGdsSubmitted);
+    const isKehadiranSubmitted = Boolean(s.isKehadiranSubmitted);
+
+    let submissionMissingReason: string | null = null;
+    if (!isGdsSubmitted && !isKehadiranSubmitted) {
+      submissionMissingReason = "GDS (Poin Kedisiplinan) dan BK (Kehadiran SIA) belum melakukan pengiriman data";
+    } else if (!isGdsSubmitted) {
+      submissionMissingReason = "GDS (Poin Kedisiplinan) belum melakukan pengiriman data";
+    } else if (!isKehadiranSubmitted) {
+      submissionMissingReason = "BK (Kehadiran SIA) belum melakukan pengiriman data";
+    }
 
     let status = "pending";
-    if (allApproved) status = "approved";
-    else if (missing) status = "incomplete";
-    else if (allSubmittedOrApproved) status = "ready";
-    else status = "draft";
+    if (allApproved) {
+      status = "approved";
+    } else if (missing || isMissingSubjects) {
+      status = "incomplete";
+    } else if (hasDraft) {
+      status = "draft";
+    } else if (submissionMissingReason !== null) {
+      status = "incomplete";
+    } else if (allSubmittedOrApproved) {
+      status = "ready";
+    } else {
+      status = "draft";
+    }
 
-    const gdsData = gdsMap.get(s.nisn ?? "");
+    const gdsData = (s.nis ? gdsMap.get(s.nis) : null) || (s.nisn ? gdsMap.get(s.nisn) : null) || gdsMap.get(s.id);
     const poinGds = gdsData?.poin ?? s.poinGds;
     const catatanGds = gdsData?.catatan ?? s.catatanGds ?? null;
 
-    const att = attendanceMap.get(s.nisn ?? "");
+    const att = (s.nis ? attendanceMap.get(s.nis) : null) || (s.nisn ? attendanceMap.get(s.nisn) : null) || attendanceMap.get(s.id);
     const sakit = att?.sakit ?? s.sakit;
     const izin = att?.izin ?? s.izin;
     const alpa = att?.alpa ?? s.alpa;
@@ -163,7 +201,8 @@ homeroomRoutes.get("/matrix", async (c) => {
     return {
       studentId: s.id,
       name: s.name,
-      nisn: s.nisn,
+      nisn: s.nisn || s.nis,
+      nis: s.nis,
       uh1: computeCompAvg("uh1"),
       t1: computeCompAvg("t1"),
       sts: computeCompAvg("sts"),
@@ -175,7 +214,13 @@ homeroomRoutes.get("/matrix", async (c) => {
       alpa,
       catatanGds,
       catatanKehadiran,
+      isGdsSubmitted,
+      isKehadiranSubmitted,
+      submissionMissingReason,
       gradeCount: gs.length,
+      draftCount: draftGrades.length,
+      submittedCount: submittedGrades.length,
+      approvedCount: approvedGrades.length,
       status,
       grades: gs,
     };
@@ -183,7 +228,8 @@ homeroomRoutes.get("/matrix", async (c) => {
 
   const approved = studentsView.filter((s) => s.status === "approved").length;
   const ready = studentsView.filter((s) => s.status === "ready").length;
-  const incomplete = studentsView.filter((s) => s.status === "incomplete" || s.status === "draft").length;
+  const draft = studentsView.filter((s) => s.status === "draft").length;
+  const incomplete = studentsView.filter((s) => s.status === "incomplete").length;
 
   return c.json({
     success: true,
@@ -194,7 +240,8 @@ homeroomRoutes.get("/matrix", async (c) => {
         total: studentsView.length,
         approved,
         ready,
-        incomplete,
+        draft,
+        incomplete: incomplete + draft,
         progress: studentsView.length
           ? Math.round((approved / studentsView.length) * 100)
           : 0,
@@ -218,7 +265,12 @@ homeroomRoutes.post("/approve", async (c) => {
   }
 
   const classStudents = await db
-    .select({ id: students.id, name: students.name })
+    .select({
+      id: students.id,
+      name: students.name,
+      isGdsSubmitted: students.isGdsSubmitted,
+      isKehadiranSubmitted: students.isKehadiranSubmitted,
+    })
     .from(students)
     .where(eq(students.classId, body.classId))
     .orderBy(students.name);
@@ -229,6 +281,23 @@ homeroomRoutes.post("/approve", async (c) => {
 
   if (targetStudents.length === 0) {
     return c.json({ success: false, message: "Tidak ada siswa terpilih di kelas ini" }, 400);
+  }
+
+  // Hitung jumlah mapel maksimal pada kelas ini untuk mendeteksi data yang belum lengkap
+  const allClassGrades = await db
+    .select({ studentId: grades.studentId, subjectId: grades.subjectId })
+    .from(grades)
+    .where(and(eq(grades.classId, body.classId), isNull(grades.deletedAt)));
+
+  const countByStudent = new Map<string, Set<string>>();
+  for (const g of allClassGrades) {
+    const set = countByStudent.get(g.studentId) ?? new Set<string>();
+    set.add(g.subjectId);
+    countByStudent.set(g.studentId, set);
+  }
+  let maxSubjects = 0;
+  for (const set of countByStudent.values()) {
+    if (set.size > maxSubjects) maxSubjects = set.size;
   }
 
   const approvedList: Array<{ id: string; name: string }> = [];
@@ -251,26 +320,80 @@ homeroomRoutes.post("/approve", async (c) => {
       continue;
     }
 
-    const hasDraft = studentGrades.some((g) => g.status === "draft");
-    if (hasDraft) {
-      const draftCount = studentGrades.filter((g) => g.status === "draft").length;
+    // Syarat Wajib: GDS (Poin Kedisiplinan) dan BK (Kehadiran SIA) harus sudah melakukan pengiriman data
+    if (!st.isGdsSubmitted && !st.isKehadiranSubmitted) {
       skippedList.push({
         id: st.id,
         name: st.name,
-        reason: `${draftCount} mapel masih berstatus Draft (belum disubmit guru)`,
+        reason: "GDS (Poin Kedisiplinan) dan BK (Kehadiran SIA) belum melakukan pengiriman data",
+      });
+      continue;
+    }
+    if (!st.isGdsSubmitted) {
+      skippedList.push({
+        id: st.id,
+        name: st.name,
+        reason: "GDS (Poin Kedisiplinan) belum melakukan pengiriman data",
+      });
+      continue;
+    }
+    if (!st.isKehadiranSubmitted) {
+      skippedList.push({
+        id: st.id,
+        name: st.name,
+        reason: "BK (Kehadiran SIA) belum melakukan pengiriman data",
       });
       continue;
     }
 
-    const hasFilledValues = studentGrades.some(
+    // Syarat Wajib: Tidak boleh ada mapel berstatus Draft
+    const draftCount = studentGrades.filter((g) => g.status === "draft").length;
+    if (draftCount > 0) {
+      skippedList.push({
+        id: st.id,
+        name: st.name,
+        reason: `${draftCount} mapel masih berstatus Draft (belum disubmit guru mapel)`,
+      });
+      continue;
+    }
+
+    // Syarat Wajib: Semua mapel yang ada di kelas harus sudah masuk
+    if (maxSubjects > 0 && studentGrades.length < maxSubjects) {
+      skippedList.push({
+        id: st.id,
+        name: st.name,
+        reason: `Hanya ${studentGrades.length} dari ${maxSubjects} mapel terdata (belum semua guru mapel input)`,
+      });
+      continue;
+    }
+
+    // Syarat Wajib: Semua mapel berstatus submitted atau approved
+    const allSubmittedOrApproved = studentGrades.every(
+      (g) => g.status === "submitted" || g.status === "approved"
+    );
+    if (!allSubmittedOrApproved) {
+      skippedList.push({
+        id: st.id,
+        name: st.name,
+        reason: "Ada mapel yang belum berstatus Submitted",
+      });
+      continue;
+    }
+
+    // Syarat Wajib: Nilai komponen tidak boleh seluruhnya kosong
+    const hasFilledValues = studentGrades.every(
       (g) => g.uh1 !== null || g.t1 !== null || g.sts !== null || g.uh2 !== null || g.t2 !== null
     );
     if (!hasFilledValues) {
-      skippedList.push({ id: st.id, name: st.name, reason: "Nilai komponen masih kosong" });
+      skippedList.push({ id: st.id, name: st.name, reason: "Ada mapel yang nilai komponennya masih kosong" });
       continue;
     }
 
     const toApprove = studentGrades.filter((g) => g.status === "submitted");
+    if (toApprove.length === 0) {
+      skippedList.push({ id: st.id, name: st.name, reason: "Tidak ada mapel berstatus submitted untuk disetujui" });
+      continue;
+    }
     for (const g of toApprove) {
       const [updated] = await db
         .update(grades)
@@ -381,6 +504,18 @@ homeroomRoutes.post("/reject", async (c) => {
         console.error(`Gagal unlock presensi siswa ${s.nisn}:`, err)
       );
     }
+  }
+
+  if (studentList.length > 0) {
+    const studentIds = studentList.map((s) => s.id);
+    await db
+      .update(students)
+      .set({
+        isGdsSubmitted: false,
+        isKehadiranSubmitted: false,
+        updatedAt: new Date(),
+      })
+      .where(inArray(students.id, studentIds));
   }
 
   for (const g of rows) {
