@@ -1170,6 +1170,43 @@ function DataSyncTable({
     return log ? new Date(log.createdAt).toLocaleString("en-US") : "Never";
   };
 
+  const [cancellingPasti, setCancellingPasti] = useState(false);
+
+  const handleCancelPastiSubmit = async () => {
+    const confirm = await Swal.fire({
+      title: "Batalkan Semua Submit PASTi?",
+      text: "Seluruh data skor kedisiplinan (GDS) dan presensi (BK) di aplikasi PASTi yang sudah terkirim akan dikembalikan ke status Draft agar guru dapat mengedit dan mengisi ulang poin.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Ya, Batalkan Submit",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#f59e0b",
+      cancelButtonColor: "#6b7280",
+    });
+    if (!confirm.isConfirmed) return;
+
+    setCancellingPasti(true);
+    try {
+      const res = await api<{ success: boolean; message: string }>("/admin/integrations/pasti/cancel-all-submit", {
+        method: "POST",
+        body: JSON.stringify({ academicYear: "2026/2027", jenis: "all" }),
+      });
+      Swal.fire({
+        title: "Berhasil Dibatalkan",
+        text: res.message || "Seluruh status submit di PASTi berhasil dikembalikan ke Draft.",
+        icon: "success",
+      });
+    } catch (e: any) {
+      Swal.fire({
+        title: "Gagal",
+        text: e.message || "Gagal membatalkan submit PASTi",
+        icon: "error",
+      });
+    } finally {
+      setCancellingPasti(false);
+    }
+  };
+
   const sources = [
     {
       id: "kredensia",
@@ -1238,8 +1275,20 @@ function DataSyncTable({
             Pull and synchronize academic master data, student discipline records, and daily attendance into SIAKAD.
           </p>
         </div>
-        <div className="text-xs font-semibold app-muted">
-          {sources.filter((s) => s.isConfigured).length} of {sources.length} Configured
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleCancelPastiSubmit}
+            disabled={cancellingPasti}
+            className="px-3 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-semibold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            title="Kembalikan seluruh skor submitted di PASTi ke Draft agar guru bisa mengisi ulang"
+          >
+            <span className="material-symbols-outlined text-[16px]">{cancellingPasti ? "hourglass_empty" : "lock_open"}</span>
+            <span>{cancellingPasti ? "Membatalkan..." : "Batal Submit PASTi (Unlock ke Draft)"}</span>
+          </button>
+          <div className="text-xs font-semibold app-muted hidden sm:block">
+            {sources.filter((s) => s.isConfigured).length} of {sources.length} Configured
+          </div>
         </div>
       </div>
 

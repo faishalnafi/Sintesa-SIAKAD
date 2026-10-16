@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { env } from "../../env.js";
@@ -218,8 +218,18 @@ studentRoutes.get("/report", async (c) => {
 
   let rows = await db
     .select({
+      id: grades.id,
+      subjectId: grades.subjectId,
       subjectName: subjects.name,
       subjectCode: subjects.code,
+      teacherName: sql<string | null>`COALESCE(
+        (SELECT t.name FROM class_subjects cs JOIN teachers t ON cs.teacher_id = t.id WHERE cs.class_id = ${student.classId} AND cs.subject_id = ${grades.subjectId} LIMIT 1),
+        (SELECT t.name FROM teachers t WHERE t.user_id = ${grades.submittedBy} LIMIT 1),
+        (SELECT u.name FROM users u WHERE u.id = ${grades.submittedBy} LIMIT 1),
+        (SELECT u.name FROM grade_audit_logs gal JOIN users u ON gal.actor_id = u.id WHERE gal.grade_id = ${grades.id} AND gal.action IN ('draft_create', 'draft_update', 'submit') ORDER BY gal.created_at DESC LIMIT 1),
+        (SELECT t.name FROM teacher_subjects ts JOIN teachers t ON ts.user_id = t.user_id WHERE ts.subject_id = ${grades.subjectId} AND t.name != 'Faishal Nafi''' LIMIT 1),
+        (SELECT u.name FROM teacher_subjects ts JOIN users u ON ts.user_id = u.id WHERE ts.subject_id = ${grades.subjectId} AND u.name != 'Faishal Nafi''' LIMIT 1)
+      )`,
       uh1: grades.uh1,
       t1: grades.t1,
       sts: grades.sts,
@@ -338,7 +348,17 @@ studentRoutes.get("/report/pdf", async (c) => {
 
   let rows = await db
     .select({
+      id: grades.id,
+      subjectId: grades.subjectId,
       subjectName: subjects.name,
+      teacherName: sql<string | null>`COALESCE(
+        (SELECT t.name FROM class_subjects cs JOIN teachers t ON cs.teacher_id = t.id WHERE cs.class_id = ${student.classId} AND cs.subject_id = ${grades.subjectId} LIMIT 1),
+        (SELECT t.name FROM teachers t WHERE t.user_id = ${grades.submittedBy} LIMIT 1),
+        (SELECT u.name FROM users u WHERE u.id = ${grades.submittedBy} LIMIT 1),
+        (SELECT u.name FROM grade_audit_logs gal JOIN users u ON gal.actor_id = u.id WHERE gal.grade_id = ${grades.id} AND gal.action IN ('draft_create', 'draft_update', 'submit') ORDER BY gal.created_at DESC LIMIT 1),
+        (SELECT t.name FROM teacher_subjects ts JOIN teachers t ON ts.user_id = t.user_id WHERE ts.subject_id = ${grades.subjectId} AND t.name != 'Faishal Nafi''' LIMIT 1),
+        (SELECT u.name FROM teacher_subjects ts JOIN users u ON ts.user_id = u.id WHERE ts.subject_id = ${grades.subjectId} AND u.name != 'Faishal Nafi''' LIMIT 1)
+      )`,
       uh1: grades.uh1,
       t1: grades.t1,
       sts: grades.sts,
@@ -429,10 +449,10 @@ studentRoutes.get("/report/pdf", async (c) => {
 
   doc.y = infoStartY + 36 + 12;
   doc.x = 50;
-
   const tableTop = doc.y;
-  const subjectColWidth = pageWidth * 0.42;
-  const scoreColWidth = (pageWidth - subjectColWidth) / (columns.length || 1);
+  const subjectColWidth = 155;
+  const teacherColWidth = 150;
+  const scoreColWidth = (pageWidth - subjectColWidth - teacherColWidth) / (columns.length || 1);
   const rowHeight = 22;
 
   // Helper untuk menggambar indikator status (✓, ✗, –) secara tajam dan konsisten di semua PDF reader
@@ -467,16 +487,19 @@ studentRoutes.get("/report/pdf", async (c) => {
   };
 
   const drawHeaderRow = (yPos: number) => {
-    doc.font("Times-Bold").fontSize(11);
+    doc.font("Times-Bold").fontSize(10);
     doc.rect(50, yPos, pageWidth, rowHeight).fillAndStroke("#f3f4f6", "#d1d5db");
     doc.fillColor("#111827").text("Mata Pelajaran", 55, yPos + 6, { width: subjectColWidth - 10 });
+    doc.text("Guru Pengampu", 50 + subjectColWidth + 5, yPos + 6, { width: teacherColWidth - 10 });
     columns.forEach((col, i) => {
-      const x = 50 + subjectColWidth + i * scoreColWidth;
+      const x = 50 + subjectColWidth + teacherColWidth + i * scoreColWidth;
       doc.text(col.label, x, yPos + 6, { width: scoreColWidth, align: "center" });
     });
     let lineX = 50 + subjectColWidth;
     doc.strokeColor("#d1d5db");
     doc.moveTo(50, yPos).lineTo(50, yPos + rowHeight).stroke();
+    doc.moveTo(lineX, yPos).lineTo(lineX, yPos + rowHeight).stroke();
+    lineX += teacherColWidth;
     doc.moveTo(lineX, yPos).lineTo(lineX, yPos + rowHeight).stroke();
     columns.forEach(() => {
       lineX += scoreColWidth;
@@ -487,7 +510,7 @@ studentRoutes.get("/report/pdf", async (c) => {
   drawHeaderRow(tableTop);
   let y = tableTop + rowHeight;
 
-  doc.font("Times-Roman").fontSize(11);
+  doc.font("Times-Roman").fontSize(9.5);
   if (rows.length === 0) {
     doc.rect(50, y, pageWidth, rowHeight).strokeColor("#d1d5db").stroke();
     doc.fillColor("black").text("Belum ada raport approved.", 55, y + 6, { width: pageWidth - 10 });
@@ -499,14 +522,15 @@ studentRoutes.get("/report/pdf", async (c) => {
         y = doc.page.margins.top;
         drawHeaderRow(y);
         y += rowHeight;
-        doc.font("Times-Roman").fontSize(11);
+        doc.font("Times-Roman").fontSize(9.5);
       }
 
       doc.rect(50, y, pageWidth, rowHeight).strokeColor("#e5e7eb").stroke();
-      doc.fillColor("#1f2937").text(g.subjectName, 55, y + 6, { width: subjectColWidth - 10 });
+      doc.fillColor("#1f2937").text(g.subjectName, 55, y + 6, { width: subjectColWidth - 10, ellipsis: true, lineBreak: false });
+      doc.fillColor("#374151").text(g.teacherName || "—", 50 + subjectColWidth + 5, y + 6, { width: teacherColWidth - 10, ellipsis: true, lineBreak: false });
 
       columns.forEach((col, i) => {
-        const x = 50 + subjectColWidth + i * scoreColWidth;
+        const x = 50 + subjectColWidth + teacherColWidth + i * scoreColWidth;
         const cx = x + scoreColWidth / 2;
         const cy = y + rowHeight / 2;
 
@@ -529,6 +553,8 @@ studentRoutes.get("/report/pdf", async (c) => {
       let lineX = 50 + subjectColWidth;
       doc.strokeColor("#e5e7eb");
       doc.moveTo(50, y).lineTo(50, y + rowHeight).stroke();
+      doc.moveTo(lineX, y).lineTo(lineX, y + rowHeight).stroke();
+      lineX += teacherColWidth;
       doc.moveTo(lineX, y).lineTo(lineX, y + rowHeight).stroke();
       columns.forEach(() => {
         lineX += scoreColWidth;

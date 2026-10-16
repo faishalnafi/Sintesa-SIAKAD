@@ -34,7 +34,7 @@ import { requireAuth, type AuthVariables } from "../../middlewares/auth.js";
 import { requireRoles } from "../../middlewares/rbac.js";
 import * as lifecycle from "../../services/academic-lifecycle.js";
 import { gdsStatus, syncGds } from "../../services/integrations/gds.js";
-import { kehadiranStatus, syncKehadiran } from "../../services/integrations/kehadiran.js";
+import { kehadiranStatus, syncKehadiran, unlockAllScoresInPasti } from "../../services/integrations/kehadiran.js";
 import {
   getSsoRequestOrigin,
   ssoGetKelasMembers,
@@ -2642,6 +2642,36 @@ adminRoutes.post("/sync/:source", async (c) => {
   );
 });
 
+adminRoutes.post("/integrations/pasti/cancel-all-submit", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const academicYear = body.academicYear || "2026/2027";
+  const jenis = body.jenis || "all";
+  const keterangan = body.keterangan || "Batal submit oleh Admin SIAKAD";
+
+  const pastiResult = await unlockAllScoresInPasti(academicYear, jenis, keterangan);
+
+  // Reset status is_gds_submitted dan is_kehadiran_submitted di tabel students
+  const setObj: Record<string, any> = { updatedAt: new Date() };
+  if (jenis === "all" || jenis === "kedisiplinan") {
+    setObj.isGdsSubmitted = false;
+  }
+  if (jenis === "all" || jenis === "presensi") {
+    setObj.isKehadiranSubmitted = false;
+  }
+  await db.update(students).set(setObj);
+
+  broadcastRealtimeEvent({
+    type: "student_updated",
+    source: "pasti_cancel_submit",
+  });
+
+  return c.json({
+    success: pastiResult.success,
+    message: pastiResult.message,
+    data: pastiResult,
+  });
+});
+
 adminRoutes.get("/users", async (c) => {
   const rows = await db
     .select({
@@ -2791,8 +2821,24 @@ adminRoutes.post("/alumni/purge", async (c) => {
 // Keluar / mutasi
 adminRoutes.get("/keluar", async (c) => {
   const keluarList = await db
-    .select()
+    .select({
+      id: students.id,
+      name: students.name,
+      nis: students.nis,
+      nisn: sql<string>`COALESCE(NULLIF(${students.nisn}, ''), ${students.nis})`.as("nisn"),
+      memberStatus: students.memberStatus,
+      classId: students.classId,
+      className: sql<string>`COALESCE(
+        ${classes.name},
+        (SELECT c2.name FROM academic_histories ah LEFT JOIN classes c2 ON ah.class_id = c2.id WHERE ah.student_id = ${students.id} AND ah.class_id IS NOT NULL ORDER BY ah.created_at DESC LIMIT 1),
+        (SELECT ah.class_name FROM academic_histories ah WHERE ah.student_id = ${students.id} AND ah.class_name IS NOT NULL ORDER BY ah.created_at DESC LIMIT 1)
+      )`.as("className"),
+      statusNote: students.statusNote,
+      updatedAt: students.updatedAt,
+      createdAt: students.createdAt,
+    })
     .from(students)
+    .leftJoin(classes, eq(students.classId, classes.id))
     .where(eq(students.memberStatus, "keluar"))
     .orderBy(students.name);
   const siswaList = await db
@@ -2800,7 +2846,7 @@ adminRoutes.get("/keluar", async (c) => {
       id: students.id,
       name: students.name,
       nis: students.nis,
-      nisn: students.nisn,
+      nisn: sql<string>`COALESCE(NULLIF(${students.nisn}, ''), ${students.nis})`.as("nisn"),
       className: classes.name,
     })
     .from(students)

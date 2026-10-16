@@ -137,3 +137,21 @@ export function sortStudents<T>(
     return compareByName(nameA, nameB);
   });
 }
+
+export function sortStudentsByClassThenName<T>(
+  list: T[],
+  getClassName?: (item: T) => string | undefined | null,
+  getName?: (item: T) => string | undefined | null
+): T[] {
+  return [...list].sort((a, b) => {
+    const classA = getClassName ? getClassName(a) : (a as any)?.className ?? (a as any)?.class_name;
+    const classB = getClassName ? getClassName(b) : (b as any)?.className ?? (b as any)?.class_name;
+    const classCmp = compareClassNames(classA, classB);
+    if (classCmp !== 0) return classCmp;
+
+    const nameA = getName ? getName(a) : typeof a === "string" ? a : (a as any)?.name ?? (a as any)?.studentName;
+    const nameB = getName ? getName(b) : typeof b === "string" ? b : (b as any)?.name ?? (b as any)?.studentName;
+    return compareByName(nameA, nameB);
+  });
+}
+

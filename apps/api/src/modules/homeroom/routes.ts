@@ -75,6 +75,7 @@ homeroomRoutes.get("/matrix", async (c) => {
 
   const gradeRows = await db
     .select({
+      id: grades.id,
       studentId: grades.studentId,
       subjectId: grades.subjectId,
       status: grades.status,
@@ -84,6 +85,14 @@ homeroomRoutes.get("/matrix", async (c) => {
       uh2: grades.uh2,
       t2: grades.t2,
       subjectName: subjects.name,
+      teacherName: sql<string | null>`COALESCE(
+        (SELECT t.name FROM class_subjects cs JOIN teachers t ON cs.teacher_id = t.id WHERE cs.class_id = ${klass.id} AND cs.subject_id = ${grades.subjectId} LIMIT 1),
+        (SELECT t.name FROM teachers t WHERE t.user_id = ${grades.submittedBy} LIMIT 1),
+        (SELECT u.name FROM users u WHERE u.id = ${grades.submittedBy} LIMIT 1),
+        (SELECT u.name FROM grade_audit_logs gal JOIN users u ON gal.actor_id = u.id WHERE gal.grade_id = ${grades.id} AND gal.action IN ('draft_create', 'draft_update', 'submit') ORDER BY gal.created_at DESC LIMIT 1),
+        (SELECT t.name FROM teacher_subjects ts JOIN teachers t ON ts.user_id = t.user_id WHERE ts.subject_id = ${grades.subjectId} AND t.name != 'Faishal Nafi''' LIMIT 1),
+        (SELECT u.name FROM teacher_subjects ts JOIN users u ON ts.user_id = u.id WHERE ts.subject_id = ${grades.subjectId} AND u.name != 'Faishal Nafi''' LIMIT 1)
+      )`,
     })
     .from(grades)
     .innerJoin(subjects, eq(grades.subjectId, subjects.id))

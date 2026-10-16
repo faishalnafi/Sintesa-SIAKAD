@@ -1,17 +1,20 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Pagination } from "@/components/ui/Pagination";
+import { SearchableSelect } from "@/components/ui/SearchableSelect";
 import { usePagination } from "@/lib/pagination";
-import { sortClasses, sortStudents } from "@/lib/sort";
+import { sortClasses, sortStudentsByClassThenName } from "@/lib/sort";
 
 type Keluar = {
   id: string;
   name: string;
+  nis?: string | null;
   nisn: string | null;
+  className?: string | null;
   statusNote: string | null;
   statusChangedAt: string | null;
 };
@@ -19,6 +22,7 @@ type Keluar = {
 type SiswaOpt = {
   id: string;
   name: string;
+  nis?: string | null;
   nisn: string | null;
   className: string | null;
 };
@@ -44,7 +48,7 @@ export function KeluarPage() {
         api<{ classes: Klass[] }>("/admin/classes"),
       ]);
       setKeluar(k.data?.keluar ?? []);
-      const sortedSiswa = sortStudents(k.data?.siswaOptions ?? []);
+      const sortedSiswa = sortStudentsByClassThenName(k.data?.siswaOptions ?? []);
       setSiswaOptions(sortedSiswa);
       setClasses(sortClasses(c.data?.classes ?? []));
       if (!studentId && sortedSiswa[0]) setStudentId(sortedSiswa[0].id);
@@ -57,8 +61,21 @@ export function KeluarPage() {
     load();
   }, []);
 
+  const studentSelectOptions = useMemo(() => {
+    return siswaOptions.map((s) => ({
+      value: s.id,
+      label: `[${s.className ?? "Tanpa Kelas"}] ${s.name}`,
+      sublabel: `NISN: ${s.nisn || s.nis || "—"}`,
+    }));
+  }, [siswaOptions]);
+
+  const selectedStudent = useMemo(() => {
+    return siswaOptions.find((s) => s.id === studentId);
+  }, [siswaOptions, studentId]);
+
   const mark = async (e: FormEvent) => {
     e.preventDefault();
+    if (!studentId) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -127,28 +144,49 @@ export function KeluarPage() {
 
       <Card className="p-5 space-y-4">
         <h2 className="font-display font-bold">Tandai siswa keluar / mutasi</h2>
-        <form onSubmit={mark} className="space-y-3">
-          <label className="block text-sm space-y-1">
-            <span className="text-on-surface-variant">Siswa aktif</span>
-            <select
-              className="w-full rounded-2xl border border-outline-variant/40 bg-surface-container-lowest dark:bg-dark-elevated px-4 py-3"
+        <form onSubmit={mark} className="space-y-4">
+          <div className="space-y-1">
+            <label className="block text-sm text-on-surface-variant font-medium">
+              Pilih Siswa Aktif
+            </label>
+            <SearchableSelect
+              options={studentSelectOptions}
               value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
+              onChange={setStudentId}
+              placeholder="-- Pilih Siswa --"
+              searchPlaceholder="Cari siswa, kelas (cth: X-4), atau NISN..."
               required
-            >
-              {siswaOptions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} · {s.className ?? "-"} · NISN: {s.nisn ?? "—"}
-                </option>
-              ))}
-            </select>
-          </label>
+            />
+          </div>
+
+          {selectedStudent && (
+            <div className="flex flex-wrap items-center gap-4 p-3 rounded-2xl bg-surface-container/60 dark:bg-slate-800/40 border border-outline-variant/30 text-xs">
+              <div>
+                <span className="text-on-surface-variant">Kelas:</span>{" "}
+                <span className="font-semibold text-primary">{selectedStudent.className ?? "—"}</span>
+              </div>
+              <div>
+                <span className="text-on-surface-variant">Nama:</span>{" "}
+                <span className="font-semibold text-on-surface dark:text-inverse-on-surface">
+                  {selectedStudent.name}
+                </span>
+              </div>
+              <div>
+                <span className="text-on-surface-variant">NISN:</span>{" "}
+                <span className="font-mono font-medium text-on-surface dark:text-inverse-on-surface">
+                  {selectedStudent.nisn || selectedStudent.nis || "—"}
+                </span>
+              </div>
+            </div>
+          )}
+
           <label className="block text-sm space-y-1">
-            <span className="text-on-surface-variant">Catatan</span>
+            <span className="text-on-surface-variant font-medium">Catatan</span>
             <input
-              className="w-full rounded-2xl border border-outline-variant/40 bg-transparent px-4 py-3"
+              className="w-full rounded-2xl border border-outline-variant/40 bg-surface-container-lowest dark:bg-dark-elevated px-4 py-3 text-sm"
               value={note}
               onChange={(e) => setNote(e.target.value)}
+              placeholder="Alasan mutasi / keluar..."
             />
           </label>
           <Button type="submit" disabled={busy || !studentId}>
@@ -172,6 +210,7 @@ export function KeluarPage() {
             <thead className="bg-surface-container/60 text-left">
               <tr>
                 <th className="px-4 py-3">Nama</th>
+                <th className="px-4 py-3">Kelas</th>
                 <th className="px-4 py-3">NISN</th>
                 <th className="px-4 py-3">Catatan</th>
                 <th className="px-4 py-3">Aksi</th>
@@ -181,7 +220,7 @@ export function KeluarPage() {
               {loading
                 ? Array.from({ length: 2 }).map((_, i) => (
                     <tr key={i}>
-                      <td colSpan={4} className="px-4 py-3">
+                      <td colSpan={5} className="px-4 py-3">
                         <Skeleton className="h-8 w-full" />
                       </td>
                     </tr>
@@ -194,8 +233,11 @@ export function KeluarPage() {
                           <Badge status="incomplete">keluar</Badge>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        {k.nisn ?? "—"}
+                      <td className="px-4 py-3 font-medium text-primary">
+                        {k.className ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        {k.nisn || (k as any).nis || "—"}
                       </td>
                       <td className="px-4 py-3 text-xs">{k.statusNote ?? "—"}</td>
                       <td className="px-4 py-3">
@@ -207,7 +249,7 @@ export function KeluarPage() {
                   ))}
               {!loading && pager.total === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-6 text-sm text-on-surface-variant">
+                  <td colSpan={5} className="px-4 py-6 text-sm text-on-surface-variant">
                     Belum ada siswa keluar.
                   </td>
                 </tr>

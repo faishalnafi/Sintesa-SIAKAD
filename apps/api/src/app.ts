@@ -741,11 +741,21 @@ app.get("/api/public/profile/:uuid", async (c) => {
 
   let gradesRows: any[] = [];
   if (row.student_id) {
+    const teacherNameSql = sql<string | null>`COALESCE(
+      (SELECT t.name FROM class_subjects cs JOIN teachers t ON cs.teacher_id = t.id WHERE cs.class_id = ${row.class_id} AND cs.subject_id = ${grades.subjectId} LIMIT 1),
+      (SELECT t.name FROM teachers t WHERE t.user_id = ${grades.submittedBy} LIMIT 1),
+      (SELECT u.name FROM users u WHERE u.id = ${grades.submittedBy} LIMIT 1),
+      (SELECT u.name FROM grade_audit_logs gal JOIN users u ON gal.actor_id = u.id WHERE gal.grade_id = ${grades.id} AND gal.action IN ('draft_create', 'draft_update', 'submit') ORDER BY gal.created_at DESC LIMIT 1),
+      (SELECT t.name FROM teacher_subjects ts JOIN teachers t ON ts.user_id = t.user_id WHERE ts.subject_id = ${grades.subjectId} AND t.name != 'Faishal Nafi''' LIMIT 1),
+      (SELECT u.name FROM teacher_subjects ts JOIN users u ON ts.user_id = u.id WHERE ts.subject_id = ${grades.subjectId} AND u.name != 'Faishal Nafi''' LIMIT 1)
+    )`;
+
     gradesRows = await db
       .select({
         id: grades.id,
         subjectId: grades.subjectId,
         subjectName: subjects.name,
+        teacherName: teacherNameSql,
         uh1: grades.uh1,
         t1: grades.t1,
         sts: grades.sts,
@@ -777,6 +787,7 @@ app.get("/api/public/profile/:uuid", async (c) => {
             id: grades.id,
             subjectId: grades.subjectId,
             subjectName: subjects.name,
+            teacherName: teacherNameSql,
             uh1: grades.uh1,
             t1: grades.t1,
             sts: grades.sts,

@@ -47,6 +47,7 @@ type Matrix = {
     grades?: Array<{
       subjectId: string;
       subjectName: string;
+      teacherName?: string | null;
       uh1: string | number | null;
       t1: string | number | null;
       sts: string | number | null;
@@ -816,6 +817,7 @@ export function WalikelasMatrixPage() {
                                             </th>
                                           ))}
                                           <th className="px-4 py-2 text-center">Status Subjek</th>
+                                          <th className="px-4 py-2 text-left">Guru Pengampu</th>
                                           <th className="px-4 py-2 text-right">Aksi</th>
                                         </tr>
                                       </thead>
@@ -851,6 +853,9 @@ export function WalikelasMatrixPage() {
                                                   ? "Disetujui"
                                                   : g.status}
                                               </Badge>
+                                            </td>
+                                            <td className="px-4 py-2 text-left font-medium text-on-surface-variant whitespace-nowrap">
+                                              {g.teacherName || "—"}
                                             </td>
                                             <td className="px-4 py-2 text-right whitespace-nowrap">
                                                <button
