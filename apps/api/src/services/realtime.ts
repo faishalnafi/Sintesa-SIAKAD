@@ -15,6 +15,7 @@ export type RealtimeEventType =
   | "class_updated"
   | "subject_updated"
   | "teacher_assigned"
+  | "schedule_updated"
   // Integration events
   | "sync_completed"
   // System

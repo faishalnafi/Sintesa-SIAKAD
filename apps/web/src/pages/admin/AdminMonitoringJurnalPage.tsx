@@ -3,6 +3,7 @@ import Swal from "sweetalert2";
 import { api } from "@/lib/api";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -486,8 +487,8 @@ export function AdminMonitoringJurnalPage() {
       </Card>
 
       {/* Modal Edit Jurnal */}
-      {editingItem && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+      <Modal isOpen={!!editingItem} onClose={closeEditModal}>
+        {editingItem && (
           <Card className="w-full max-w-lg shadow-2xl bg-[var(--bg)] animate-slide-up">
             <CardHeader
               title={`Edit Jurnal: ${editingItem.label}`}
@@ -526,8 +527,8 @@ export function AdminMonitoringJurnalPage() {
               </div>
             </div>
           </Card>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   );
 }

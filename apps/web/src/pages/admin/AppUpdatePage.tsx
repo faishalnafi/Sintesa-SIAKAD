@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Swal from "sweetalert2";
 import { api } from "@/lib/api";
+import { Modal } from "@/components/ui/Modal";
 import { useSystemStore } from "@/store/system";
 
 type CheckResult = {
@@ -792,115 +793,117 @@ export function AppUpdatePage({ defaultTab }: Props) {
       )}
 
       {/* Manual Release JSON Modal */}
-      {showReleaseModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-700/80 text-slate-100 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5 relative">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <h3 className="text-base font-bold font-display text-white">
-                Buat Manifest version.json Manual
-              </h3>
+      <Modal
+        isOpen={showReleaseModal}
+        onClose={() => setShowReleaseModal(false)}
+        backdropClassName="bg-slate-950/90 backdrop-blur-md"
+      >
+        <div className="bg-slate-900 border border-slate-700/80 text-slate-100 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5 relative">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+            <h3 className="text-base font-bold font-display text-white">
+              Buat Manifest version.json Manual
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowReleaseModal(false)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveReleaseJson} className="space-y-4 text-xs">
+            <div>
+              <label className="block text-slate-300 mb-1 font-medium">Nomor Versi (SemVer):</label>
+              <input
+                type="text"
+                required
+                value={formVersion}
+                onChange={(e) => setFormVersion(e.target.value)}
+                placeholder="e.g. 1.2.0"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-300 mb-1 font-medium">Build Code (Integer):</label>
+                <input
+                  type="number"
+                  required
+                  value={formVersionCode}
+                  onChange={(e) => setFormVersionCode(Number(e.target.value))}
+                  placeholder="102"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-300 mb-1 font-medium">DB Version:</label>
+                <input
+                  type="text"
+                  value={formDbVersion}
+                  onChange={(e) => setFormDbVersion(e.target.value)}
+                  placeholder="1.2.0"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-300 mb-1 font-medium">Judul Pembaruan:</label>
+              <input
+                type="text"
+                required
+                value={formTitle}
+                onChange={(e) => setFormTitle(e.target.value)}
+                placeholder="Judul rilis..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-300 mb-1 font-medium">Changelog (1 Poin Per Baris):</label>
+              <textarea
+                rows={4}
+                required
+                value={formChangelog}
+                onChange={(e) => setFormChangelog(e.target.value)}
+                placeholder="Poin 1...&#10;Poin 2..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none font-mono"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="checkbox"
+                id="forceCheck"
+                checked={formForceUpdate}
+                onChange={(e) => setFormForceUpdate(e.target.checked)}
+                className="rounded border-slate-700 text-emerald-600 focus:ring-emerald-500 bg-slate-950"
+              />
+              <label htmlFor="forceCheck" className="text-xs text-slate-300 select-none cursor-pointer">
+                Tandai sebagai Pembaruan Wajib (Mandatory Force Update)
+              </label>
+            </div>
+
+            <div className="pt-3 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setShowReleaseModal(false)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                className="px-4 py-2 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
               >
-                <span className="material-symbols-outlined">close</span>
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-md transition-colors"
+              >
+                Simpan Manifest
               </button>
             </div>
-
-            <form onSubmit={handleSaveReleaseJson} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 mb-1 font-medium">Nomor Versi (SemVer):</label>
-                <input
-                  type="text"
-                  required
-                  value={formVersion}
-                  onChange={(e) => setFormVersion(e.target.value)}
-                  placeholder="e.g. 1.2.0"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 mb-1 font-medium">Build Code (Integer):</label>
-                  <input
-                    type="number"
-                    required
-                    value={formVersionCode}
-                    onChange={(e) => setFormVersionCode(Number(e.target.value))}
-                    placeholder="102"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-300 mb-1 font-medium">DB Version:</label>
-                  <input
-                    type="text"
-                    value={formDbVersion}
-                    onChange={(e) => setFormDbVersion(e.target.value)}
-                    placeholder="1.2.0"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 mb-1 font-medium">Judul Pembaruan:</label>
-                <input
-                  type="text"
-                  required
-                  value={formTitle}
-                  onChange={(e) => setFormTitle(e.target.value)}
-                  placeholder="Judul rilis..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 mb-1 font-medium">Changelog (1 Poin Per Baris):</label>
-                <textarea
-                  rows={4}
-                  required
-                  value={formChangelog}
-                  onChange={(e) => setFormChangelog(e.target.value)}
-                  placeholder="Poin 1...&#10;Poin 2..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-950 text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none font-mono"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="forceCheck"
-                  checked={formForceUpdate}
-                  onChange={(e) => setFormForceUpdate(e.target.checked)}
-                  className="rounded border-slate-700 text-emerald-600 focus:ring-emerald-500 bg-slate-950"
-                />
-                <label htmlFor="forceCheck" className="text-xs text-slate-300 select-none cursor-pointer">
-                  Tandai sebagai Pembaruan Wajib (Mandatory Force Update)
-                </label>
-              </div>
-
-              <div className="pt-3 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowReleaseModal(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-md transition-colors"
-                >
-                  Simpan Manifest
-                </button>
-              </div>
-            </form>
-          </div>
+          </form>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }

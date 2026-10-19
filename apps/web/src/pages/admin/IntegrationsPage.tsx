@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Modal } from "@/components/ui/Modal";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 export type SsoProviderItem = {
@@ -341,7 +342,7 @@ function SsoConfigModal({
   const isGenericOidc = provider.id === "generic_oidc";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <Modal isOpen={true} onClose={onClose}>
       <div
         className="w-full max-w-xl rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
         style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
@@ -534,7 +535,7 @@ function SsoConfigModal({
           </div>
         </form>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -625,10 +626,8 @@ function CreateSsoModal({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <Modal isOpen={isOpen} onClose={onClose}>
       <div
         className="w-full max-w-xl rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
         style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
@@ -769,7 +768,7 @@ function CreateSsoModal({
           </div>
         </form>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -791,10 +790,8 @@ function UnifiedSsoModal({
   syncError?: string | null;
   onClose: () => void;
 }) {
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <Modal isOpen={isOpen} onClose={onClose}>
       <div
         className="w-full max-w-lg rounded-2xl p-6 border shadow-2xl flex flex-col gap-5 text-left animate-scaleUp max-h-[90vh] overflow-y-auto"
         style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
@@ -926,7 +923,7 @@ function UnifiedSsoModal({
           </div>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1415,7 +1412,7 @@ function SyncSourceConfigModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
+    <Modal isOpen={true} onClose={onClose}>
       <div className="relative w-full max-w-lg rounded-2xl border bg-[var(--surface)] p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" style={{ borderColor: "var(--divider)" }}>
         <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
           <div className="flex items-center gap-2">
@@ -1514,7 +1511,7 @@ function SyncSourceConfigModal({
           </div>
         </form>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -2191,80 +2188,78 @@ export function IntegrationsPage() {
       />
 
       {/* 5. Modal Create API Key */}
-      {showCreateKeyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-          <form
-            onSubmit={handleCreateApiKey}
-            className="w-full max-w-md rounded-2xl p-6 border shadow-2xl flex flex-col gap-4 text-left animate-scaleUp"
-            style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
-          >
-            <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">vpn_key</span>
-                <h3 className="font-display font-bold text-base">Create New API Key</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCreateKeyModal(false)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
-              >
-                <span className="material-symbols-outlined text-[18px]">close</span>
-              </button>
+      <Modal isOpen={showCreateKeyModal} onClose={() => setShowCreateKeyModal(false)}>
+        <form
+          onSubmit={handleCreateApiKey}
+          className="w-full max-w-md rounded-2xl p-6 border shadow-2xl flex flex-col gap-4 text-left animate-scaleUp"
+          style={{ background: "var(--bg)", borderColor: "var(--divider)", color: "var(--fg)" }}
+        >
+          <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--divider)" }}>
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[var(--accent)] text-[22px]">vpn_key</span>
+              <h3 className="font-display font-bold text-base">Create New API Key</h3>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowCreateKeyModal(false)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center app-muted hover:bg-[var(--hover)]"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Application / Client Name</label>
-              <input
-                type="text"
-                value={newAppName}
-                onChange={(e) => setNewAppName(e.target.value)}
-                placeholder="e.g. PASTi Attendance App"
-                required
-                className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
-              />
-            </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold">Application / Client Name</label>
+            <input
+              type="text"
+              value={newAppName}
+              onChange={(e) => setNewAppName(e.target.value)}
+              placeholder="e.g. PASTi Attendance App"
+              required
+              className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
+            />
+          </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Custom Token Prefix (Max. 5 Characters)</label>
-              <input
-                type="text"
-                value={newPrefix}
-                onChange={(e) => setNewPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5))}
-                placeholder="e.g. data or pasti"
-                maxLength={5}
-                required
-                className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
-              />
-              <p className="text-[10px] app-muted">Lowercase letters and numbers only. Your token prefix (e.g. <code>data_...</code>)</p>
-            </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold">Custom Token Prefix (Max. 5 Characters)</label>
+            <input
+              type="text"
+              value={newPrefix}
+              onChange={(e) => setNewPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5))}
+              placeholder="e.g. data or pasti"
+              maxLength={5}
+              required
+              className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
+            />
+            <p className="text-[10px] app-muted">Lowercase letters and numbers only. Your token prefix (e.g. <code>data_...</code>)</p>
+          </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold">Allowed Domain / IP</label>
-              <input
-                type="text"
-                value={newDomain}
-                onChange={(e) => setNewDomain(e.target.value)}
-                placeholder="* or localhost or domain.com"
-                required
-                className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
-              />
-              <p className="text-[10px] app-muted">Use <code>*</code> to allow all host domains.</p>
-            </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold">Allowed Domain / IP</label>
+            <input
+              type="text"
+              value={newDomain}
+              onChange={(e) => setNewDomain(e.target.value)}
+              placeholder="* or localhost or domain.com"
+              required
+              className="w-full px-3 py-2 text-sm rounded-xl border font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              style={{ background: "var(--surface)", borderColor: "var(--input-border)", color: "var(--fg)" }}
+            />
+            <p className="text-[10px] app-muted">Use <code>*</code> to allow all host domains.</p>
+          </div>
 
-            <div className="pt-2 flex justify-end gap-2 border-t mt-2" style={{ borderColor: "var(--divider)" }}>
-              <Button type="button" size="sm" variant="secondary" onClick={() => setShowCreateKeyModal(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" variant="primary" disabled={createSubmitting}>
-                {createSubmitting ? "Creating..." : "Save Key"}
-              </Button>
-            </div>
-          </form>
-        </div>
-      )}
+          <div className="pt-2 flex justify-end gap-2 border-t mt-2" style={{ borderColor: "var(--divider)" }}>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setShowCreateKeyModal(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" variant="primary" disabled={createSubmitting}>
+              {createSubmitting ? "Creating..." : "Save Key"}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

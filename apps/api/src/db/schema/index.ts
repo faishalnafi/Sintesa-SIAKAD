@@ -273,10 +273,41 @@ export const teacherSubjects = pgTable(
     subjectId: uuid("subject_id")
       .notNull()
       .references(() => subjects.id, { onDelete: "cascade" }),
+    targetJp: integer("target_jp").notNull().default(24),
     ...timestamps,
   },
   (t) => [uniqueIndex("teacher_subjects_unique_idx").on(t.userId, t.subjectId)],
 );
+
+/**
+ * Pemetaan Tugas Mengajar Guru per Kelas & Jam Pelajaran (JP)
+ */
+export const classSubjectAssignments = pgTable(
+  "class_subject_assignments",
+  {
+    id: id(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    subjectId: uuid("subject_id")
+      .notNull()
+      .references(() => subjects.id, { onDelete: "cascade" }),
+    teacherUserId: uuid("teacher_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    jp: integer("jp").default(2).notNull(), // Alokasi jam pelajaran per minggu
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("class_subject_assignments_unique_idx").on(
+      t.classId,
+      t.subjectId,
+      t.teacherUserId
+    ),
+  ]
+);
+
+export type ClassSubjectAssignment = typeof classSubjectAssignments.$inferSelect;
 
 /**
  * Pivot penugasan Guru ke Kelas sebagai Wali Kelas (bisa multi wali kelas)

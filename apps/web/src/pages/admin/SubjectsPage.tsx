@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Swal from "sweetalert2";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -8,6 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Pagination } from "@/components/ui/Pagination";
 import { usePagination } from "@/lib/pagination";
 import { SearchableSelect } from "@/components/ui/SearchableSelect";
+import { Modal } from "@/components/ui/Modal";
 import { useRealtimeEvent } from "@/hooks/useRealtimeEvent";
 import { sortClasses, sortSubjects, sortTeachers, sortTeachingHours } from "@/lib/sort";
 
@@ -19,6 +21,50 @@ type Subject = {
   isActive: boolean;
   assignmentCount: number;
   gradeCount: number;
+};
+
+export type ClassSubjectMapping = {
+  id: string;
+  classId: string;
+  className: string;
+  classGrade?: string | null;
+  subjectId: string;
+  subjectName: string;
+  subjectCode: string | null;
+  subjectType: string;
+  teacherUserId: string;
+  teacherName: string;
+  teacherNip: string | null;
+  jp: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TeacherAssignment = {
+  id: string;
+  userId: string;
+  userName: string;
+  userNip: string | null;
+  subjectId: string;
+  subjectName: string;
+  subjectCode: string | null;
+  targetJp: number;
+  mappedJp: number;
+  deficitJp: number;
+  excessJp: number;
+  status: "under" | "fulfilled" | "over";
+};
+
+export type MappingStats = {
+  totalMappings: number;
+  totalJp: number;
+  totalClassesMapped: number;
+  classesSummary: Array<{
+    classId: string;
+    className: string;
+    mapelCount: number;
+    totalJp: number;
+  }>;
 };
 
 type FormState = {
@@ -88,17 +134,10 @@ export function SubjectsPage() {
   // Penugasan Guru states
   const [teachers, setTeachers] = useState<Array<{ id: string; name: string; nip: string | null }>>([]);
   const [homeroomTeachers, setHomeroomTeachers] = useState<Array<{ id: string; name: string; nip: string | null }>>([]);
-  const [assignments, setAssignments] = useState<Array<{
-    id: string;
-    userId: string;
-    userName: string;
-    userNip: string | null;
-    subjectId: string;
-    subjectName: string;
-    subjectCode: string | null;
-  }>>([]);
+  const [assignments, setAssignments] = useState<TeacherAssignment[]>([]);
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
+  const [targetJpInput, setTargetJpInput] = useState<number>(24);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
 
   // Penugasan Wali Kelas states
@@ -183,6 +222,378 @@ export function SubjectsPage() {
   const [compSortOrder, setCompSortOrder] = useState(1);
   const [editingCompId, setEditingCompId] = useState<string | null>(null);
 
+  // Mapping Jadwal & Pemetaan Tugas Guru per Kelas States
+  const [mappings, setMappings] = useState<ClassSubjectMapping[]>([]);
+  const [loadingMappings, setLoadingMappings] = useState(false);
+  const [selectedMappingClassId, setSelectedMappingClassId] = useState<string>("");
+  const [mappingSearch, setMappingSearch] = useState<string>("");
+  const [mappingGradeFilter, setMappingGradeFilter] = useState<string>("ALL");
+  const [mappingStats, setMappingStats] = useState<MappingStats | null>(null);
+
+  // Modal / Form state pemetaan mapel ke kelas
+  const [isAddMappingModalOpen, setIsAddMappingModalOpen] = useState(false);
+  const [editingMappingId, setEditingMappingId] = useState<string | null>(null);
+  const [modalSubjectId, setModalSubjectId] = useState("");
+  const [modalTeacherUserId, setModalTeacherUserId] = useState("");
+  const [modalJp, setModalJp] = useState(2);
+
+  // Modal salin pemetaan ke kelas lain
+  const [isCopyClassModalOpen, setIsCopyClassModalOpen] = useState(false);
+  const [copyTargetClassId, setCopyTargetClassId] = useState("");
+
+  const loadMappings = async (classId?: string) => {
+    setLoadingMappings(true);
+    try {
+      const url = classId ? `/admin/class-subject-mappings?classId=${classId}` : "/admin/class-subject-mappings";
+      const res = await api<ClassSubjectMapping[]>(url);
+      setMappings(res.data ?? []);
+    } catch (e) {
+      console.error("loadMappings error:", e);
+    } finally {
+      setLoadingMappings(false);
+    }
+  };
+
+  const loadMappingStats = async () => {
+    try {
+      const res = await api<MappingStats>("/admin/class-subject-mappings/stats");
+      if (res.data) {
+        setMappingStats(res.data);
+      }
+    } catch (e) {
+      console.error("loadMappingStats error:", e);
+    }
+  };
+
+  // Saat kelas terpilih berganti atau data kelas dimuat
+  useEffect(() => {
+    if (classesList.length > 0 && !selectedMappingClassId) {
+      setSelectedMappingClassId(classesList[0].id);
+    }
+  }, [classesList, selectedMappingClassId]);
+
+  useEffect(() => {
+    if (selectedMappingClassId) {
+      loadMappings(selectedMappingClassId);
+    }
+  }, [selectedMappingClassId]);
+
+  useEffect(() => {
+    loadMappingStats();
+  }, []);
+
+  const handleOpenAddMapping = () => {
+    setEditingMappingId(null);
+    setModalSubjectId("");
+    setModalTeacherUserId("");
+    setModalJp(2);
+    setIsAddMappingModalOpen(true);
+  };
+
+  const handleOpenEditMapping = (m: ClassSubjectMapping) => {
+    setEditingMappingId(m.id);
+    setModalSubjectId(m.subjectId);
+    setModalTeacherUserId(m.teacherUserId);
+    setModalJp(m.jp);
+    setIsAddMappingModalOpen(true);
+  };
+
+  const handleModalSelectSubject = (subjId: string) => {
+    setModalSubjectId(subjId);
+    // Cari guru yang sudah ditugaskan ke mapel ini di master penugasan guru
+    const existing = assignments.find((a) => a.subjectId === subjId);
+    if (existing) {
+      setModalTeacherUserId(existing.userId);
+    }
+  };
+
+  const handleSaveMapping = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedMappingClassId) {
+      Swal.fire({ icon: "warning", title: "Pilih Kelas", text: "Silakan pilih kelas terlebih dahulu.", confirmButtonColor: "#2563eb" });
+      return;
+    }
+    if (!modalSubjectId) {
+      Swal.fire({ icon: "warning", title: "Pilih Mapel", text: "Silakan pilih mata pelajaran.", confirmButtonColor: "#2563eb" });
+      return;
+    }
+    if (!modalTeacherUserId) {
+      Swal.fire({ icon: "warning", title: "Pilih Guru", text: "Silakan pilih guru pengajar.", confirmButtonColor: "#2563eb" });
+      return;
+    }
+
+    setBusy(true);
+    try {
+      if (editingMappingId) {
+        const res = await api<{ success: boolean; message?: string }>(`/admin/class-subject-mappings/${editingMappingId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            teacherUserId: modalTeacherUserId,
+            jp: modalJp,
+          }),
+        });
+        if (res.success) {
+          Swal.fire({ icon: "success", title: "Berhasil", text: "Pemetaan tugas guru berhasil diperbarui.", timer: 1500, showConfirmButton: false });
+          setIsAddMappingModalOpen(false);
+          await Promise.all([loadMappings(selectedMappingClassId), loadMappingStats()]);
+        } else {
+          Swal.fire({ icon: "error", title: "Gagal", text: res.message || "Gagal memperbarui pemetaan.", confirmButtonColor: "#2563eb" });
+        }
+      } else {
+        const res = await api<{ success: boolean; message?: string }>("/admin/class-subject-mappings", {
+          method: "POST",
+          body: JSON.stringify({
+            classId: selectedMappingClassId,
+            subjectId: modalSubjectId,
+            teacherUserId: modalTeacherUserId,
+            jp: modalJp,
+          }),
+        });
+        if (res.success) {
+          Swal.fire({ icon: "success", title: "Berhasil", text: "Mata pelajaran & guru berhasil dipetakan ke kelas ini.", timer: 1500, showConfirmButton: false });
+          setIsAddMappingModalOpen(false);
+          await Promise.all([loadMappings(selectedMappingClassId), loadMappingStats()]);
+        } else {
+          Swal.fire({ icon: "error", title: "Gagal", text: res.message || "Gagal menyimpan pemetaan.", confirmButtonColor: "#2563eb" });
+        }
+      }
+    } catch (err) {
+      Swal.fire({ icon: "error", title: "Gagal", text: err instanceof Error ? err.message : "Terjadi kesalahan.", confirmButtonColor: "#2563eb" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteMapping = async (id: string, subjectName: string, teacherName: string) => {
+    const confirm = await Swal.fire({
+      title: "Hapus Pemetaan?",
+      html: `Apakah Anda yakin ingin menghapus mapel <b>${subjectName}</b> (Guru: <b>${teacherName}</b>) dari kelas ini?`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#e11d48",
+      cancelButtonColor: "#64748b",
+      confirmButtonText: "Ya, Hapus",
+      cancelButtonText: "Batal",
+    });
+    if (!confirm.isConfirmed) return;
+
+    setBusy(true);
+    try {
+      const res = await api<{ success: boolean; message?: string }>(`/admin/class-subject-mappings/${id}`, {
+        method: "DELETE",
+      });
+      if (res.success) {
+        Swal.fire({ icon: "success", title: "Terhapus", text: "Pemetaan mapel berhasil dihapus.", timer: 1500, showConfirmButton: false });
+        await Promise.all([loadMappings(selectedMappingClassId), loadMappingStats()]);
+      } else {
+        Swal.fire({ icon: "error", title: "Gagal", text: res.message || "Gagal menghapus.", confirmButtonColor: "#2563eb" });
+      }
+    } catch (err) {
+      Swal.fire({ icon: "error", title: "Gagal", text: err instanceof Error ? err.message : "Terjadi kesalahan.", confirmButtonColor: "#2563eb" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleQuickUpdateJp = async (mappingId: string, currentJp: number, delta: number) => {
+    const targetMapping = mappings.find((m) => m.id === mappingId);
+    if (!targetMapping) return;
+
+    const newJp = Math.max(1, Math.min(20, currentJp + delta));
+    if (newJp === currentJp) return;
+
+    // Cek jika penambahan akan melebihi target beban JP guru
+    if (delta > 0) {
+      const assignment = assignments.find(
+        (a) => a.subjectId === targetMapping.subjectId && a.userId === targetMapping.teacherUserId
+      );
+      if (assignment) {
+        const targetJp = assignment.targetJp || 24;
+        const currentMapped = assignment.mappedJp || 0;
+        if (currentMapped + delta > targetJp) {
+          Swal.fire({
+            icon: "error",
+            title: "Beban Mengajar Melebihi Batas!",
+            html: `Guru <b>${targetMapping.teacherName}</b> memiliki target beban maksimal <b>${targetJp} JP</b> per pekan.<br/><br/>Saat ini sudah terpetakan <b>${currentMapped} JP</b> di seluruh rombel. Penambahan tidak dapat dilakukan karena akan melebihi target.`,
+            confirmButtonColor: "#2563eb",
+          });
+          return;
+        }
+      }
+    }
+
+    // Optimistic UI update
+    setMappings((prev) =>
+      prev.map((m) => (m.id === mappingId ? { ...m, jp: newJp } : m))
+    );
+
+    try {
+      const res = await api<{ success: boolean; message?: string }>(`/admin/class-subject-mappings/${mappingId}`, {
+        method: "PUT",
+        body: JSON.stringify({ jp: newJp }),
+      });
+      if (!res.success) {
+        Swal.fire({ icon: "error", title: "Gagal Mengubah JP", text: res.message || "Gagal mengubah alokasi JP", confirmButtonColor: "#2563eb" });
+        await loadMappings(selectedMappingClassId);
+      } else {
+        await Promise.all([loadMappingStats(), loadAssignments()]);
+      }
+    } catch (e) {
+      console.error(e);
+      Swal.fire({ icon: "error", title: "Gagal Mengubah JP", text: e instanceof Error ? e.message : "Terjadi kesalahan.", confirmButtonColor: "#2563eb" });
+      await loadMappings(selectedMappingClassId);
+    }
+  };
+
+  const handleAutoPopulate = async () => {
+    if (!selectedMappingClassId) return;
+    const currentClass = classesList.find((c) => c.id === selectedMappingClassId);
+
+    const confirm = await Swal.fire({
+      title: "Tautkan Otomatis dari Penugasan Guru?",
+      html: `Seluruh mata pelajaran aktif yang sudah memiliki guru penugasan di tab <b>Penugasan Guru</b> akan otomatis ditautkan ke kelas <b>${currentClass?.name || "ini"}</b> dengan alokasi standar <b>2 JP</b> per mapel.<br/><br/><small class="text-gray-500">Mapel yang sudah ada di kelas ini tidak akan ditimpa.</small>`,
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonColor: "#2563eb",
+      cancelButtonColor: "#64748b",
+      confirmButtonText: "Ya, Tautkan Sekarang",
+      cancelButtonText: "Batal",
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    setBusy(true);
+    try {
+      const res = await api<{ success: boolean; message: string; data?: { insertedCount: number } }>("/admin/class-subject-mappings/auto-populate", {
+        method: "POST",
+        body: JSON.stringify({
+          classId: selectedMappingClassId,
+          defaultJp: 2,
+        }),
+      });
+
+      if (res.success) {
+        Swal.fire({
+          icon: "success",
+          title: "Selesai",
+          text: res.message,
+          confirmButtonColor: "#2563eb",
+        });
+        await Promise.all([loadMappings(selectedMappingClassId), loadMappingStats()]);
+      } else {
+        Swal.fire({ icon: "error", title: "Gagal", text: res.message, confirmButtonColor: "#2563eb" });
+      }
+    } catch (err) {
+      Swal.fire({ icon: "error", title: "Gagal", text: err instanceof Error ? err.message : "Terjadi kesalahan.", confirmButtonColor: "#2563eb" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCopyClass = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedMappingClassId || !copyTargetClassId) return;
+
+    const srcClass = classesList.find((c) => c.id === selectedMappingClassId);
+    const destClass = classesList.find((c) => c.id === copyTargetClassId);
+
+    const confirm = await Swal.fire({
+      title: "Salin Pemetaan ke Kelas Lain?",
+      html: `Duplikasi seluruh pemetaan mapel, guru pengajar, dan JP dari <b>${srcClass?.name}</b> ke <b>${destClass?.name}</b>?`,
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonColor: "#2563eb",
+      cancelButtonColor: "#64748b",
+      confirmButtonText: "Ya, Salin",
+      cancelButtonText: "Batal",
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    setBusy(true);
+    try {
+      const res = await api<{ success: boolean; message: string }>("/admin/class-subject-mappings/copy-class", {
+        method: "POST",
+        body: JSON.stringify({
+          sourceClassId: selectedMappingClassId,
+          targetClassId: copyTargetClassId,
+        }),
+      });
+
+      if (res.success) {
+        Swal.fire({ icon: "success", title: "Berhasil Disalin", text: res.message, confirmButtonColor: "#2563eb" });
+        setIsCopyClassModalOpen(false);
+        setCopyTargetClassId("");
+        await loadMappingStats();
+      } else {
+        Swal.fire({ icon: "error", title: "Gagal", text: res.message, confirmButtonColor: "#2563eb" });
+      }
+    } catch (err) {
+      Swal.fire({ icon: "error", title: "Gagal", text: err instanceof Error ? err.message : "Terjadi kesalahan.", confirmButtonColor: "#2563eb" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedClass = useMemo(() => {
+    return classesList.find((c) => c.id === selectedMappingClassId);
+  }, [classesList, selectedMappingClassId]);
+
+  const selectedClassHomeroom = useMemo(() => {
+    return homeroomAssignmentsList.find((h) => h.classId === selectedMappingClassId);
+  }, [homeroomAssignmentsList, selectedMappingClassId]);
+
+  const filteredClassesList = useMemo(() => {
+    return classesList.filter((c) => {
+      if (mappingGradeFilter === "ALL") return true;
+      const nameUpper = c.name.toUpperCase();
+      if (mappingGradeFilter === "X") {
+        return nameUpper.startsWith("X ") || nameUpper.startsWith("X-") || nameUpper === "X" || nameUpper.startsWith("10");
+      }
+      if (mappingGradeFilter === "XI") {
+        return nameUpper.startsWith("XI ") || nameUpper.startsWith("XI-") || nameUpper === "XI" || nameUpper.startsWith("11");
+      }
+      if (mappingGradeFilter === "XII") {
+        return nameUpper.startsWith("XII ") || nameUpper.startsWith("XII-") || nameUpper === "XII" || nameUpper.startsWith("12");
+      }
+      return true;
+    });
+  }, [classesList, mappingGradeFilter]);
+
+  const classSummaryMap = useMemo(() => {
+    const map: Record<string, { mapelCount: number; totalJp: number }> = {};
+    if (mappingStats?.classesSummary) {
+      for (const item of mappingStats.classesSummary) {
+        map[item.classId] = {
+          mapelCount: item.mapelCount,
+          totalJp: item.totalJp,
+        };
+      }
+    }
+    return map;
+  }, [mappingStats]);
+
+  const filteredMappings = useMemo(() => {
+    return mappings.filter((m) => {
+      if (!mappingSearch.trim()) return true;
+      const q = mappingSearch.toLowerCase();
+      return (
+        m.subjectName.toLowerCase().includes(q) ||
+        (m.subjectCode && m.subjectCode.toLowerCase().includes(q)) ||
+        m.teacherName.toLowerCase().includes(q) ||
+        (m.teacherNip && m.teacherNip.toLowerCase().includes(q))
+      );
+    });
+  }, [mappings, mappingSearch]);
+
+  const totalClassJp = useMemo(() => {
+    return mappings.reduce((acc, curr) => acc + (curr.jp || 0), 0);
+  }, [mappings]);
+
+  const currentEditingMapping = useMemo(() => {
+    return mappings.find((m) => m.id === editingMappingId);
+  }, [mappings, editingMappingId]);
+
   const loadTeachingHours = async () => {
     setLoadingHours(true);
     try {
@@ -239,15 +650,7 @@ export function SubjectsPage() {
       const [tRes, htRes, aRes, cRes, ssoKlsRes, hRes] = await Promise.allSettled([
         api<Array<{ id: string; name: string; nip: string | null }>>("/admin/teachers"),
         api<Array<{ id: string; name: string; nip: string | null }>>("/admin/teachers?role=walikelas"),
-        api<Array<{
-          id: string;
-          userId: string;
-          userName: string;
-          userNip: string | null;
-          subjectId: string;
-          subjectName: string;
-          subjectCode: string | null;
-        }>>("/admin/teacher-assignments"),
+        api<Array<TeacherAssignment>>("/admin/teacher-assignments"),
         api<{ classes?: Array<{ id: string; name: string }>; data?: unknown }>("/admin/classes"),
         api<Array<{ id: string; nama_kelas: string }>>("/admin/sso/kelas"),
         api<Array<{
@@ -318,20 +721,24 @@ export function SubjectsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterType, filterActive]);
 
-  // Realtime: auto-reload saat admin CRUD mapel, penugasan guru, atau komponen penilaian
+  // Realtime: auto-reload saat admin CRUD mapel, penugasan guru, jadwal/pemetaan, atau komponen penilaian
   useRealtimeEvent(
-    ["subject_updated", "teacher_assigned"],
+    ["subject_updated", "teacher_assigned", "schedule_updated"],
     () => {
       load();
       loadAssignments();
       loadAssessmentComponents();
+      loadMappingStats();
+      if (selectedMappingClassId) {
+        loadMappings(selectedMappingClassId);
+      }
     }
   );
 
   const handleAssignTeacher = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedTeacherId || !selectedSubjectId) {
-      alert("Pilih guru dan mapel terlebih dahulu");
+      Swal.fire({ icon: "warning", title: "Pilih Guru & Mapel", text: "Silakan pilih guru dan mata pelajaran terlebih dahulu.", confirmButtonColor: "#2563eb" });
       return;
     }
     setBusy(true);
@@ -341,20 +748,67 @@ export function SubjectsPage() {
         body: JSON.stringify({
           userId: selectedTeacherId,
           subjectId: selectedSubjectId,
+          targetJp: targetJpInput,
         }),
       });
       if (res.success) {
-        setMessage(res.message || "Guru berhasil ditugaskan ke mapel");
+        Swal.fire({ icon: "success", title: "Berhasil", text: res.message || "Guru berhasil ditugaskan ke mapel", timer: 1500, showConfirmButton: false });
         setSelectedTeacherId("");
         setSelectedSubjectId("");
+        setTargetJpInput(24);
         await loadAssignments();
       } else {
-        alert(res.message || "Gagal menugaskan guru");
+        Swal.fire({ icon: "error", title: "Gagal", text: res.message || "Gagal menugaskan guru", confirmButtonColor: "#2563eb" });
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal");
+      Swal.fire({ icon: "error", title: "Gagal", text: err instanceof Error ? err.message : "Terjadi kesalahan.", confirmButtonColor: "#2563eb" });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleEditTargetJp = async (assignmentId: string, currentTarget: number, teacherName: string, mapelName: string) => {
+    const { value: newTarget } = await Swal.fire({
+      title: "Ubah Target Beban JP",
+      html: `Target JP mingguan untuk <b>${teacherName}</b><br/><small class="text-gray-500">${mapelName}</small>`,
+      input: "number",
+      inputValue: currentTarget || 24,
+      inputAttributes: {
+        min: "1",
+        max: "60",
+        step: "1",
+      },
+      showCancelButton: true,
+      confirmButtonText: "Simpan Target",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#2563eb",
+      inputValidator: (val) => {
+        const num = parseInt(val);
+        if (!val || isNaN(num) || num < 1 || num > 60) {
+          return "Masukkan angka target JP antara 1 s/d 60 JP";
+        }
+        return null;
+      },
+    });
+
+    if (newTarget) {
+      setBusy(true);
+      try {
+        const res = await api<{ success: boolean; message?: string }>(`/admin/teacher-assignments/${assignmentId}`, {
+          method: "PUT",
+          body: JSON.stringify({ targetJp: parseInt(newTarget) }),
+        });
+        if (res.success) {
+          Swal.fire({ icon: "success", title: "Berhasil", text: "Target JP berhasil diperbarui", timer: 1500, showConfirmButton: false });
+          await loadAssignments();
+        } else {
+          Swal.fire({ icon: "error", title: "Gagal", text: res.message || "Gagal memperbarui target JP", confirmButtonColor: "#2563eb" });
+        }
+      } catch (err) {
+        Swal.fire({ icon: "error", title: "Gagal", text: err instanceof Error ? err.message : "Terjadi kesalahan." });
+      } finally {
+        setBusy(false);
+      }
     }
   };
 
@@ -645,10 +1099,10 @@ export function SubjectsPage() {
       }
       case "jadwal":
         return [
-          { label: "Status Fitur", value: "On Going", icon: "pending" },
-          { label: "Modul Rencana", value: "Jadwal Guru", icon: "calendar_month" },
-          { label: "Integrasi", value: "Jurnal KBM", icon: "sync" },
-          { label: "Hari KBM", value: "Senin – Sabtu", icon: "date_range" },
+          { label: "Total Pemetaan", value: mappingStats?.totalMappings ?? 0, icon: "assignment" },
+          { label: "Total JP Terjadwal", value: `${mappingStats?.totalJp ?? 0} JP`, icon: "schedule" },
+          { label: "Kelas Terpetakan", value: `${mappingStats?.totalClassesMapped ?? 0} / ${classesList.length}`, icon: "domain" },
+          { label: "Rata-rata JP/Kelas", value: mappingStats && mappingStats.totalClassesMapped > 0 ? `${(mappingStats.totalJp / mappingStats.totalClassesMapped).toFixed(1)} JP` : "0 JP", icon: "timelapse" },
         ];
       case "penilaian": {
         const activeCols = assessmentComponentsList.filter((c) => c.status === "active").length;
@@ -679,6 +1133,7 @@ export function SubjectsPage() {
     classesList.length,
     teachingHoursList,
     assessmentComponentsList,
+    mappingStats,
   ]);
 
   const tabs: Array<{
@@ -721,9 +1176,8 @@ export function SubjectsPage() {
       id: "jadwal",
       label: "Mapping Jadwal",
       icon: "calendar_month",
-      count: "On Going",
-      description: "Pemetaan jadwal pelajaran & hari mengajar guru (On Going)",
-      isOngoing: true,
+      count: mappingStats?.totalMappings ?? 0,
+      description: "Pemetaan tugas mengajar guru & alokasi jam pelajaran (JP) per rombel kelas",
     },
     {
       id: "penilaian",
@@ -1132,6 +1586,22 @@ export function SubjectsPage() {
               />
             </div>
 
+            <div>
+              <label className="app-label block mb-1.5">Target Beban JP / Pekan</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={targetJpInput}
+                  onChange={(e) => setTargetJpInput(Math.max(1, Math.min(60, parseInt(e.target.value) || 1)))}
+                  className="w-24 text-center font-bold text-sm app-input py-2 px-3 rounded-xl border border-[var(--divider)]"
+                  required
+                />
+                <span className="text-xs app-muted">JP / Minggu (misal 24 JP, 26 JP, dll)</span>
+              </div>
+            </div>
+
             <div className="pt-1">
               <Button type="submit" disabled={busy} className="w-full">
                 Pasangkan Guru & Mapel
@@ -1143,31 +1613,33 @@ export function SubjectsPage() {
         <Card className="overflow-hidden">
           <CardHeader
             title="Daftar Penugasan Guru"
-            subtitle="Pemetaan guru mengajar mata pelajaran"
+            subtitle="Pemetaan guru mengajar mata pelajaran dan pemenuhan beban JP"
           />
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[600px]">
+            <table className="w-full text-sm min-w-[720px]">
               <thead className="text-left" style={{ background: "var(--hover)" }}>
                 <tr>
                   <th className="px-4 py-3 font-semibold">Nama Guru</th>
-                  <th className="px-4 py-3 font-semibold">NIP / Identitas</th>
                   <th className="px-4 py-3 font-semibold">Mata Pelajaran</th>
-                  <th className="px-4 py-3 font-semibold text-right">Aksi</th>
+                  <th className="px-4 py-3 font-semibold text-center w-28">Target JP</th>
+                  <th className="px-4 py-3 font-semibold text-center w-28">Terpetakan</th>
+                  <th className="px-4 py-3 font-semibold">Status Pemenuhan</th>
+                  <th className="px-4 py-3 font-semibold text-right w-24">Aksi</th>
                 </tr>
               </thead>
               <tbody>
                 {loadingAssignments ? (
                   Array.from({ length: 3 }).map((_, i) => (
                     <tr key={i}>
-                      <td colSpan={4} className="px-4 py-3">
+                      <td colSpan={6} className="px-4 py-3">
                         <Skeleton className="h-8 w-full" />
                       </td>
                     </tr>
                   ))
                 ) : assignmentPager.total === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center app-muted">
+                    <td colSpan={6} className="px-4 py-10 text-center app-muted">
                       Belum ada penugasan guru. Pasangkan guru di formulir kiri.
                     </td>
                   </tr>
@@ -1177,14 +1649,50 @@ export function SubjectsPage() {
                       key={a.id}
                       className="border-t app-divider row-hover transition-colors"
                     >
-                      <td className="px-4 py-3 font-display font-semibold">{a.userName}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-[var(--fg-muted)]">
-                        {a.userNip ?? "—"}
+                      <td className="px-4 py-3">
+                        <div className="font-display font-semibold text-sm">{a.userName}</div>
+                        <div className="font-mono text-xs text-[var(--fg-muted)]">
+                          {a.userNip ? `NIP: ${a.userNip}` : "Non-NIP"}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <Badge status="success">
                           {a.subjectName} ({a.subjectCode ?? "—"})
                         </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleEditTargetJp(a.id, a.targetJp || 24, a.userName, a.subjectName)}
+                          title="Klik untuk ubah Target JP"
+                          className="inline-flex items-center gap-1 font-bold font-mono text-xs px-2.5 py-1 rounded-lg bg-[var(--hover)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] border border-[var(--divider)] transition-colors"
+                        >
+                          {a.targetJp || 24} JP
+                          <span className="material-symbols-outlined text-[13px]">edit</span>
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="font-bold font-mono text-xs text-[var(--fg)]">
+                          {a.mappedJp || 0} JP
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {a.status === "under" ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-semibold">
+                            <span className="material-symbols-outlined text-[14px]">warning</span>
+                            Kurang {a.deficitJp} JP ({a.mappedJp || 0}/{a.targetJp || 24} JP)
+                          </span>
+                        ) : a.status === "fulfilled" ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-semibold">
+                            <span className="material-symbols-outlined text-[14px]">check_circle</span>
+                            Terpenuhi ({a.targetJp || 24}/{a.targetJp || 24} JP)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 font-semibold">
+                            <span className="material-symbols-outlined text-[14px]">error</span>
+                            Lebih {a.excessJp} JP ({a.mappedJp || 0}/{a.targetJp || 24} JP)
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <Button
@@ -1462,67 +1970,593 @@ export function SubjectsPage() {
         </div>
       )}
 
-      {/* Tab Content 5: Mapping Jadwal Mengajar (On Going) */}
+      {/* Tab Content 5: Mapping Jadwal & Pemetaan Tugas Guru per Kelas */}
       {activeTab === "jadwal" && (
-        <div className="space-y-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <h2 className="font-display font-bold text-xl">Mapping Jadwal Mengajar Guru</h2>
-              <Badge status="pending">Tahap Pengembangan · On Going</Badge>
+        <div className="space-y-5">
+          {/* Header & Quick Intro */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <h2 className="font-display font-bold text-xl">Pemetaan Tugas Guru & Jam Pelajaran (JP)</h2>
+                <Badge status="success">Aktif · Terintegrasi Jurnal</Badge>
+              </div>
+              <p className="text-xs app-muted">
+                Petakan mata pelajaran beserta guru pengajar per rombongan belajar (kelas) dan tentukan alokasi Jam Pelajaran (JP) mingguan.
+              </p>
             </div>
-            <p className="text-xs app-muted">
-              Fitur pemetaan jadwal KBM harian guru (Hari, Jam Ke, Kelas, dan Mapel) untuk otomatisasi pengisian Jurnal Guru.
-            </p>
+
+            {/* Quick Action Top Bar (Desktop) */}
+            <div className="hidden sm:flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={true}
+                title="Fitur Tarik Otomatis dinonaktifkan sementara"
+                className="gap-1.5 text-xs opacity-50 cursor-not-allowed"
+              >
+                <span className="material-symbols-outlined text-[16px] text-amber-500">bolt</span>
+                Tarik Otomatis
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setCopyTargetClassId("");
+                  setIsCopyClassModalOpen(true);
+                }}
+                disabled={busy || !selectedMappingClassId || mappings.length === 0}
+                title="Salin seluruh susunan mapel dan guru kelas ini ke kelas rombel lain"
+                className="gap-1.5 text-xs"
+              >
+                <span className="material-symbols-outlined text-[16px] text-sky-500">content_copy</span>
+                Salin Kelas
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleOpenAddMapping}
+                disabled={busy || !selectedMappingClassId}
+                className="gap-1.5 text-xs"
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span>
+                Petakan Mapel
+              </Button>
+            </div>
           </div>
 
-          <Card className="p-8 md:p-12 text-center border-dashed border-2" style={{ borderColor: "var(--divider)" }}>
-            <div className="max-w-md mx-auto space-y-4">
-              <div
-                className="w-16 h-16 rounded-3xl mx-auto flex items-center justify-center shadow-inner"
-                style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+          {/* Mobile Top Selector (Prioritas 2: Mobile - Layar < lg) */}
+          <div className="lg:hidden space-y-3">
+            <Card className="p-3.5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--accent)]">
+                  Pilih Rombongan Belajar (Kelas)
+                </label>
+                <div className="flex items-center gap-1">
+                  {["ALL", "X", "XI", "XII"].map((grade) => (
+                    <button
+                      key={grade}
+                      type="button"
+                      onClick={() => setMappingGradeFilter(grade)}
+                      className={`px-2 py-0.5 text-[11px] rounded-md font-medium transition-colors ${
+                        mappingGradeFilter === grade
+                          ? "bg-[var(--accent)] text-white"
+                          : "bg-[var(--hover)] app-muted hover:text-[var(--fg)]"
+                      }`}
+                    >
+                      {grade === "ALL" ? "Semua" : grade}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <select
+                value={selectedMappingClassId}
+                onChange={(e) => setSelectedMappingClassId(e.target.value)}
+                className="w-full text-sm app-input font-medium py-2.5 px-3 rounded-xl border border-[var(--divider)]"
               >
-                <span className="material-symbols-outlined text-[36px]">calendar_month</span>
+                {filteredClassesList.map((c) => {
+                  const summary = classSummaryMap[c.id];
+                  const jpText = summary ? ` (${summary.totalJp} JP · ${summary.mapelCount} Mapel)` : " (0 JP)";
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {jpText}
+                    </option>
+                  );
+                })}
+              </select>
+
+              {/* Mobile Quick Action Buttons */}
+              <div className="grid grid-cols-3 gap-2 pt-1 sm:hidden">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleOpenAddMapping}
+                  disabled={busy || !selectedMappingClassId}
+                  className="w-full text-[11px] px-2 py-2 flex items-center justify-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[14px]">add</span>
+                  Petakan
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={true}
+                  title="Fitur Tarik Otomatis dinonaktifkan sementara"
+                  className="w-full text-[11px] px-2 py-2 flex items-center justify-center gap-1 opacity-50 cursor-not-allowed"
+                >
+                  <span className="material-symbols-outlined text-[14px] text-amber-500">bolt</span>
+                  Otomatis
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setCopyTargetClassId("");
+                    setIsCopyClassModalOpen(true);
+                  }}
+                  disabled={busy || !selectedMappingClassId || mappings.length === 0}
+                  className="w-full text-[11px] px-2 py-2 flex items-center justify-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[14px] text-sky-500">content_copy</span>
+                  Salin
+                </Button>
+              </div>
+            </Card>
+          </div>
+
+          {/* Main Layout: Split-View 2 Kolom (Prioritas 1: Desktop, Prioritas 3: Tablet) */}
+          <div className="flex flex-col lg:flex-row gap-5 items-start">
+            {/* Sidebar Daftar Kelas (Desktop & Large Screen) */}
+            <Card className="hidden lg:block w-72 xl:w-80 shrink-0 p-4 space-y-3 sticky top-4">
+              <div className="flex items-center justify-between pb-2 border-b border-[var(--divider)]">
+                <div>
+                  <h3 className="font-semibold text-sm" style={{ color: "var(--fg)" }}>Daftar Kelas</h3>
+                  <p className="text-[11px] app-muted">Pilih kelas untuk mengatur pemetaan</p>
+                </div>
+                <Badge status="neutral" className="text-[10px]">
+                  {filteredClassesList.length} Rombel
+                </Badge>
               </div>
 
-              <div>
-                <h3 className="font-display font-bold text-lg" style={{ color: "var(--fg)" }}>
-                  Fitur Mapping Jadwal Sedang Dipersiapkan
-                </h3>
-                <p className="text-sm app-muted mt-1.5 leading-relaxed">
-                  Modul ini akan memungkinkan Super Admin dan Bagian Kurikulum untuk memetakan jadwal mengajar guru per hari (Senin–Sabtu), jam ke berapa, rombel kelas, dan mata pelajaran secara terstruktur.
-                </p>
+              {/* Filter Tingkat */}
+              <div className="grid grid-cols-4 gap-1 p-1 bg-[var(--hover)] rounded-lg text-center text-xs font-medium">
+                {["ALL", "X", "XI", "XII"].map((grade) => (
+                  <button
+                    key={grade}
+                    type="button"
+                    onClick={() => setMappingGradeFilter(grade)}
+                    className={`py-1 rounded-md transition-all ${
+                      mappingGradeFilter === grade
+                        ? "bg-[var(--card)] text-[var(--accent)] shadow-sm font-semibold"
+                        : "text-muted hover:text-[var(--fg)]"
+                    }`}
+                  >
+                    {grade === "ALL" ? "Semua" : grade}
+                  </button>
+                ))}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left pt-2">
-                <div className="p-3.5 rounded-xl border border-[var(--divider)] bg-[var(--hover)]/50">
-                  <div className="flex items-center gap-2 font-semibold text-xs" style={{ color: "var(--fg)" }}>
-                    <span className="material-symbols-outlined text-[18px] text-[var(--accent)]">auto_stories</span>
-                    Otomatisasi Jurnal
+              {/* List Scrollable Kelas */}
+              <div className="max-h-[580px] overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                {filteredClassesList.length === 0 ? (
+                  <div className="text-center py-8 text-xs app-muted">
+                    Tidak ada kelas ditemukan
                   </div>
-                  <p className="text-[11px] app-muted mt-1">
-                    Guru langsung melihat jadwal mengajar hari ini saat membuka menu Jurnal Mengajar.
-                  </p>
+                ) : (
+                  filteredClassesList.map((c) => {
+                    const isSelected = c.id === selectedMappingClassId;
+                    const summary = classSummaryMap[c.id];
+                    const totalJp = isSelected ? totalClassJp : summary?.totalJp || 0;
+                    const mapelCount = isSelected ? mappings.length : summary?.mapelCount || 0;
+
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setSelectedMappingClassId(c.id)}
+                        className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between ${
+                          isSelected
+                            ? "bg-[var(--accent-soft)] border-[var(--accent)] text-[var(--accent)] shadow-sm font-semibold"
+                            : "border-[var(--divider)] bg-[var(--card)] hover:bg-[var(--hover)] text-[var(--fg)]"
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-[16px]">
+                              {isSelected ? "school" : "class"}
+                            </span>
+                            <span className="truncate text-sm">{c.name}</span>
+                          </div>
+                          <div className="text-[11px] font-normal app-muted mt-0.5">
+                            {mapelCount > 0 ? `${mapelCount} Mapel Terpetakan` : "Belum ada mapel"}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              isSelected
+                                ? "bg-[var(--accent)] text-white"
+                                : totalJp > 0
+                                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                                : "bg-[var(--hover)] app-muted"
+                            }`}
+                          >
+                            {totalJp} JP
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </Card>
+
+            {/* Area Detail Pemetaan Kelas Terpilih */}
+            <div className="flex-1 min-w-0 w-full space-y-4">
+              {/* Header Info Kelas & Mini KPI Card */}
+              <Card className="p-4 sm:p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--divider)]">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-display font-bold text-lg sm:text-xl text-[var(--fg)]">
+                        {selectedClass ? selectedClass.name : "Pilih Kelas"}
+                      </h3>
+                      {selectedClassHomeroom ? (
+                        <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-medium">
+                          <span className="material-symbols-outlined text-[14px]">supervisor_account</span>
+                          Walas: {selectedClassHomeroom.userName}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-medium">
+                          <span className="material-symbols-outlined text-[14px]">person_off</span>
+                          Walas Belum Ditugaskan
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs app-muted mt-1">
+                      Daftar mata pelajaran yang diajarkan pada rombel ini beserta alokasi jam tatap muka.
+                    </p>
+                  </div>
+
+                  {/* Ringkasan Akumulasi JP & Mapel */}
+                  <div className="flex items-center gap-2 self-start sm:self-center">
+                    <div className="px-3.5 py-1.5 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-center">
+                      <div className="text-[10px] uppercase font-semibold text-[var(--accent)]">Total JP</div>
+                      <div className="text-lg font-bold text-[var(--accent)] leading-tight">{totalClassJp} JP</div>
+                    </div>
+                    <div className="px-3.5 py-1.5 rounded-xl bg-[var(--hover)] border border-[var(--divider)] text-center">
+                      <div className="text-[10px] uppercase font-semibold app-muted">Mapel</div>
+                      <div className="text-lg font-bold text-[var(--fg)] leading-tight">{mappings.length}</div>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="p-3.5 rounded-xl border border-[var(--divider)] bg-[var(--hover)]/50">
-                  <div className="flex items-center gap-2 font-semibold text-xs" style={{ color: "var(--fg)" }}>
-                    <span className="material-symbols-outlined text-[18px] text-[var(--accent)]">date_range</span>
-                    Jadwal Mingguan
+                {/* Filter Search Mapel & Guru */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="relative flex-1">
+                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] app-muted">
+                      search
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Cari nama mapel, kode, atau guru pengajar..."
+                      value={mappingSearch}
+                      onChange={(e) => setMappingSearch(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-xs app-input rounded-xl border border-[var(--divider)]"
+                    />
+                    {mappingSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setMappingSearch("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs app-muted hover:text-[var(--fg)]"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
-                  <p className="text-[11px] app-muted mt-1">
-                    Matriks jadwal pelajaran per kelas dan per guru mengajar tiap semester aktif.
-                  </p>
-                </div>
-              </div>
 
-              <div className="pt-2">
-                <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-semibold px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
-                  <span className="material-symbols-outlined text-[16px]">construction</span>
-                  Status: Dalam Proses Perancangan Skema Database & Antarmuka
-                </span>
-              </div>
+                  <div className="flex items-center justify-between sm:justify-end gap-2 text-xs app-muted">
+                    <span>
+                      Menampilkan <strong className="text-[var(--fg)]">{filteredMappings.length}</strong> dari {mappings.length} mapel
+                    </span>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Konten Pemetaan: Loading, Empty State, atau List */}
+              {loadingMappings ? (
+                <Card className="p-6 space-y-3">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                </Card>
+              ) : filteredMappings.length === 0 ? (
+                <Card className="p-8 sm:p-12 text-center border-dashed border-2" style={{ borderColor: "var(--divider)" }}>
+                  <div className="max-w-md mx-auto space-y-4">
+                    <div
+                      className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center shadow-inner"
+                      style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                    >
+                      <span className="material-symbols-outlined text-[32px]">assignment</span>
+                    </div>
+
+                    <div>
+                      <h4 className="font-semibold text-base text-[var(--fg)]">
+                        {mappingSearch ? "Mata Pelajaran Tidak Ditemukan" : "Belum Ada Pemetaan Mapel di Kelas Ini"}
+                      </h4>
+                      <p className="text-xs app-muted mt-1 leading-relaxed">
+                        {mappingSearch
+                          ? `Tidak ditemukan mata pelajaran atau guru yang cocok dengan kata kunci "${mappingSearch}".`
+                          : `Kelas ${selectedClass?.name || "ini"} belum memiliki daftar mata pelajaran dan guru yang ditugaskan.`}
+                      </p>
+                    </div>
+
+                    {!mappingSearch && (
+                      <div className="flex items-center justify-center gap-2 pt-2 flex-wrap">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={handleOpenAddMapping}
+                          className="gap-1.5 text-xs"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">add</span>
+                          Petakan Mapel Pertama
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              ) : (
+                <>
+                  {/* Prioritas 1 & 3: Table View untuk Desktop dan Tablet (md:block) */}
+                  <Card className="hidden md:block overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-[var(--divider)] bg-[var(--hover)]/60 text-muted font-semibold">
+                            <th className="py-3 px-3 w-12 text-center">No</th>
+                            <th className="py-3 px-4">Mata Pelajaran</th>
+                            <th className="py-3 px-4">Guru Pengajar</th>
+                            <th className="py-3 px-4 text-center w-40">Alokasi JP</th>
+                            <th className="py-3 px-4 text-right w-28">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--divider)]">
+                          {filteredMappings.map((m, index) => (
+                            <tr
+                              key={m.id}
+                              className="hover:bg-[var(--hover)]/40 transition-colors group"
+                            >
+                              <td className="py-3 px-3 text-center text-muted font-mono">
+                                {index + 1}
+                              </td>
+
+                              {/* Mata Pelajaran */}
+                              <td className="py-3 px-4">
+                                <div className="space-y-0.5">
+                                  <div className="font-semibold text-sm text-[var(--fg)]">
+                                    {m.subjectName}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {m.subjectCode && (
+                                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-[var(--hover)] text-muted border border-[var(--divider)]">
+                                        {m.subjectCode}
+                                      </span>
+                                    )}
+                                    <Badge status="neutral" className="text-[10px] py-0 px-1.5">
+                                      {m.subjectType || "UMUM"}
+                                    </Badge>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Guru Pengajar */}
+                              <td className="py-3 px-4">
+                                <div className="flex items-center gap-2.5">
+                                  <div
+                                    className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs uppercase shrink-0"
+                                    style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                                  >
+                                    {m.teacherName ? m.teacherName.charAt(0) : "G"}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-medium text-xs text-[var(--fg)] truncate">
+                                      {m.teacherName}
+                                    </div>
+                                    <div className="text-[11px] app-muted font-mono">
+                                      {m.teacherNip ? `NIP: ${m.teacherNip}` : "Non-NIP"}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Alokasi JP dengan Stepper Cepat */}
+                              <td className="py-3 px-4 text-center">
+                                <div className="inline-flex items-center gap-1.5 p-1 rounded-xl bg-[var(--hover)]/80 border border-[var(--divider)]">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateJp(m.id, m.jp, -1)}
+                                    disabled={m.jp <= 1}
+                                    title="Kurangi 1 JP"
+                                    className="w-7 h-7 flex items-center justify-center rounded-lg bg-[var(--card)] hover:bg-[var(--divider)] text-[var(--fg)] disabled:opacity-30 disabled:cursor-not-allowed transition-all font-bold text-sm shadow-xs"
+                                  >
+                                    -
+                                  </button>
+                                  <span className="min-w-[48px] text-center font-bold text-xs font-mono text-[var(--fg)]">
+                                    {m.jp} JP
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateJp(m.id, m.jp, 1)}
+                                    disabled={m.jp >= 20}
+                                    title="Tambah 1 JP"
+                                    className="w-7 h-7 flex items-center justify-center rounded-lg bg-[var(--card)] hover:bg-[var(--divider)] text-[var(--fg)] disabled:opacity-30 disabled:cursor-not-allowed transition-all font-bold text-sm shadow-xs"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </td>
+
+                              {/* Aksi */}
+                              <td className="py-3 px-4 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditMapping(m)}
+                                    title="Edit Guru atau JP"
+                                    className="p-1.5 rounded-lg text-muted hover:text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors"
+                                  >
+                                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteMapping(m.id, m.subjectName, m.teacherName)}
+                                    title="Hapus Pemetaan Mapel"
+                                    className="p-1.5 rounded-lg text-muted hover:text-rose-600 hover:bg-rose-500/10 transition-colors"
+                                  >
+                                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-[var(--hover)]/80 font-semibold border-t-2 border-[var(--divider)] text-xs">
+                            <td colSpan={3} className="py-3 px-4 text-right">
+                              Total Jam Pelajaran Terpetakan:
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <span className="inline-flex items-center px-3 py-1 rounded-full bg-[var(--accent)] text-white font-bold font-mono text-xs">
+                                {totalClassJp} JP / Minggu
+                              </span>
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+
+                    <div className="p-3 bg-[var(--card)] border-t border-[var(--divider)] text-[11px] app-muted flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-emerald-500">check_circle</span>
+                        <span>Seluruh mata pelajaran di atas tersinkronisasi otomatis dengan Modul Jurnal Mengajar Guru.</span>
+                      </div>
+                      <div className="text-right">
+                        Klik tombol <strong>[-]</strong> atau <strong>[+]</strong> untuk mengubah alokasi JP secara instan.
+                      </div>
+                    </div>
+                  </Card>
+
+                  {/* Prioritas 2: Mobile Card List (md:hidden) */}
+                  <div className="md:hidden space-y-3">
+                    {filteredMappings.map((m, index) => (
+                      <Card key={m.id} className="p-4 space-y-3 shadow-xs">
+                        {/* Header Card: Mapel & Tipe */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-[10px] text-muted">#{index + 1}</span>
+                              <h4 className="font-bold text-sm text-[var(--fg)] leading-snug">
+                                {m.subjectName}
+                              </h4>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                              {m.subjectCode && (
+                                <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-[var(--hover)] text-muted border border-[var(--divider)]">
+                                  {m.subjectCode}
+                                </span>
+                              )}
+                              <Badge status="neutral" className="text-[10px] py-0 px-1.5">
+                                {m.subjectType || "UMUM"}
+                              </Badge>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditMapping(m)}
+                              className="p-2 rounded-lg text-muted hover:text-[var(--accent)] bg-[var(--hover)]"
+                              title="Edit"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMapping(m.id, m.subjectName, m.teacherName)}
+                              className="p-2 rounded-lg text-rose-500 hover:bg-rose-500/10 bg-[var(--hover)]"
+                              title="Hapus"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">delete</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Info Guru Pengajar */}
+                        <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[var(--hover)]/50 border border-[var(--divider)]">
+                          <div
+                            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs uppercase shrink-0"
+                            style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+                          >
+                            {m.teacherName ? m.teacherName.charAt(0) : "G"}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-xs text-[var(--fg)] truncate">
+                              {m.teacherName}
+                            </div>
+                            <div className="text-[10px] app-muted font-mono">
+                              {m.teacherNip ? `NIP: ${m.teacherNip}` : "Non-NIP"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Stepper JP Mobile Touch-Friendly (Target >= 44px) */}
+                        <div className="flex items-center justify-between pt-1 border-t border-[var(--divider)]">
+                          <span className="text-xs font-semibold app-muted">Alokasi Jam Tatap Muka:</span>
+                          <div className="flex items-center gap-2 bg-[var(--hover)] p-1 rounded-xl border border-[var(--divider)]">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickUpdateJp(m.id, m.jp, -1)}
+                              disabled={m.jp <= 1}
+                              aria-label="Kurangi JP"
+                              className="w-10 h-10 flex items-center justify-center rounded-lg bg-[var(--card)] text-[var(--fg)] font-bold text-base active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed shadow-xs"
+                            >
+                              -
+                            </button>
+                            <span className="font-bold text-sm font-mono px-2 text-[var(--fg)]">
+                              {m.jp} JP
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickUpdateJp(m.id, m.jp, 1)}
+                              disabled={m.jp >= 20}
+                              aria-label="Tambah JP"
+                              className="w-10 h-10 flex items-center justify-center rounded-lg bg-[var(--card)] text-[var(--fg)] font-bold text-base active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed shadow-xs"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+
+                    {/* Summary Card Mobile */}
+                    <Card className="p-3.5 bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-center">
+                      <div className="text-xs font-medium text-[var(--accent)]">
+                        Total Alokasi Rombel {selectedClass?.name}:
+                      </div>
+                      <div className="text-xl font-bold text-[var(--accent)] mt-0.5">
+                        {totalClassJp} JP / Minggu ({filteredMappings.length} Mapel)
+                      </div>
+                    </Card>
+                  </div>
+                </>
+              )}
             </div>
-          </Card>
+          </div>
         </div>
       )}
 
@@ -1722,6 +2756,247 @@ export function SubjectsPage() {
         </div>
       </div>
       )}
+
+      {/* Modal 1: Tambah / Edit Pemetaan Mapel ke Kelas */}
+      <Modal
+        isOpen={isAddMappingModalOpen}
+        onClose={() => setIsAddMappingModalOpen(false)}
+      >
+        <div className="bg-[var(--card)] border border-[var(--divider)] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-scaleIn">
+          <div className="p-5 border-b border-[var(--divider)] flex items-center justify-between">
+            <div>
+              <h3 className="font-display font-bold text-base text-[var(--fg)]">
+                {editingMappingId ? "Edit Pemetaan Mata Pelajaran" : "Petakan Mata Pelajaran ke Kelas"}
+              </h3>
+              <p className="text-xs app-muted mt-0.5">
+                Rombongan Belajar: <strong className="text-[var(--accent)]">{selectedClass?.name}</strong>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAddMappingModalOpen(false)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveMapping} className="p-5 space-y-4">
+            {/* Dropdown Tunggal: Mata Pelajaran & Guru Pengajar */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--fg)]">
+                Mata Pelajaran & Guru Pengajar <span className="text-rose-500">*</span>
+              </label>
+              {editingMappingId ? (
+                <div className="p-3 rounded-xl bg-[var(--hover)] border border-[var(--divider)] space-y-1">
+                  <div className="font-bold text-sm text-[var(--fg)]">
+                    {currentEditingMapping?.subjectName || "Mata Pelajaran"}
+                  </div>
+                  <div className="text-xs app-muted flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[14px] text-[var(--accent)]">person</span>
+                    <span>Guru: <strong className="text-[var(--fg)]">{currentEditingMapping?.teacherName || "-"}</strong></span>
+                    {currentEditingMapping?.teacherNip && (
+                      <span className="font-mono text-[11px]">({currentEditingMapping.teacherNip})</span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <select
+                    value={modalSubjectId && modalTeacherUserId ? `${modalSubjectId}:::${modalTeacherUserId}` : ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) {
+                        setModalSubjectId("");
+                        setModalTeacherUserId("");
+                        return;
+                      }
+                      const [sId, tId] = val.split(":::");
+                      setModalSubjectId(sId);
+                      setModalTeacherUserId(tId);
+                    }}
+                    required
+                    className="w-full text-sm app-input py-2.5 px-3 rounded-xl border border-[var(--divider)]"
+                  >
+                    <option value="">-- Pilih Mata Pelajaran & Guru Pengajar --</option>
+                    {assignments.map((a) => {
+                      const isAlreadyMapped = mappings.some((m) => m.subjectId === a.subjectId);
+                      const target = a.targetJp || 24;
+                      const mapped = a.mappedJp || 0;
+                      const deficit = Math.max(0, target - mapped);
+                      let loadText = "";
+                      if (deficit > 0) {
+                        loadText = `[Kurang ${deficit} JP · Terpetakan ${mapped}/${target} JP]`;
+                      } else if (mapped === target) {
+                        loadText = `[Terpenuhi · ${target}/${target} JP]`;
+                      } else {
+                        loadText = `[Lebih ${mapped - target} JP]`;
+                      }
+
+                      return (
+                        <option key={a.id} value={`${a.subjectId}:::${a.userId}`}>
+                          {a.subjectName} {a.subjectCode ? `[${a.subjectCode}]` : ""} — Guru: {a.userName} {loadText} {isAlreadyMapped ? " (Sudah ada di kelas ini)" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <p className="text-[11px] app-muted">
+                    Nama guru pengajar & target JP otomatis tertaut sesuai dengan data pada menu <strong>Penugasan Guru</strong>.
+                  </p>
+                </>
+              )}
+            </div>
+
+            {/* Field 3: Jam Pelajaran (JP) */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--fg)]">
+                Alokasi Jam Pelajaran (JP) Mingguan <span className="text-rose-500">*</span>
+              </label>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 bg-[var(--hover)] p-1 rounded-xl border border-[var(--divider)]">
+                  <button
+                    type="button"
+                    onClick={() => setModalJp((prev) => Math.max(1, prev - 1))}
+                    disabled={modalJp <= 1}
+                    className="w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--card)] text-[var(--fg)] font-bold text-base hover:bg-[var(--divider)] disabled:opacity-30 transition-all shadow-xs"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={modalJp}
+                    onChange={(e) => setModalJp(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                    className="w-16 text-center text-sm font-bold font-mono py-1.5 bg-transparent border-none focus:outline-hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setModalJp((prev) => Math.min(20, prev + 1))}
+                    disabled={modalJp >= 20}
+                    className="w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--card)] text-[var(--fg)] font-bold text-base hover:bg-[var(--divider)] disabled:opacity-30 transition-all shadow-xs"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="pt-3 border-t border-[var(--divider)] flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsAddMappingModalOpen(false)}
+                disabled={busy}
+              >
+                Batal
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={busy}
+              >
+                {busy ? "Menyimpan..." : editingMappingId ? "Simpan Perubahan" : "Simpan Pemetaan"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      </Modal>
+
+      {/* Modal 2: Salin Pemetaan ke Kelas Lain */}
+      <Modal
+        isOpen={isCopyClassModalOpen}
+        onClose={() => setIsCopyClassModalOpen(false)}
+      >
+        <div className="bg-[var(--card)] border border-[var(--divider)] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-scaleIn">
+          <div className="p-5 border-b border-[var(--divider)] flex items-center justify-between">
+            <div>
+              <h3 className="font-display font-bold text-base text-[var(--fg)]">
+                Salin Susunan Mapel & Guru
+              </h3>
+              <p className="text-xs app-muted mt-0.5">
+                Duplikasi pemetaan antar rombongan belajar
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCopyClassModalOpen(false)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+
+          <form onSubmit={handleCopyClass} className="p-5 space-y-4">
+            {/* Kelas Sumber */}
+            <div className="space-y-1">
+              <label className="text-xs font-semibold uppercase tracking-wider app-muted">
+                Kelas Asal (Sumber Data)
+              </label>
+              <div className="p-3 rounded-xl bg-[var(--hover)] border border-[var(--divider)] flex items-center justify-between">
+                <div className="font-bold text-sm text-[var(--fg)]">
+                  {selectedClass?.name}
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-semibold">
+                  {mappings.length} Mapel · {totalClassJp} JP
+                </span>
+              </div>
+            </div>
+
+            {/* Kelas Tujuan */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--fg)]">
+                Pilih Kelas Tujuan <span className="text-rose-500">*</span>
+              </label>
+              <select
+                value={copyTargetClassId}
+                onChange={(e) => setCopyTargetClassId(e.target.value)}
+                required
+                className="w-full text-sm app-input py-2.5 px-3 rounded-xl border border-[var(--divider)]"
+              >
+                <option value="">-- Pilih Kelas Tujuan --</option>
+                {classesList
+                  .filter((c) => c.id !== selectedMappingClassId)
+                  .map((c) => {
+                    const summary = classSummaryMap[c.id];
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {summary ? `(${summary.totalJp} JP · ${summary.mapelCount} Mapel saat ini)` : "(Kosong)"}
+                      </option>
+                    );
+                  })}
+              </select>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 leading-relaxed flex items-start gap-2">
+              <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">info</span>
+              <span>
+                Mapel yang sudah ada pada kelas tujuan <strong>tidak akan ditimpa</strong>. Hanya mapel baru yang akan ditambahkan beserta guru dan JP-nya.
+              </span>
+            </div>
+
+            {/* Actions */}
+            <div className="pt-3 border-t border-[var(--divider)] flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsCopyClassModalOpen(false)}
+                disabled={busy}
+              >
+                Batal
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={busy || !copyTargetClassId}
+              >
+                {busy ? "Menyalin..." : "Salin Sekarang"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      </Modal>
     </div>
   );
 }

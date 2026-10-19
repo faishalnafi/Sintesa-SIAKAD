@@ -57,6 +57,20 @@ import {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS homeroom_assignments_unique_idx ON homeroom_assignments (user_id, class_id);
 
+      CREATE TABLE IF NOT EXISTS class_subject_assignments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+        subject_id UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+        teacher_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        jp INTEGER DEFAULT 2 NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS class_subject_assignments_unique_idx 
+        ON class_subject_assignments (class_id, subject_id, teacher_user_id);
+
+      ALTER TABLE teacher_subjects ADD COLUMN IF NOT EXISTS target_jp INTEGER DEFAULT 24 NOT NULL;
+
       CREATE TABLE IF NOT EXISTS api_keys (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         nama_aplikasi VARCHAR(255) NOT NULL,
