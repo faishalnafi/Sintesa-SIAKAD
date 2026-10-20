@@ -10,3 +10,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-20 09:12:15]** docs(api): document schedule and teaching hour allocation endpoints
 - **[2026-10-20 11:28:40]** fix(api): ensure proper fallback for null teacher NIP in assignment queries
 - **[2026-10-20 14:15:05]** perf(db): optimize class subject assignment query with compound index
+- **[2026-10-20 16:42:30]** refactor(web): extract reusable mapping table header into subcomponent
