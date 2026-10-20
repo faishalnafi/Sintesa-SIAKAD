@@ -11,3 +11,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-20 11:28:40]** fix(api): ensure proper fallback for null teacher NIP in assignment queries
 - **[2026-10-20 14:15:05]** perf(db): optimize class subject assignment query with compound index
 - **[2026-10-20 16:42:30]** refactor(web): extract reusable mapping table header into subcomponent
+- **[2026-10-20 20:18:50]** chore(lint): clean up unused imports and standardize ESLint rules across web modules
