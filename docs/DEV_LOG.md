@@ -8,3 +8,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-19 19:45:33]** style(schedule): improve responsive card padding and badge contrast on mobile view
 - **[2026-10-19 21:20:18]** test(schedule): add validation checks for subject assignment unique constraints
 - **[2026-10-20 09:12:15]** docs(api): document schedule and teaching hour allocation endpoints
+- **[2026-10-20 11:28:40]** fix(api): ensure proper fallback for null teacher NIP in assignment queries
