@@ -14,3 +14,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-20 20:18:50]** chore(lint): clean up unused imports and standardize ESLint rules across web modules
 - **[2026-10-21 09:20:11]** feat(curriculum): add validation for total weekly JP limits per academic grade
 - **[2026-10-21 11:35:24]** fix(web): fix tooltip clipping on sticky sidebar navigation
+- **[2026-10-21 14:05:48]** style(ui): polish modal backdrop blur and animation timing curves
