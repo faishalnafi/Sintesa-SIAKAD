@@ -20,3 +20,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-22 09:18:32]** feat(journal): link class subject mappings with daily teacher teaching journal
 - **[2026-10-22 11:42:15]** fix(journal): handle edge case when teacher has multiple classes on the same day
 - **[2026-10-22 14:22:50]** refactor(journal): simplify state management for weekly journal verification status
+- **[2026-10-22 16:50:14]** style(journal): standardize status badge colors for completed vs pending journal entries
