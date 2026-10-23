@@ -26,3 +26,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-23 11:25:18]** fix(attendance): normalize date formatting when parsing attendance timestamps
 - **[2026-10-23 14:14:39]** perf(attendance): batch student daily attendance status lookup queries
 - **[2026-10-23 16:38:22]** refactor(attendance): decouple attendance sync service from route handler
+- **[2026-10-23 20:30:05]** docs(attendance): document API response format for external attendance hooks
