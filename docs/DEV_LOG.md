@@ -27,3 +27,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-23 14:14:39]** perf(attendance): batch student daily attendance status lookup queries
 - **[2026-10-23 16:38:22]** refactor(attendance): decouple attendance sync service from route handler
 - **[2026-10-23 20:30:05]** docs(attendance): document API response format for external attendance hooks
+- **[2026-10-24 09:25:10]** feat(raport): refine PDF export header layout for semester competency summaries
