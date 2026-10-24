@@ -28,3 +28,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-23 16:38:22]** refactor(attendance): decouple attendance sync service from route handler
 - **[2026-10-23 20:30:05]** docs(attendance): document API response format for external attendance hooks
 - **[2026-10-24 09:25:10]** feat(raport): refine PDF export header layout for semester competency summaries
+- **[2026-10-24 11:40:55]** fix(raport): ensure proper page breaking on multi-subject student report cards
