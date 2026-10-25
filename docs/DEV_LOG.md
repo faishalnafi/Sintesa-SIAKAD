@@ -32,3 +32,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-24 14:18:20]** style(raport): adjust table cell paddings for compact A4 print mode
 - **[2026-10-24 16:45:00]** refactor(raport): optimize PDF template rendering pipeline
 - **[2026-10-24 20:12:44]** docs(raport): update report card approval procedure documentation
+- **[2026-10-25 09:15:30]** feat(auth): strengthen session expiration check during active grading sessions
