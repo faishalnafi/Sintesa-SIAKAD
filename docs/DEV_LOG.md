@@ -39,3 +39,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-25 20:22:50]** docs(security): document RBAC role definitions and permission hierarchy
 - **[2026-10-26 09:22:18]** feat(assessment): add quick search and filter by assessment component type
 - **[2026-10-26 11:45:30]** fix(assessment): prevent duplicate assessment codes within the same academic period
+- **[2026-10-26 14:12:05]** style(assessment): enhance active tab indicator contrast in dark mode
