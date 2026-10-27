@@ -44,3 +44,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-26 20:10:15]** chore(db): verify schema migrations for assessment components table
 - **[2026-10-27 09:14:50]** feat(classes): add natural sorting for alphanumeric class rombel names
 - **[2026-10-27 11:30:22]** fix(classes): handle empty academic year parameter gracefully in class dropdowns
+- **[2026-10-27 14:25:35]** perf(classes): memoize filtered class list calculation in admin management view
