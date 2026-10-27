@@ -42,3 +42,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-26 14:12:05]** style(assessment): enhance active tab indicator contrast in dark mode
 - **[2026-10-26 16:52:40]** refactor(assessment): streamline component status toggle handler
 - **[2026-10-26 20:10:15]** chore(db): verify schema migrations for assessment components table
+- **[2026-10-27 09:14:50]** feat(classes): add natural sorting for alphanumeric class rombel names
