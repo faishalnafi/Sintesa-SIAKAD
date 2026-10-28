@@ -48,3 +48,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-27 16:40:10]** style(classes): improve mobile chip filter scrolling behavior
 - **[2026-10-27 20:35:45]** docs(classes): document class duplication and migration logic
 - **[2026-10-28 09:19:05]** feat(students): enhance student profile overview with discipline & attendance metrics
+- **[2026-10-28 11:38:40]** fix(students): ensure correct fallback avatar when student photo is missing
