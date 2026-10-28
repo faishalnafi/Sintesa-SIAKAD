@@ -50,3 +50,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-28 09:19:05]** feat(students): enhance student profile overview with discipline & attendance metrics
 - **[2026-10-28 11:38:40]** fix(students): ensure correct fallback avatar when student photo is missing
 - **[2026-10-28 14:10:15]** refactor(students): consolidate student detail fetchers into shared custom hook
+- **[2026-10-28 16:48:30]** style(students): standardize typography across student report summary cards
