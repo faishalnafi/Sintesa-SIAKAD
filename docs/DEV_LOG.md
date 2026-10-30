@@ -58,3 +58,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-29 16:35:20]** refactor(monitoring): decompose monolithic monitoring table into modular rows
 - **[2026-10-29 20:28:55]** docs(monitoring): write monitoring dashboard troubleshooting guide
 - **[2026-10-30 09:12:30]** feat(audit): log administrative overrides on grade approval states
+- **[2026-10-30 11:29:45]** fix(audit): record accurate client IP address in auth audit event table
