@@ -61,3 +61,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-30 11:29:45]** fix(audit): record accurate client IP address in auth audit event table
 - **[2026-10-30 14:20:10]** refactor(audit): extract audit log formatter into dedicated utility module
 - **[2026-10-30 16:44:25]** style(audit): improve JSON metadata viewer readability in audit modal
+- **[2026-10-30 20:18:35]** chore(clean): remove deprecated legacy helper functions
