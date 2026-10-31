@@ -63,3 +63,4 @@ Automated timeline of feature enhancements, bug fixes, refactoring, and system o
 - **[2026-10-30 16:44:25]** style(audit): improve JSON metadata viewer readability in audit modal
 - **[2026-10-30 20:18:35]** chore(clean): remove deprecated legacy helper functions
 - **[2026-10-31 09:20:40]** feat(system): add database connection health check probe endpoint
+- **[2026-10-31 11:35:15]** fix(system): handle database reconnect gracefully on socket timeout
