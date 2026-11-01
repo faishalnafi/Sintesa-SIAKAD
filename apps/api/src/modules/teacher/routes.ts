@@ -748,7 +748,7 @@ const submitSchema = z.object({
         eq(grades.subjectId, body.subjectId),
         eq(grades.academicYear, body.academicYear),
         eq(grades.semester, body.semester),
-        eq(grades.status, "draft"),
+        or(eq(grades.status, "draft"), eq(grades.status, "submitted")),
         isNull(grades.deletedAt),
       ),
     );

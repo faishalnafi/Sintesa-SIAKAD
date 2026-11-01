@@ -20,6 +20,7 @@ export type KehadiranRekap = {
   izin: number;
   alpa: number;
   catatan?: string;
+  status?: string;
   /** opsional semester/tahun ajar konteks */
   academic_year?: string;
   updated_at?: string;
@@ -116,12 +117,13 @@ export async function applyKehadiranRekap(rows: KehadiranRekap[]) {
       continue;
     }
 
+    const isSubmitted = row.status === "submitted";
     const patch: Record<string, any> = {
       sakit: Math.max(0, Math.round(row.sakit || 0)),
       izin: Math.max(0, Math.round(row.izin || 0)),
       alpa: Math.max(0, Math.round(row.alpa || 0)),
-      isKehadiranSubmitted: true,
-      kehadiranSubmittedAt: new Date(),
+      isKehadiranSubmitted: isSubmitted,
+      kehadiranSubmittedAt: isSubmitted ? new Date() : null,
       updatedAt: new Date(),
     };
     if (row.catatan !== undefined) {
@@ -235,4 +237,51 @@ export async function unlockStudentScoreInPasti(
     return false;
   }
 }
+
+export async function unlockAllScoresInPasti(
+  academicYear = "2026/2027",
+  jenis: "all" | "kedisiplinan" | "presensi" = "all",
+  keterangan = "Batal submit oleh SIAKAD"
+): Promise<{ success: boolean; message: string; count_gds?: number; count_presensi?: number }> {
+  const baseUrl = env.KEHADIRAN_BASE_URL || env.GDS_BASE_URL || "https://pasti.sman3mjk.sch.id";
+  const cleanBase = baseUrl.replace(/\/$/, "").replace(/\/api(\/v1)?$/i, "");
+  const url = `${cleanBase}/api/v1/scores/unlock-all`;
+  const apiKey = (env.KEHADIRAN_API_KEY || env.GDS_API_KEY || "sm_default_api_key_change_me").trim();
+
+  const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-API-Key": apiKey,
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        academic_year: academicYear,
+        jenis,
+        keterangan,
+      }),
+    });
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
+    const body = (await res.json().catch(() => ({}))) as any;
+    return {
+      success: res.ok && body.success === true,
+      message: body.pesan || (res.ok ? "Berhasil membatalkan status submit di PASTi." : "Gagal membatalkan status submit di PASTi."),
+      count_gds: body.count_gds,
+      count_presensi: body.count_presensi,
+    };
+  } catch (err: any) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
+    console.error("Gagal unlock all scores di PASTI:", err);
+    return {
+      success: false,
+      message: err.message || "Gagal menghubungi API PASTi",
+    };
+  }
+}
+
 

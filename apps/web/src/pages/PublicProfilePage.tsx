@@ -139,6 +139,7 @@ type ProfileData = {
   };
   grades: Array<{
     subjectName: string;
+    teacherName?: string | null;
     uh1: string | null;
     t1: string | null;
     sts: string | null;
@@ -493,6 +494,7 @@ export function PublicProfilePage() {
                     <thead className="bg-surface-container/80 dark:bg-white/5">
                       <tr>
                         <th className="px-6 py-3.5 font-semibold text-on-surface-variant">Mata Pelajaran</th>
+                        <th className="px-6 py-3.5 font-semibold text-on-surface-variant">Guru Pengampu</th>
                         {visibleComponents.map((c) => (
                           <th key={c.code} className="px-4 py-3.5 font-semibold text-center uppercase text-on-surface-variant">
                             {c.code}
@@ -504,14 +506,14 @@ export function PublicProfilePage() {
                       {loading ? (
                         Array.from({ length: 3 }).map((_, i) => (
                           <tr key={i}>
-                            <td colSpan={1 + visibleComponents.length} className="px-6 py-4">
+                            <td colSpan={2 + visibleComponents.length} className="px-6 py-4">
                               <Skeleton className="h-6 w-full" />
                             </td>
                           </tr>
                         ))
                       ) : data?.grades.length === 0 ? (
                         <tr>
-                          <td colSpan={1 + visibleComponents.length} className="px-6 py-12 text-center text-on-surface-variant italic">
+                          <td colSpan={2 + visibleComponents.length} className="px-6 py-12 text-center text-on-surface-variant italic">
                             Belum ada data nilai raport yang disetujui pada tahun pelajaran ini.
                           </td>
                         </tr>
@@ -519,6 +521,7 @@ export function PublicProfilePage() {
                         data?.grades.map((g) => (
                           <tr key={g.subjectName} className="hover:bg-surface-container/30 transition-colors">
                             <td className="px-6 py-3.5 font-medium whitespace-nowrap">{g.subjectName}</td>
+                            <td className="px-6 py-3.5 text-on-surface-variant whitespace-nowrap font-medium">{g.teacherName || "—"}</td>
                             {visibleComponents.map((c) => {
                               const k = c.code.toLowerCase() as keyof typeof g;
                               return (

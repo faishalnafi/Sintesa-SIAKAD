@@ -16,6 +16,7 @@ export type GdsStudentPoint = {
   nis?: string;
   poin: number;
   catatan?: string;
+  status?: string;
   updated_at?: string;
 };
 
@@ -110,10 +111,11 @@ export async function applyGdsPoints(points: GdsStudentPoint[]) {
       continue;
     }
 
+    const isSubmitted = row.status === "submitted";
     const patch: Record<string, any> = {
       poinGds: Math.max(0, Math.round(row.poin)),
-      isGdsSubmitted: true,
-      gdsSubmittedAt: new Date(),
+      isGdsSubmitted: isSubmitted,
+      gdsSubmittedAt: isSubmitted ? new Date() : null,
       updatedAt: new Date(),
     };
     if (row.catatan !== undefined) {
