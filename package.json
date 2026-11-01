@@ -13,6 +13,8 @@
     "db:seed": "pnpm --filter @sintesa/api db:seed",
     "db:studio": "pnpm --filter @sintesa/api db:studio",
     "lint": "pnpm -r lint",
+    "autocommit": "node scripts/autocommit.mjs",
+    "autocommit:watch": "node scripts/autocommit.mjs --watch",
     "docker:env": "bash scripts/generate-stack-env.sh",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up -d",
