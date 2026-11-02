@@ -158,11 +158,18 @@ export function GuruJurnalPage() {
     return schedulesList.filter((s) => s.hari === currentDayName);
   }, [schedulesList, currentDayName]);
 
+  // Hari libur / tidak ada jam mengajar (misal: Sabtu & Minggu atau hari tanpa penugasan KBM)
+  const isWeekend = currentDayName === "Sabtu" || currentDayName === "Minggu";
+  const isNoTeachingDay = useMemo(() => {
+    if (groupId) return false;
+    return isWeekend || activeDaySchedules.length === 0;
+  }, [groupId, isWeekend, activeDaySchedules]);
+
   // Kelas yang valid pada hari terpilih:
   // Jika admin memetakan jadwal hari ini, HANYA tampilkan kelas di jadwal hari ini!
-  // Selain itu otomatis tereliminasi dari dropdown.
+  // Jika hari libur/tidak ada jadwal, tampilkan daftar lengkap namun disable
   const activeClasses = useMemo(() => {
-    if (activeDaySchedules.length > 0) {
+    if (!isNoTeachingDay && activeDaySchedules.length > 0) {
       const map = new Map<string, ClassItem>();
       for (const s of activeDaySchedules) {
         if (!map.has(s.classId)) {
@@ -171,14 +178,14 @@ export function GuruJurnalPage() {
       }
       return sortClasses(Array.from(map.values()));
     }
-    // Jika tidak ada jadwal spesifik hari ini, gunakan kelas yang ditugaskan ke guru ini
+    // Jika tidak ada jam mengajar, gunakan seluruh kelas yang ada (tampil lengkap tapi disable)
     return classesList;
-  }, [activeDaySchedules, classesList]);
+  }, [isNoTeachingDay, activeDaySchedules, classesList]);
 
   // Mapel yang valid pada kelas terpilih
   const activeSubjects = useMemo(() => {
-    if (!selectedClassId) {
-      if (activeDaySchedules.length > 0) {
+    if (isNoTeachingDay || !selectedClassId) {
+      if (!isNoTeachingDay && activeDaySchedules.length > 0) {
         const map = new Map<string, SubjectItem>();
         for (const s of activeDaySchedules) {
           if (!map.has(s.subjectId)) {
@@ -211,13 +218,13 @@ export function GuruJurnalPage() {
     }
 
     return subjectsList;
-  }, [selectedClassId, activeDaySchedules, schedulesList, subjectsList]);
+  }, [isNoTeachingDay, selectedClassId, activeDaySchedules, schedulesList, subjectsList]);
 
   // Otomatisasi sinkronisasi ketika tanggal berganti
   useEffect(() => {
     if (groupId) return; // Jangan overwrite saat sedang edit draft jurnal
 
-    if (activeDaySchedules.length > 0) {
+    if (!isNoTeachingDay && activeDaySchedules.length > 0) {
       const isCurrentValid = activeClasses.some((c) => c.id === selectedClassId);
       const targetClassId = isCurrentValid ? selectedClassId : activeClasses[0]?.id || "";
       if (targetClassId !== selectedClassId) {
@@ -231,14 +238,12 @@ export function GuruJurnalPage() {
         if (match.endHourId) setEndHourId(match.endHourId);
       }
     } else {
-      if (selectedClassId && !activeClasses.some((c) => c.id === selectedClassId)) {
-        setSelectedClassId("");
-        setSelectedSubjectId("");
-        setStartHourId("");
-        setEndHourId("");
-      }
+      setSelectedClassId("");
+      setSelectedSubjectId("");
+      setStartHourId("");
+      setEndHourId("");
     }
-  }, [date, activeDaySchedules, activeClasses]);
+  }, [date, isNoTeachingDay, activeDaySchedules, activeClasses]);
 
   // Handler saat guru memilih kelas: sinkronkan mapel & jam awal/akhir otomatis
   const handleSelectClass = (clsId: string) => {
@@ -660,6 +665,17 @@ export function GuruJurnalPage() {
           </div>
         ) : (
           <div className="p-5 space-y-5">
+            {isNoTeachingDay && (
+              <div className="flex items-center gap-3 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-xs font-medium">
+                <span className="material-symbols-outlined text-[20px] text-amber-600 dark:text-amber-400 shrink-0">
+                  event_busy
+                </span>
+                <div>
+                  <strong>Tidak ada jam mengajar pada hari {currentDayName}.</strong> Semua pilihan dropdown ditampilkan lengkap namun dinonaktifkan (disabled). Silakan pilih tanggal pada hari saat Anda memiliki jadwal KBM.
+                </div>
+              </div>
+            )}
+
             {/* Kotak 1: Tanggal, Kelas & Mata Pelajaran (Berdampingan 3 Kolom) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl border border-emerald-200/50 bg-emerald-50/10 dark:bg-emerald-900/5">
               {/* Tanggal & Indikator Hari */}
@@ -678,7 +694,11 @@ export function GuruJurnalPage() {
                   onChange={(e) => setDate(e.target.value)}
                   className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2 text-sm outline-none focus:border-primary"
                 />
-                {activeDaySchedules.length > 0 ? (
+                {isNoTeachingDay ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                    Tidak ada jadwal KBM pada hari {currentDayName}
+                  </p>
+                ) : activeDaySchedules.length > 0 ? (
                   <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
                     ✓ {activeDaySchedules.length} jadwal KBM sinkron pada hari {currentDayName}
                   </p>
@@ -693,17 +713,22 @@ export function GuruJurnalPage() {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold uppercase tracking-wider app-muted">Kelas</label>
-                  {activeDaySchedules.length > 0 && (
+                  {!isNoTeachingDay && activeDaySchedules.length > 0 && (
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Sinkron Jadwal Admin</span>
                   )}
                 </div>
                 <select
                   value={selectedClassId}
+                  disabled={isNoTeachingDay}
                   onChange={(e) => handleSelectClass(e.target.value)}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
+                  className={`w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary ${
+                    isNoTeachingDay ? "opacity-60 cursor-not-allowed bg-slate-100/60 dark:bg-slate-800/60" : ""
+                  }`}
                 >
                   <option value="">
-                    {activeClasses.length === 0
+                    {isNoTeachingDay
+                      ? `-- Tidak ada jam mengajar (${currentDayName}) --`
+                      : activeClasses.length === 0
                       ? `-- Tidak ada jadwal kelas pada hari ${currentDayName} --`
                       : "-- Pilih Kelas --"}
                   </option>
@@ -719,6 +744,8 @@ export function GuruJurnalPage() {
                   </p>
                 ) : selectedClassId ? (
                   <p className="text-[11px] text-muted truncate">Kelas terpilih: {selectedClassName}</p>
+                ) : isNoTeachingDay ? (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">Dropdown kelas dinonaktifkan</p>
                 ) : (
                   <p className="text-[11px] text-muted">Pilih kelas yang diajar</p>
                 )}
@@ -728,17 +755,22 @@ export function GuruJurnalPage() {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold uppercase tracking-wider app-muted">Mata Pelajaran</label>
-                  {activeSubjects.length === 1 && (
+                  {!isNoTeachingDay && activeSubjects.length === 1 && (
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Otomatis Terkunci</span>
                   )}
                 </div>
                 <select
                   value={selectedSubjectId}
+                  disabled={isNoTeachingDay}
                   onChange={(e) => handleSelectSubject(e.target.value)}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
+                  className={`w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary ${
+                    isNoTeachingDay ? "opacity-60 cursor-not-allowed bg-slate-100/60 dark:bg-slate-800/60" : ""
+                  }`}
                 >
                   <option value="">
-                    {activeSubjects.length === 0
+                    {isNoTeachingDay
+                      ? `-- Tidak ada jam mengajar (${currentDayName}) --`
+                      : activeSubjects.length === 0
                       ? "-- Tidak ada mapel terkait --"
                       : "-- Pilih Mapel --"}
                   </option>
@@ -765,7 +797,11 @@ export function GuruJurnalPage() {
                     Waktu / Jam Mengajar
                   </span>
                 </div>
-                {currentClassSchedule?.startHourLabel && currentClassSchedule?.endHourLabel ? (
+                {isNoTeachingDay ? (
+                  <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                    Tidak ada jam mengajar pada hari {currentDayName} (Dropdown Lengkap Dinonaktifkan)
+                  </span>
+                ) : currentClassSchedule?.startHourLabel && currentClassSchedule?.endHourLabel ? (
                   <div className="flex items-center gap-2">
                     <span className="text-xs px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 font-medium border border-blue-500/20">
                       ⭐ Sesuai Jadwal: <strong>{currentClassSchedule.startHourLabel} s/d {currentClassSchedule.endHourLabel}</strong>
@@ -796,16 +832,21 @@ export function GuruJurnalPage() {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Awal</label>
-                    {currentClassSchedule?.startHourId && startHourId === currentClassSchedule.startHourId && (
+                    {!isNoTeachingDay && currentClassSchedule?.startHourId && startHourId === currentClassSchedule.startHourId && (
                       <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">✓ Sesuai Jadwal</span>
                     )}
                   </div>
                   <select
                     value={startHourId}
+                    disabled={isNoTeachingDay}
                     onChange={(e) => setStartHourId(e.target.value)}
-                    className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
+                    className={`w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary ${
+                      isNoTeachingDay ? "opacity-60 cursor-not-allowed bg-slate-100/60 dark:bg-slate-800/60" : ""
+                    }`}
                   >
-                    <option value="">-- Pilih Jam Awal --</option>
+                    <option value="">
+                      {isNoTeachingDay ? `-- Tidak ada jam mengajar (${currentDayName}) --` : "-- Pilih Jam Awal --"}
+                    </option>
                     {hoursList.map((h) => {
                       const isTaken = submittedHourIdsForSelectedDate.has(h.id);
                       const isScheduled = currentClassSchedule?.startHourId === h.id;
@@ -827,16 +868,21 @@ export function GuruJurnalPage() {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Akhir</label>
-                    {currentClassSchedule?.endHourId && endHourId === currentClassSchedule.endHourId && (
+                    {!isNoTeachingDay && currentClassSchedule?.endHourId && endHourId === currentClassSchedule.endHourId && (
                       <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">✓ Sesuai Jadwal</span>
                     )}
                   </div>
                   <select
                     value={endHourId}
+                    disabled={isNoTeachingDay}
                     onChange={(e) => setEndHourId(e.target.value)}
-                    className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
+                    className={`w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary ${
+                      isNoTeachingDay ? "opacity-60 cursor-not-allowed bg-slate-100/60 dark:bg-slate-800/60" : ""
+                    }`}
                   >
-                    <option value="">-- Pilih Jam Akhir --</option>
+                    <option value="">
+                      {isNoTeachingDay ? `-- Tidak ada jam mengajar (${currentDayName}) --` : "-- Pilih Jam Akhir --"}
+                    </option>
                     {hoursList.map((h) => {
                       const isTaken = submittedHourIdsForSelectedDate.has(h.id);
                       const isScheduled = currentClassSchedule?.endHourId === h.id;
@@ -863,10 +909,13 @@ export function GuruJurnalPage() {
                 <label className="text-xs font-semibold uppercase tracking-wider app-muted">Materi Pembelajaran</label>
                 <textarea
                   value={materi}
+                  disabled={isNoTeachingDay}
                   onChange={(e) => setMateri(e.target.value)}
-                  placeholder="Tuliskan pokok bahasan atau materi pembelajaran secara lengkap..."
+                  placeholder={isNoTeachingDay ? `Tidak ada jam mengajar pada hari ${currentDayName}` : "Tuliskan pokok bahasan atau materi pembelajaran secara lengkap..."}
                   rows={4}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary"
+                  className={`w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary ${
+                    isNoTeachingDay ? "opacity-60 cursor-not-allowed bg-slate-100/60 dark:bg-slate-800/60" : ""
+                  }`}
                 />
               </div>
 
@@ -875,10 +924,13 @@ export function GuruJurnalPage() {
                 <label className="text-xs font-semibold uppercase tracking-wider app-muted">Ket. Presensi</label>
                 <textarea
                   value={presenceInfo}
+                  disabled={isNoTeachingDay}
                   onChange={(e) => setPresenceInfo(e.target.value)}
-                  placeholder="Contoh: Siswa hadir lengkap, atau A sakit, B izin..."
+                  placeholder={isNoTeachingDay ? `Tidak ada jam mengajar pada hari ${currentDayName}` : "Contoh: Siswa hadir lengkap, atau A sakit, B izin..."}
                   rows={4}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary"
+                  className={`w-full rounded-xl border border-outline-variant/40 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary ${
+                    isNoTeachingDay ? "opacity-60 cursor-not-allowed bg-slate-100/60 dark:bg-slate-800/60" : ""
+                  }`}
                 />
               </div>
             </div>
@@ -887,7 +939,7 @@ export function GuruJurnalPage() {
             <div className="flex gap-3 justify-start pt-2">
               <Button
                 variant="primary"
-                disabled={busy}
+                disabled={busy || isNoTeachingDay}
                 onClick={() => handleSave("draft")}
               >
                 <span className="material-symbols-outlined text-[18px]">draft</span>
