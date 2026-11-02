@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { count, desc, eq, ne, and, or, sql, inArray, asc, isNull, isNotNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { INTEGRATIONS } from "../../constants/integrations.js";
 import { ROLE_DEFINITIONS } from "../../constants/roles.js";
@@ -1091,6 +1092,8 @@ adminRoutes.delete("/teaching-hours/:id", async (c) => {
 
 adminRoutes.get("/class-subject-mappings", async (c) => {
   const classId = c.req.query("classId")?.trim();
+  const startHours = alias(teachingHours, "start_hours");
+  const endHours = alias(teachingHours, "end_hours");
 
   let query = db
     .select({
@@ -1105,6 +1108,13 @@ adminRoutes.get("/class-subject-mappings", async (c) => {
       teacherUserId: classSubjectAssignments.teacherUserId,
       teacherName: users.name,
       teacherNip: users.username,
+      hari: classSubjectAssignments.hari,
+      startHourId: classSubjectAssignments.startHourId,
+      startHourLabel: startHours.label,
+      startHourTime: sql<string>`concat(${startHours.startTime}, ' - ', ${startHours.endTime})`,
+      endHourId: classSubjectAssignments.endHourId,
+      endHourLabel: endHours.label,
+      endHourTime: sql<string>`concat(${endHours.startTime}, ' - ', ${endHours.endTime})`,
       jp: classSubjectAssignments.jp,
       createdAt: classSubjectAssignments.createdAt,
       updatedAt: classSubjectAssignments.updatedAt,
@@ -1112,7 +1122,9 @@ adminRoutes.get("/class-subject-mappings", async (c) => {
     .from(classSubjectAssignments)
     .innerJoin(classes, eq(classSubjectAssignments.classId, classes.id))
     .innerJoin(subjects, eq(classSubjectAssignments.subjectId, subjects.id))
-    .innerJoin(users, eq(classSubjectAssignments.teacherUserId, users.id));
+    .innerJoin(users, eq(classSubjectAssignments.teacherUserId, users.id))
+    .leftJoin(startHours, eq(classSubjectAssignments.startHourId, startHours.id))
+    .leftJoin(endHours, eq(classSubjectAssignments.endHourId, endHours.id));
 
   if (classId) {
     const rows = await query
@@ -1132,6 +1144,9 @@ adminRoutes.post("/class-subject-mappings", async (c) => {
         classId: z.string().uuid("Kelas wajib dipilih"),
         subjectId: z.string().uuid("Mapel wajib dipilih"),
         teacherUserId: z.string().uuid("Guru pengajar wajib dipilih"),
+        hari: z.string().optional().nullable(),
+        startHourId: z.string().uuid().optional().nullable(),
+        endHourId: z.string().uuid().optional().nullable(),
         jp: z.coerce.number().min(1, "Minimal 1 JP").max(20, "Maksimal 20 JP").default(2),
       })
       .parse(await c.req.json());
@@ -1179,27 +1194,53 @@ adminRoutes.post("/class-subject-mappings", async (c) => {
       }, 400);
     }
 
-    // Upsert pemetaan (on conflict update jp and updatedAt)
-    const [row] = await db
-      .insert(classSubjectAssignments)
-      .values({
-        classId: targetClassId,
-        subjectId: body.subjectId,
-        teacherUserId: targetUserId,
-        jp: body.jp,
-      })
-      .onConflictDoUpdate({
-        target: [
-          classSubjectAssignments.classId,
-          classSubjectAssignments.subjectId,
-          classSubjectAssignments.teacherUserId,
-        ],
-        set: {
+    const hariVal = body.hari?.trim() || null;
+    const startHourIdVal = body.startHourId || null;
+    const endHourIdVal = body.endHourId || null;
+
+    let row;
+    const existing = await db
+      .select({ id: classSubjectAssignments.id })
+      .from(classSubjectAssignments)
+      .where(
+        and(
+          eq(classSubjectAssignments.classId, targetClassId),
+          eq(classSubjectAssignments.subjectId, body.subjectId),
+          eq(classSubjectAssignments.teacherUserId, targetUserId),
+          hariVal ? eq(classSubjectAssignments.hari, hariVal) : isNull(classSubjectAssignments.hari),
+          startHourIdVal ? eq(classSubjectAssignments.startHourId, startHourIdVal) : isNull(classSubjectAssignments.startHourId)
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      const [updated] = await db
+        .update(classSubjectAssignments)
+        .set({
           jp: body.jp,
+          hari: hariVal,
+          startHourId: startHourIdVal,
+          endHourId: endHourIdVal,
           updatedAt: new Date(),
-        },
-      })
-      .returning();
+        })
+        .where(eq(classSubjectAssignments.id, existing[0].id))
+        .returning();
+      row = updated;
+    } else {
+      const [inserted] = await db
+        .insert(classSubjectAssignments)
+        .values({
+          classId: targetClassId,
+          subjectId: body.subjectId,
+          teacherUserId: targetUserId,
+          hari: hariVal,
+          startHourId: startHourIdVal,
+          endHourId: endHourIdVal,
+          jp: body.jp,
+        })
+        .returning();
+      row = inserted;
+    }
 
     // Kompatibilitas dengan class_subjects jika teacherId ada
     const [t] = await db.select({ id: teachers.id }).from(teachers).where(eq(teachers.userId, targetUserId)).limit(1);
@@ -1227,6 +1268,9 @@ adminRoutes.put("/class-subject-mappings/:id", async (c) => {
     const body = z
       .object({
         teacherUserId: z.string().uuid().optional(),
+        hari: z.string().optional().nullable(),
+        startHourId: z.string().uuid().optional().nullable(),
+        endHourId: z.string().uuid().optional().nullable(),
         jp: z.coerce.number().min(1, "Minimal 1 JP").max(20, "Maksimal 20 JP").optional(),
       })
       .parse(await c.req.json());
@@ -1290,6 +1334,9 @@ adminRoutes.put("/class-subject-mappings/:id", async (c) => {
     const updateData: Record<string, any> = { updatedAt: new Date() };
     if (body.jp !== undefined) updateData.jp = body.jp;
     if (body.teacherUserId) updateData.teacherUserId = effectiveTeacherUserId;
+    if (body.hari !== undefined) updateData.hari = body.hari?.trim() || null;
+    if (body.startHourId !== undefined) updateData.startHourId = body.startHourId || null;
+    if (body.endHourId !== undefined) updateData.endHourId = body.endHourId || null;
 
     const [row] = await db
       .update(classSubjectAssignments)
@@ -1415,22 +1462,42 @@ adminRoutes.post("/class-subject-mappings/copy-class", async (c) => {
 
     let copiedCount = 0;
     for (const r of sourceRows) {
-      await db
-        .insert(classSubjectAssignments)
-        .values({
+      const existing = await db
+        .select({ id: classSubjectAssignments.id })
+        .from(classSubjectAssignments)
+        .where(
+          and(
+            eq(classSubjectAssignments.classId, destClassId),
+            eq(classSubjectAssignments.subjectId, r.subjectId),
+            eq(classSubjectAssignments.teacherUserId, r.teacherUserId),
+            r.hari ? eq(classSubjectAssignments.hari, r.hari) : isNull(classSubjectAssignments.hari),
+            r.startHourId ? eq(classSubjectAssignments.startHourId, r.startHourId) : isNull(classSubjectAssignments.startHourId)
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        await db
+          .update(classSubjectAssignments)
+          .set({
+            jp: r.jp,
+            hari: r.hari,
+            startHourId: r.startHourId,
+            endHourId: r.endHourId,
+            updatedAt: new Date(),
+          })
+          .where(eq(classSubjectAssignments.id, existing[0].id));
+      } else {
+        await db.insert(classSubjectAssignments).values({
           classId: destClassId,
           subjectId: r.subjectId,
           teacherUserId: r.teacherUserId,
           jp: r.jp,
-        })
-        .onConflictDoUpdate({
-          target: [
-            classSubjectAssignments.classId,
-            classSubjectAssignments.subjectId,
-            classSubjectAssignments.teacherUserId,
-          ],
-          set: { jp: r.jp, updatedAt: new Date() },
+          hari: r.hari,
+          startHourId: r.startHourId,
+          endHourId: r.endHourId,
         });
+      }
       copiedCount++;
     }
 

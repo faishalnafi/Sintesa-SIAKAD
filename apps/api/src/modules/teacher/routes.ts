@@ -1,10 +1,13 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray, or, sql, isNull, asc } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import {
   classes,
   classSubjects,
+  classSubjectAssignments,
+  homeroomAssignments,
   gradeAuditLogs,
   grades,
   students,
@@ -170,11 +173,53 @@ teacherRoutes.get("/classes", async (c) => {
   const user = c.get("user");
   const isStaff = user.roles.includes("guru") || user.roles.includes("walikelas");
   const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+  const requestedDay = c.req.query("hari") || c.req.query("day");
+  const dateStr = c.req.query("date");
 
+  let day = requestedDay;
+  if (!day && dateStr) {
+    const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      day = days[d.getDay()];
+    }
+  }
+
+  // Jika guru/walikelas (bukan admin), hanya ambil kelas yang ditugaskan ke guru ini
   if (isStaff && !isAdmin) {
+    const conditions = [
+      eq(classSubjectAssignments.teacherUserId, user.id),
+      eq(classes.isActive, true),
+    ];
+    if (day) {
+      conditions.push(eq(classSubjectAssignments.hari, day));
+    }
+
+    const assigned = await db
+      .select({
+        id: classes.id,
+        name: classes.name,
+      })
+      .from(classSubjectAssignments)
+      .innerJoin(classes, eq(classSubjectAssignments.classId, classes.id))
+      .where(and(...conditions))
+      .groupBy(classes.id, classes.name)
+      .orderBy(classes.name);
+
+    // Jika day difilter dan ada hasil, atau jika day memang diminta: kembalikan hasil tersebut
+    // (otomatis tereliminasi dari dropdown jika bukan harinya)
+    if (day) {
+      return c.json({ success: true, data: sortClasses(assigned) });
+    }
+
+    if (assigned.length > 0) {
+      return c.json({ success: true, data: sortClasses(assigned) });
+    }
+
+    // Fallback: periksa juga legacy classSubjects jika teacherId ada
     const teacherId = await resolveTeacherId(user.id);
     if (teacherId) {
-      const assigned = await db
+      const legacyAssigned = await db
         .select({
           id: classes.id,
           name: classes.name,
@@ -182,33 +227,35 @@ teacherRoutes.get("/classes", async (c) => {
         .from(classSubjects)
         .innerJoin(classes, eq(classSubjects.classId, classes.id))
         .where(and(eq(classSubjects.teacherId, teacherId), eq(classes.isActive, true)))
+        .groupBy(classes.id, classes.name)
         .orderBy(classes.name);
 
-      if (assigned.length > 0) {
-        return c.json({ success: true, data: sortClasses(assigned) });
+      if (legacyAssigned.length > 0) {
+        return c.json({ success: true, data: sortClasses(legacyAssigned) });
       }
     }
-  }
 
-  const list: Array<{ id: string; name: string }> = [];
-  const seenIds = new Set<string>();
+    // Cek apakah guru adalah wali kelas di homeroomAssignments
+    const homeroomClasses = await db
+      .select({
+        id: classes.id,
+        name: classes.name,
+      })
+      .from(homeroomAssignments)
+      .innerJoin(classes, eq(homeroomAssignments.classId, classes.id))
+      .where(and(eq(homeroomAssignments.userId, user.id), eq(classes.isActive, true)))
+      .groupBy(classes.id, classes.name)
+      .orderBy(classes.name);
 
-  // 1. Ambil data kelas langsung dari SSO Kredensia
-  if (env.SSO_API_KEY && env.SSO_API_BASE_URL) {
-    try {
-      const ssoRes = await ssoListKelas();
-      if (ssoRes.data && Array.isArray(ssoRes.data)) {
-        for (const k of ssoRes.data) {
-          list.push({ id: k.id, name: k.nama_kelas });
-          seenIds.add(k.id);
-        }
-      }
-    } catch (e) {
-      console.error("Gagal mengambil data kelas dari SSO:", e);
+    if (homeroomClasses.length > 0) {
+      return c.json({ success: true, data: sortClasses(homeroomClasses) });
     }
+
+    // Guru belum dipetakan ke kelas manapun -> kembalikan list kosong! (Tidak boleh bocor ke kelas lain)
+    return c.json({ success: true, data: [] });
   }
 
-  // 2. Gabungkan dengan kelas lokal
+  // Jika admin / superadmin, tampilkan semua kelas aktif
   const local = await db
     .select({
       id: classes.id,
@@ -218,24 +265,66 @@ teacherRoutes.get("/classes", async (c) => {
     .where(eq(classes.isActive, true))
     .orderBy(classes.name);
 
-  for (const k of local) {
-    if (!seenIds.has(k.id)) {
-      list.push(k);
-      seenIds.add(k.id);
-    }
-  }
-
-  return c.json({ success: true, data: sortClasses(list) });
+  return c.json({ success: true, data: sortClasses(local) });
 });
 
 teacherRoutes.get("/subjects", async (c) => {
   const user = c.get("user");
   const isStaff = user.roles.includes("guru") || user.roles.includes("walikelas");
   const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+  const classId = c.req.query("classId")?.trim();
+  const requestedDay = c.req.query("hari") || c.req.query("day");
 
   if (isStaff && !isAdmin) {
-    // Ambil mapel yang dikunci untuk guru ini di tabel teacher_subjects
-    const assigned = await db
+    // 1. Jika classId diberikan, ambil mapel yang diajar guru di kelas tersebut
+    if (classId) {
+      const conditions = [
+        eq(classSubjectAssignments.teacherUserId, user.id),
+        eq(classSubjectAssignments.classId, classId),
+        eq(subjects.isActive, true),
+      ];
+      if (requestedDay) {
+        conditions.push(eq(classSubjectAssignments.hari, requestedDay));
+      }
+
+      const assignedInClass = await db
+        .select({
+          id: subjects.id,
+          name: subjects.name,
+          code: subjects.code,
+          type: subjects.type,
+        })
+        .from(classSubjectAssignments)
+        .innerJoin(subjects, eq(classSubjectAssignments.subjectId, subjects.id))
+        .where(and(...conditions))
+        .groupBy(subjects.id, subjects.name, subjects.code, subjects.type)
+        .orderBy(subjects.name);
+
+      if (assignedInClass.length > 0) {
+        return c.json({
+          success: true,
+          data: sortSubjects(assignedInClass),
+          isLocked: assignedInClass.length === 1,
+        });
+      }
+    }
+
+    // 2. Ambil mapel dari classSubjectAssignments secara keseluruhan untuk guru ini
+    const fromAssignments = await db
+      .select({
+        id: subjects.id,
+        name: subjects.name,
+        code: subjects.code,
+        type: subjects.type,
+      })
+      .from(classSubjectAssignments)
+      .innerJoin(subjects, eq(classSubjectAssignments.subjectId, subjects.id))
+      .where(and(eq(classSubjectAssignments.teacherUserId, user.id), eq(subjects.isActive, true)))
+      .groupBy(subjects.id, subjects.name, subjects.code, subjects.type)
+      .orderBy(subjects.name);
+
+    // 3. Ambil mapel dari master teacher_subjects
+    const fromMaster = await db
       .select({
         id: subjects.id,
         name: subjects.name,
@@ -247,12 +336,44 @@ teacherRoutes.get("/subjects", async (c) => {
       .where(and(eq(teacherSubjects.userId, user.id), eq(subjects.isActive, true)))
       .orderBy(subjects.name);
 
-    if (assigned.length > 0) {
-      return c.json({ success: true, data: sortSubjects(assigned), isLocked: assigned.length === 1 });
+    const mergedMap = new Map<string, any>();
+    for (const s of [...fromAssignments, ...fromMaster]) {
+      mergedMap.set(s.id, s);
+    }
+    const merged = Array.from(mergedMap.values());
+
+    if (merged.length > 0) {
+      return c.json({
+        success: true,
+        data: sortSubjects(merged),
+        isLocked: merged.length === 1,
+      });
+    }
+
+    // Guru belum ditugaskan mapel -> kembalikan list kosong
+    return c.json({ success: true, data: [], isLocked: false });
+  }
+
+  // Jika admin / superadmin, jika ada classId ambil mapel di kelas itu atau semua mapel aktif
+  if (classId) {
+    const classSubs = await db
+      .select({
+        id: subjects.id,
+        name: subjects.name,
+        code: subjects.code,
+        type: subjects.type,
+      })
+      .from(classSubjectAssignments)
+      .innerJoin(subjects, eq(classSubjectAssignments.subjectId, subjects.id))
+      .where(and(eq(classSubjectAssignments.classId, classId), eq(subjects.isActive, true)))
+      .groupBy(subjects.id, subjects.name, subjects.code, subjects.type)
+      .orderBy(subjects.name);
+
+    if (classSubs.length > 0) {
+      return c.json({ success: true, data: sortSubjects(classSubs), isLocked: false });
     }
   }
 
-  // Jika tidak dikunci, kembalikan semua mapel aktif
   const all = await db
     .select({
       id: subjects.id,
@@ -265,6 +386,63 @@ teacherRoutes.get("/subjects", async (c) => {
     .orderBy(subjects.name);
 
   return c.json({ success: true, data: sortSubjects(all), isLocked: false });
+});
+
+teacherRoutes.get("/schedule", async (c) => {
+  const user = c.get("user");
+  const requestedDay = c.req.query("hari") || c.req.query("day");
+  const dateStr = c.req.query("date");
+
+  let day = requestedDay;
+  if (!day && dateStr) {
+    const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      day = days[d.getDay()];
+    }
+  }
+
+  const startHours = alias(teachingHours, "sched_start_hours");
+  const endHours = alias(teachingHours, "sched_end_hours");
+
+  const isAdmin = user.roles.includes("admin") || user.roles.includes("superadmin");
+  const conditions = [
+    eq(classes.isActive, true),
+    eq(subjects.isActive, true),
+  ];
+  if (!isAdmin) {
+    conditions.push(eq(classSubjectAssignments.teacherUserId, user.id));
+  }
+  if (day) {
+    conditions.push(eq(classSubjectAssignments.hari, day));
+  }
+
+  const rows = await db
+    .select({
+      id: classSubjectAssignments.id,
+      classId: classSubjectAssignments.classId,
+      className: classes.name,
+      subjectId: classSubjectAssignments.subjectId,
+      subjectName: subjects.name,
+      subjectCode: subjects.code,
+      hari: classSubjectAssignments.hari,
+      startHourId: classSubjectAssignments.startHourId,
+      startHourLabel: startHours.label,
+      startHourTime: sql<string>`concat(${startHours.startTime}, ' - ', ${startHours.endTime})`,
+      endHourId: classSubjectAssignments.endHourId,
+      endHourLabel: endHours.label,
+      endHourTime: sql<string>`concat(${endHours.startTime}, ' - ', ${endHours.endTime})`,
+      jp: classSubjectAssignments.jp,
+    })
+    .from(classSubjectAssignments)
+    .innerJoin(classes, eq(classSubjectAssignments.classId, classes.id))
+    .innerJoin(subjects, eq(classSubjectAssignments.subjectId, subjects.id))
+    .leftJoin(startHours, eq(classSubjectAssignments.startHourId, startHours.id))
+    .leftJoin(endHours, eq(classSubjectAssignments.endHourId, endHours.id))
+    .where(and(...conditions))
+    .orderBy(classes.name, subjects.name);
+
+  return c.json({ success: true, data: rows });
 });
 
 teacherRoutes.get("/assessment-components", async (c) => {

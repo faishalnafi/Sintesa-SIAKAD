@@ -35,6 +35,13 @@ export type ClassSubjectMapping = {
   teacherUserId: string;
   teacherName: string;
   teacherNip: string | null;
+  hari?: string | null;
+  startHourId?: string | null;
+  startHourLabel?: string | null;
+  startHourTime?: string | null;
+  endHourId?: string | null;
+  endHourLabel?: string | null;
+  endHourTime?: string | null;
   jp: number;
   createdAt: string;
   updatedAt: string;
@@ -235,6 +242,9 @@ export function SubjectsPage() {
   const [editingMappingId, setEditingMappingId] = useState<string | null>(null);
   const [modalSubjectId, setModalSubjectId] = useState("");
   const [modalTeacherUserId, setModalTeacherUserId] = useState("");
+  const [modalHari, setModalHari] = useState("");
+  const [modalStartHourId, setModalStartHourId] = useState("");
+  const [modalEndHourId, setModalEndHourId] = useState("");
   const [modalJp, setModalJp] = useState(2);
 
   // Modal salin pemetaan ke kelas lain
@@ -286,6 +296,9 @@ export function SubjectsPage() {
     setEditingMappingId(null);
     setModalSubjectId("");
     setModalTeacherUserId("");
+    setModalHari("");
+    setModalStartHourId("");
+    setModalEndHourId("");
     setModalJp(2);
     setIsAddMappingModalOpen(true);
   };
@@ -294,6 +307,9 @@ export function SubjectsPage() {
     setEditingMappingId(m.id);
     setModalSubjectId(m.subjectId);
     setModalTeacherUserId(m.teacherUserId);
+    setModalHari(m.hari || "");
+    setModalStartHourId(m.startHourId || "");
+    setModalEndHourId(m.endHourId || "");
     setModalJp(m.jp);
     setIsAddMappingModalOpen(true);
   };
@@ -329,6 +345,9 @@ export function SubjectsPage() {
           method: "PUT",
           body: JSON.stringify({
             teacherUserId: modalTeacherUserId,
+            hari: modalHari || null,
+            startHourId: modalStartHourId || null,
+            endHourId: modalEndHourId || null,
             jp: modalJp,
           }),
         });
@@ -346,6 +365,9 @@ export function SubjectsPage() {
             classId: selectedMappingClassId,
             subjectId: modalSubjectId,
             teacherUserId: modalTeacherUserId,
+            hari: modalHari || null,
+            startHourId: modalStartHourId || null,
+            endHourId: modalEndHourId || null,
             jp: modalJp,
           }),
         });
@@ -2319,6 +2341,7 @@ export function SubjectsPage() {
                             <th className="py-3 px-3 w-12 text-center">No</th>
                             <th className="py-3 px-4">Mata Pelajaran</th>
                             <th className="py-3 px-4">Guru Pengajar</th>
+                            <th className="py-3 px-4">Jadwal Mengajar</th>
                             <th className="py-3 px-4 text-center w-40">Alokasi JP</th>
                             <th className="py-3 px-4 text-right w-28">Aksi</th>
                           </tr>
@@ -2370,6 +2393,31 @@ export function SubjectsPage() {
                                     </div>
                                   </div>
                                 </div>
+                              </td>
+
+                              {/* Jadwal Mengajar */}
+                              <td className="py-3 px-4">
+                                {m.hari ? (
+                                  <div className="space-y-1">
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                                      {m.hari}
+                                    </span>
+                                    <div className="text-[11px] app-muted font-mono flex items-center gap-1">
+                                      <span className="material-symbols-outlined text-[13px]">schedule</span>
+                                      {m.startHourLabel ? (
+                                        <span>
+                                          {m.startHourLabel}
+                                          {m.endHourLabel && m.endHourLabel !== m.startHourLabel ? ` s/d ${m.endHourLabel}` : ""}
+                                          {m.startHourTime ? ` (${m.startHourTime.split(' - ')[0]} - ${m.endHourTime ? m.endHourTime.split(' - ')[1] : m.startHourTime.split(' - ')[1]})` : ""}
+                                        </span>
+                                      ) : (
+                                        <span>Jam belum diatur</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] text-muted italic">Belum diatur</span>
+                                )}
                               </td>
 
                               {/* Alokasi JP dengan Stepper Cepat */}
@@ -2425,7 +2473,7 @@ export function SubjectsPage() {
                         </tbody>
                         <tfoot>
                           <tr className="bg-[var(--hover)]/80 font-semibold border-t-2 border-[var(--divider)] text-xs">
-                            <td colSpan={3} className="py-3 px-4 text-right">
+                            <td colSpan={4} className="py-3 px-4 text-right">
                               Total Jam Pelajaran Terpetakan:
                             </td>
                             <td className="py-3 px-4 text-center">
@@ -2512,6 +2560,18 @@ export function SubjectsPage() {
                             </div>
                           </div>
                         </div>
+
+                        {/* Jadwal Mengajar Mobile */}
+                        {m.hari && (
+                          <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-blue-500/5 border border-blue-500/20 text-xs">
+                            <span className="font-semibold text-blue-600 dark:text-blue-400">{m.hari}</span>
+                            <span className="text-muted">·</span>
+                            <span className="text-muted font-mono text-[11px]">
+                              {m.startHourLabel || "Jam ?"}
+                              {m.endHourLabel && m.endHourLabel !== m.startHourLabel ? ` - ${m.endHourLabel}` : ""}
+                            </span>
+                          </div>
+                        )}
 
                         {/* Stepper JP Mobile Touch-Friendly (Target >= 44px) */}
                         <div className="flex items-center justify-between pt-1 border-t border-[var(--divider)]">
@@ -2879,6 +2939,70 @@ export function SubjectsPage() {
                     +
                   </button>
                 </div>
+              </div>
+            </div>
+
+            {/* Field: Hari Mengajar */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--fg)]">
+                Hari Mengajar
+              </label>
+              <select
+                value={modalHari}
+                onChange={(e) => setModalHari(e.target.value)}
+                className="w-full text-sm app-input py-2.5 px-3 rounded-xl border border-[var(--divider)]"
+              >
+                <option value="">-- Pilih Hari (Opsional) --</option>
+                {["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map((h) => (
+                  <option key={h} value={h}>
+                    {h}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] app-muted">
+                Dipakai untuk otomatisasi & filter sinkron dropdown di modul <strong>Jurnal Mengajar Guru</strong>.
+              </p>
+            </div>
+
+            {/* Field: Jam Mengajar (Awal & Akhir) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--fg)]">
+                  Jam Mengajar Awal
+                </label>
+                <select
+                  value={modalStartHourId}
+                  onChange={(e) => {
+                    setModalStartHourId(e.target.value);
+                    if (!modalEndHourId) setModalEndHourId(e.target.value);
+                  }}
+                  className="w-full text-sm app-input py-2.5 px-3 rounded-xl border border-[var(--divider)]"
+                >
+                  <option value="">-- Pilih Jam Awal --</option>
+                  {teachingHoursList.map((th) => (
+                    <option key={th.id} value={th.id}>
+                      {th.label} ({th.startTime} - {th.endTime})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--fg)]">
+                  Jam Mengajar Akhir
+                </label>
+                <select
+                  value={modalEndHourId}
+                  onChange={(e) => setModalEndHourId(e.target.value)}
+                  className="w-full text-sm app-input py-2.5 px-3 rounded-xl border border-[var(--divider)]"
+                >
+                  <option value="">-- Pilih Jam Akhir --</option>
+                  {teachingHoursList.map((th) => (
+                    <option key={th.id} value={th.id}>
+                      {th.label} ({th.startTime} - {th.endTime})
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

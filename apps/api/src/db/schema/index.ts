@@ -279,6 +279,15 @@ export const teacherSubjects = pgTable(
   (t) => [uniqueIndex("teacher_subjects_unique_idx").on(t.userId, t.subjectId)],
 );
 
+export const teachingHours = pgTable("teaching_hours", {
+  id: id(),
+  label: varchar("label", { length: 50 }).notNull(), // e.g., "Jam ke-1"
+  startTime: varchar("start_time", { length: 10 }).notNull(), // e.g., "07:00"
+  endTime: varchar("end_time", { length: 10 }).notNull(), // e.g., "07:45"
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 /**
  * Pemetaan Tugas Mengajar Guru per Kelas & Jam Pelajaran (JP)
  */
@@ -295,6 +304,9 @@ export const classSubjectAssignments = pgTable(
     teacherUserId: uuid("teacher_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    hari: varchar("hari", { length: 20 }), // 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'
+    startHourId: uuid("start_hour_id").references(() => teachingHours.id, { onDelete: "set null" }),
+    endHourId: uuid("end_hour_id").references(() => teachingHours.id, { onDelete: "set null" }),
     jp: integer("jp").default(2).notNull(), // Alokasi jam pelajaran per minggu
     ...timestamps,
   },
@@ -302,7 +314,9 @@ export const classSubjectAssignments = pgTable(
     uniqueIndex("class_subject_assignments_unique_idx").on(
       t.classId,
       t.subjectId,
-      t.teacherUserId
+      t.teacherUserId,
+      t.hari,
+      t.startHourId
     ),
   ]
 );
@@ -437,15 +451,6 @@ export type AcademicYear = typeof academicYears.$inferSelect;
 export type Student = typeof students.$inferSelect;
 export type Teacher = typeof teachers.$inferSelect;
 export type Grade = typeof grades.$inferSelect;
-
-export const teachingHours = pgTable("teaching_hours", {
-  id: id(),
-  label: varchar("label", { length: 50 }).notNull(), // e.g., "Jam ke-1"
-  startTime: varchar("start_time", { length: 10 }).notNull(), // e.g., "07:00"
-  endTime: varchar("end_time", { length: 10 }).notNull(), // e.g., "07:45"
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
 
 export const teacherJournals = pgTable("teacher_journals", {
   id: id(),

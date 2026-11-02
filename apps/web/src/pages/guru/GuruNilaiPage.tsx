@@ -89,48 +89,29 @@ export function GuruNilaiPage() {
   }, [assessmentComponents]);
 
   useEffect(() => {
-    Promise.allSettled([
-      api<Klass[]>("/teacher/classes"),
-      api<Array<{ id: string; nama_kelas: string }>>("/admin/sso/kelas"),
-    ]).then(([tClsRes, ssoKlsRes]) => {
-      const combined: Klass[] = [];
-      const seenIds = new Set<string>();
-      const seenNames = new Set<string>();
-
-      if (tClsRes.status === "fulfilled" && tClsRes.value?.data && Array.isArray(tClsRes.value.data)) {
-        for (const c of tClsRes.value.data) {
-          if (c.id && c.name && !seenIds.has(c.id) && !seenNames.has(c.name.toLowerCase())) {
-            combined.push(c);
-            seenIds.add(c.id);
-            seenNames.add(c.name.toLowerCase());
-          }
-        }
+    api<Klass[]>("/teacher/classes").then((res) => {
+      const list = sortClasses(res.data ?? []);
+      setClasses(list);
+      if (list[0]) {
+        setClassId((prev) => (list.some((c) => c.id === prev) ? prev : list[0].id));
+      } else {
+        setClassId("");
       }
-
-      if (ssoKlsRes.status === "fulfilled" && ssoKlsRes.value?.data && Array.isArray(ssoKlsRes.value.data)) {
-        for (const k of ssoKlsRes.value.data) {
-          if (k.id && k.nama_kelas && !seenIds.has(k.id) && !seenNames.has(k.nama_kelas.toLowerCase())) {
-            combined.push({ id: k.id, name: k.nama_kelas });
-            seenIds.add(k.id);
-            seenNames.add(k.nama_kelas.toLowerCase());
-          }
-        }
-      }
-
-      const sortedClasses = sortClasses(combined);
-      setClasses(sortedClasses);
-      if (sortedClasses[0]) {
-        setClassId((prev) => prev || sortedClasses[0].id);
-      }
-    });
-
-    api<Subject[]>("/teacher/subjects").then((res) => {
-      const list = sortSubjects(res.data ?? []);
-      setSubjects(list);
-      setSubjectId((prev) => prev || list[0]?.id || "");
-      setIsSubjectLocked(Boolean((res as any).isLocked));
     });
   }, []);
+
+  useEffect(() => {
+    const url = classId ? `/teacher/subjects?classId=${classId}` : "/teacher/subjects";
+    api<Subject[]>(url).then((res) => {
+      const list = sortSubjects(res.data ?? []);
+      setSubjects(list);
+      setSubjectId((prev) => {
+        if (list.some((s) => s.id === prev)) return prev;
+        return list[0]?.id || "";
+      });
+      setIsSubjectLocked(Boolean((res as any).isLocked));
+    });
+  }, [classId]);
 
   const loadGrades = useCallback(async (silent = false) => {
     if (!classId || !subjectId) return;

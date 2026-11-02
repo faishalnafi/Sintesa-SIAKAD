@@ -15,6 +15,21 @@ type ClassItem = { id: string; name: string };
 type SubjectItem = { id: string; name: string; code: string | null };
 type TeachingHourItem = { id: string; label: string; startTime: string; endTime: string };
 
+type ScheduleItem = {
+  id: string;
+  classId: string;
+  className: string;
+  subjectId: string;
+  subjectName: string;
+  subjectCode: string | null;
+  hari?: string | null;
+  startHourId?: string | null;
+  startHourLabel?: string | null;
+  endHourId?: string | null;
+  endHourLabel?: string | null;
+  jp: number;
+};
+
 type JournalItem = {
   id: string;
   date: string;
@@ -42,6 +57,7 @@ export function GuruJurnalPage() {
   const [classesList, setClassesList] = useState<ClassItem[]>([]);
   const [subjectsList, setSubjectsList] = useState<SubjectItem[]>([]);
   const [hoursList, setHoursList] = useState<TeachingHourItem[]>([]);
+  const [schedulesList, setSchedulesList] = useState<ScheduleItem[]>([]);
   const [journalsList, setJournalsList] = useState<JournalItem[]>([]);
 
   const [selectedClassId, setSelectedClassId] = useState("");
@@ -69,14 +85,15 @@ export function GuruJurnalPage() {
   const [filterSubjectId, setFilterSubjectId] = useState("");
   const [filterDate, setFilterDate] = useState(getTodayString);
 
-  // Load configuration (classes, subjects, teaching hours)
+  // Load configuration (classes, subjects, teaching hours, schedules)
   const loadConfig = async () => {
     setLoadingConfig(true);
     try {
-      const [cRes, sRes, hRes] = await Promise.allSettled([
+      const [cRes, sRes, hRes, schedRes] = await Promise.allSettled([
         api<ClassItem[]>("/teacher/classes"),
         api<SubjectItem[]>("/teacher/subjects"),
         api<TeachingHourItem[]>("/teacher/teaching-hours"),
+        api<ScheduleItem[]>("/teacher/schedule"),
       ]);
 
       if (cRes.status === "fulfilled" && cRes.value?.data) {
@@ -89,6 +106,9 @@ export function GuruJurnalPage() {
       }
       if (hRes.status === "fulfilled" && hRes.value?.data) {
         setHoursList(sortTeachingHours(hRes.value.data));
+      }
+      if (schedRes.status === "fulfilled" && schedRes.value?.data) {
+        setSchedulesList(schedRes.value.data);
       }
     } catch (e) {
       console.error("Gagal memuat konfigurasi jurnal:", e);
@@ -117,18 +137,153 @@ export function GuruJurnalPage() {
 
   // Realtime: refresh list jurnal saat ada jurnal yang disimpan/dihapus
   useRealtimeEvent(
-    ["journal_saved", "journal_deleted"],
-    () => { loadJournals(); }
+    ["journal_saved", "journal_deleted", "schedule_updated"],
+    () => {
+      loadJournals();
+      loadConfig();
+    }
   );
+
+  // Nama hari dalam Bahasa Indonesia dari tanggal terpilih
+  const DAY_NAMES = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+  const currentDayName = useMemo(() => {
+    if (!date) return "";
+    const d = new Date(date + "T00:00:00");
+    return isNaN(d.getTime()) ? "" : DAY_NAMES[d.getDay()];
+  }, [date]);
+
+  // Jadwal mengajar guru pada hari ini sesuai setelan Admin Mapel & Penugasan
+  const activeDaySchedules = useMemo(() => {
+    if (!currentDayName) return [];
+    return schedulesList.filter((s) => s.hari === currentDayName);
+  }, [schedulesList, currentDayName]);
+
+  // Kelas yang valid pada hari terpilih:
+  // Jika admin memetakan jadwal hari ini, HANYA tampilkan kelas di jadwal hari ini!
+  // Selain itu otomatis tereliminasi dari dropdown.
+  const activeClasses = useMemo(() => {
+    if (activeDaySchedules.length > 0) {
+      const map = new Map<string, ClassItem>();
+      for (const s of activeDaySchedules) {
+        if (!map.has(s.classId)) {
+          map.set(s.classId, { id: s.classId, name: s.className });
+        }
+      }
+      return sortClasses(Array.from(map.values()));
+    }
+    // Jika tidak ada jadwal spesifik hari ini, gunakan kelas yang ditugaskan ke guru ini
+    return classesList;
+  }, [activeDaySchedules, classesList]);
+
+  // Mapel yang valid pada kelas terpilih
+  const activeSubjects = useMemo(() => {
+    if (!selectedClassId) {
+      if (activeDaySchedules.length > 0) {
+        const map = new Map<string, SubjectItem>();
+        for (const s of activeDaySchedules) {
+          if (!map.has(s.subjectId)) {
+            map.set(s.subjectId, { id: s.subjectId, name: s.subjectName, code: s.subjectCode });
+          }
+        }
+        return sortSubjects(Array.from(map.values()));
+      }
+      return subjectsList;
+    }
+
+    // 1. Cek dari jadwal hari ini untuk kelas terpilih
+    const matchingDay = activeDaySchedules.filter((s) => s.classId === selectedClassId);
+    if (matchingDay.length > 0) {
+      const map = new Map<string, SubjectItem>();
+      for (const s of matchingDay) {
+        map.set(s.subjectId, { id: s.subjectId, name: s.subjectName, code: s.subjectCode });
+      }
+      return sortSubjects(Array.from(map.values()));
+    }
+
+    // 2. Cek dari semua jadwal guru untuk kelas terpilih
+    const matchingAll = schedulesList.filter((s) => s.classId === selectedClassId);
+    if (matchingAll.length > 0) {
+      const map = new Map<string, SubjectItem>();
+      for (const s of matchingAll) {
+        map.set(s.subjectId, { id: s.subjectId, name: s.subjectName, code: s.subjectCode });
+      }
+      return sortSubjects(Array.from(map.values()));
+    }
+
+    return subjectsList;
+  }, [selectedClassId, activeDaySchedules, schedulesList, subjectsList]);
+
+  // Otomatisasi sinkronisasi ketika tanggal berganti
+  useEffect(() => {
+    if (groupId) return; // Jangan overwrite saat sedang edit draft jurnal
+
+    if (activeDaySchedules.length > 0) {
+      const isCurrentValid = activeClasses.some((c) => c.id === selectedClassId);
+      const targetClassId = isCurrentValid ? selectedClassId : activeClasses[0]?.id || "";
+      if (targetClassId !== selectedClassId) {
+        setSelectedClassId(targetClassId);
+      }
+
+      const match = activeDaySchedules.find((s) => s.classId === targetClassId) || activeDaySchedules[0];
+      if (match) {
+        setSelectedSubjectId(match.subjectId);
+        if (match.startHourId) setStartHourId(match.startHourId);
+        if (match.endHourId) setEndHourId(match.endHourId);
+      }
+    } else {
+      if (selectedClassId && !activeClasses.some((c) => c.id === selectedClassId)) {
+        setSelectedClassId("");
+        setSelectedSubjectId("");
+        setStartHourId("");
+        setEndHourId("");
+      }
+    }
+  }, [date, activeDaySchedules, activeClasses]);
+
+  // Handler saat guru memilih kelas: sinkronkan mapel & jam awal/akhir otomatis
+  const handleSelectClass = (clsId: string) => {
+    setSelectedClassId(clsId);
+    if (!clsId) {
+      setSelectedSubjectId("");
+      return;
+    }
+
+    // Cari jadwal hari ini terlebih dahulu
+    const matchDay = activeDaySchedules.find((s) => s.classId === clsId);
+    if (matchDay) {
+      setSelectedSubjectId(matchDay.subjectId);
+      if (matchDay.startHourId) setStartHourId(matchDay.startHourId);
+      if (matchDay.endHourId) setEndHourId(matchDay.endHourId);
+      return;
+    }
+
+    // Cari dari master jadwal kelas tersebut
+    const matchAll = schedulesList.find((s) => s.classId === clsId);
+    if (matchAll) {
+      setSelectedSubjectId(matchAll.subjectId);
+      if (matchAll.startHourId) setStartHourId(matchAll.startHourId);
+      if (matchAll.endHourId) setEndHourId(matchAll.endHourId);
+    }
+  };
 
   // Find names from lists
   const selectedClassName = useMemo(() => {
-    return classesList.find((c) => c.id === selectedClassId)?.name ?? "";
-  }, [classesList, selectedClassId]);
+    const fromActive = activeClasses.find((c) => c.id === selectedClassId)?.name;
+    if (fromActive) return fromActive;
+    const fromList = classesList.find((c) => c.id === selectedClassId)?.name;
+    if (fromList) return fromList;
+    const fromSched = schedulesList.find((s) => s.classId === selectedClassId)?.className;
+    return fromSched ?? "";
+  }, [activeClasses, classesList, schedulesList, selectedClassId]);
 
   const selectedSubjectName = useMemo(() => {
-    return subjectsList.find((s) => s.id === selectedSubjectId)?.name ?? "";
-  }, [subjectsList, selectedSubjectId]);
+    const fromActive = activeSubjects.find((s) => s.id === selectedSubjectId)?.name;
+    if (fromActive) return fromActive;
+    const fromList = subjectsList.find((s) => s.id === selectedSubjectId)?.name;
+    if (fromList) return fromList;
+    const fromSched = schedulesList.find((s) => s.subjectId === selectedSubjectId)?.subjectName;
+    return fromSched ?? "";
+  }, [activeSubjects, subjectsList, schedulesList, selectedSubjectId]);
 
   // Set jam mengajar yang sudah terisi & terkirim pada tanggal terpilih
   const submittedHourIdsForSelectedDate = useMemo(() => {
@@ -464,15 +619,31 @@ export function GuruJurnalPage() {
           <div className="p-5 space-y-5">
             {/* Kotak Biru: Tanggal & Jam Mengajar (Berdampingan) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl border border-blue-200/50 bg-blue-50/10 dark:bg-blue-900/5">
-              {/* Tanggal */}
+              {/* Tanggal & Indikator Hari */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Tanggal</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold uppercase tracking-wider app-muted">Tanggal</label>
+                  {currentDayName && (
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                      Hari: {currentDayName}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2 text-sm outline-none focus:border-primary"
                 />
+                {activeDaySchedules.length > 0 ? (
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                    ✓ {activeDaySchedules.length} jadwal KBM sinkron pada hari {currentDayName}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Tidak ada jadwal khusus pada hari {currentDayName}
+                  </p>
+                )}
               </div>
 
               {/* Jam Mengajar Awal */}
@@ -531,14 +702,23 @@ export function GuruJurnalPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-2xl border border-emerald-200/50 bg-emerald-50/10 dark:bg-emerald-900/5">
               {/* Kelas */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Kelas</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold uppercase tracking-wider app-muted">Kelas</label>
+                  {activeDaySchedules.length > 0 && (
+                    <span className="text-[10px] text-muted">Sinkron Jadwal Admin</span>
+                  )}
+                </div>
                 <select
                   value={selectedClassId}
-                  onChange={(e) => setSelectedClassId(e.target.value)}
+                  onChange={(e) => handleSelectClass(e.target.value)}
                   className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
                 >
-                  <option value="">-- Pilih Kelas --</option>
-                  {classesList.map((c) => (
+                  <option value="">
+                    {activeClasses.length === 0
+                      ? `-- Tidak ada jadwal kelas pada hari ${currentDayName} --`
+                      : "-- Pilih Kelas --"}
+                  </option>
+                  {activeClasses.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
@@ -548,14 +728,23 @@ export function GuruJurnalPage() {
 
               {/* Mata Pelajaran */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Mata Pelajaran</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold uppercase tracking-wider app-muted">Mata Pelajaran</label>
+                  {activeSubjects.length === 1 && (
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Otomatis Terkunci</span>
+                  )}
+                </div>
                 <select
                   value={selectedSubjectId}
                   onChange={(e) => setSelectedSubjectId(e.target.value)}
                   className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
                 >
-                  <option value="">-- Pilih Mapel --</option>
-                  {subjectsList.map((s) => (
+                  <option value="">
+                    {activeSubjects.length === 0
+                      ? "-- Tidak ada mapel terkait --"
+                      : "-- Pilih Mapel --"}
+                  </option>
+                  {activeSubjects.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} {s.code ? `(${s.code})` : ""}
                     </option>
