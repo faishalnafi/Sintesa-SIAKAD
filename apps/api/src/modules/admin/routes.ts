@@ -3490,7 +3490,15 @@ adminRoutes.get("/sso/members", async (c) => {
       }
     }
 
-    const studentMap = new Map<string, string>();
+    type UserExtraInfo = {
+      kelas?: string;
+      agama?: string | null;
+      nik?: string | null;
+      jk?: string | null;
+      noTelp?: string | null;
+      tglLahir?: string | null;
+    };
+    const extraMap = new Map<string, UserExtraInfo>();
     if (userIds.length > 0) {
       const studentRows = await db
         .select({
@@ -3498,14 +3506,27 @@ adminRoutes.get("/sso/members", async (c) => {
           ssoMemberId: students.ssoMemberId,
           kelasLabel: students.kelasLabel,
           className: classes.name,
+          agama: students.agama,
+          nik: students.nik,
+          jk: students.jenisKelamin,
+          noTelp: students.noTelepon,
+          tglLahir: students.tanggalLahir,
         })
         .from(students)
         .leftJoin(classes, eq(students.classId, classes.id));
 
       for (const s of studentRows) {
-        const kName = s.className || s.kelasLabel;
-        if (s.userId && kName) studentMap.set(s.userId, kName);
-        if (s.ssoMemberId && kName) studentMap.set(s.ssoMemberId, kName);
+        const kName = s.className || s.kelasLabel || undefined;
+        const info: UserExtraInfo = {
+          kelas: kName,
+          agama: s.agama,
+          nik: s.nik,
+          jk: s.jk,
+          noTelp: s.noTelp,
+          tglLahir: s.tglLahir,
+        };
+        if (s.userId) extraMap.set(s.userId, info);
+        if (s.ssoMemberId) extraMap.set(s.ssoMemberId, info);
       }
     }
 
@@ -3513,21 +3534,25 @@ adminRoutes.get("/sso/members", async (c) => {
     const offset = (page - 1) * perPage;
     const paginated = localUsers.slice(offset, offset + perPage);
 
-    const formattedData = paginated.map((u) => ({
-      id: u.id,
-      nama_lengkap: u.nama_lengkap,
-      email: u.email,
-      nik: null,
-      nip_nis: u.nip_nis,
-      jk: null,
-      no_telp: null,
-      tgl_lahir: null,
-      is_active: u.isActive,
-      claimed_at: null,
-      created_at: u.createdAt ? new Date(u.createdAt).toISOString() : null,
-      roles: userRoleMap.get(u.id) ?? [{ id: "guru", nama_role: "Guru" }],
-      kelas: studentMap.has(u.id) ? { nama_kelas: studentMap.get(u.id)! } : null,
-    }));
+    const formattedData = paginated.map((u) => {
+      const info = extraMap.get(u.id);
+      return {
+        id: u.id,
+        nama_lengkap: u.nama_lengkap,
+        email: u.email,
+        nik: info?.nik ?? null,
+        nip_nis: u.nip_nis,
+        jk: info?.jk ?? null,
+        agama: info?.agama ?? null,
+        no_telp: info?.noTelp ?? null,
+        tgl_lahir: info?.tglLahir ?? null,
+        is_active: u.isActive,
+        claimed_at: null,
+        created_at: u.createdAt ? new Date(u.createdAt).toISOString() : null,
+        roles: userRoleMap.get(u.id) ?? [{ id: "guru", nama_role: "Guru" }],
+        kelas: info?.kelas ? { nama_kelas: info.kelas } : null,
+      };
+    });
 
     return c.json({
       success: true,
@@ -3803,6 +3828,7 @@ adminRoutes.get("/sso/users-export", requireRoles("superadmin"), async (c) => {
             phone: m.no_telp,
             birthDate: m.tgl_lahir,
             gender: m.jk,
+            agama: m.agama,
             isActive: m.is_active,
             roles: m.roles?.map((r) => r.nama_role) ?? [],
             class: m.kelas ? `${m.kelas.nama_kelas}` : null,
