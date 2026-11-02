@@ -12,6 +12,7 @@ export type SsoMember = {
   nik: string | null;
   nip_nis: string | null;
   jk: string | null;
+  agama?: string | null;
   no_telp: string | null;
   tgl_lahir: string | null;
   is_active: boolean;

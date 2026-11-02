@@ -19,6 +19,7 @@ type SsoMember = {
   nik: string | null;
   nip_nis: string | null;
   jk: string | null;
+  agama?: string | null;
   no_telp: string | null;
   tgl_lahir: string | null;
   is_active: boolean;
@@ -157,7 +158,7 @@ export function StudentsPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Cari nama, NIK, NIS, email..."
+            placeholder="Cari nama, NIK, NIS, agama, email..."
             className="rounded-xl px-3.5 py-2 text-xs border focus:outline-none focus:ring-2 min-w-[220px]"
             style={{
               background: "var(--surface)",
@@ -191,7 +192,7 @@ export function StudentsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ borderBottom: "1px solid var(--divider)" }}>
-                {["Nama Lengkap", "NIP / NIS", "NIK", "Email", "Peran", "Status Akun", "Klaim SSO"].map((h) => (
+                {["Nama Lengkap", "NIP / NIS", "NIK", "Agama", "Email", "Peran", "Status Akun", "Klaim SSO"].map((h) => (
                   <th key={h} className="px-5 py-3 text-left app-label text-[11px] font-semibold whitespace-nowrap">
                     {h}
                   </th>
@@ -202,14 +203,14 @@ export function StudentsPage() {
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="border-b app-divider">
-                    <td colSpan={7} className="px-5 py-3.5">
+                    <td colSpan={8} className="px-5 py-3.5">
                       <Skeleton className="h-6 w-full" />
                     </td>
                   </tr>
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center">
+                  <td colSpan={8} className="px-5 py-12 text-center">
                     <span className="material-symbols-outlined text-[48px] app-muted block mb-3">group_off</span>
                     <p className="text-sm font-medium">Belum ada data siswa / pengguna dari SSO.</p>
                     <p className="text-xs app-muted mt-1 max-w-sm mx-auto">
@@ -249,6 +250,23 @@ export function StudentsPage() {
 
                     <td className="px-5 py-3.5 whitespace-nowrap font-mono text-xs app-muted">
                       {m.nik || "—"}
+                    </td>
+
+                    <td className="px-5 py-3.5 whitespace-nowrap text-xs">
+                      {m.agama ? (
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border"
+                          style={{
+                            background: "var(--accent-soft)",
+                            color: "var(--accent)",
+                            borderColor: "color-mix(in srgb, var(--accent) 25%, transparent)",
+                          }}
+                        >
+                          {m.agama}
+                        </span>
+                      ) : (
+                        <span className="app-muted text-xs">—</span>
+                      )}
                     </td>
 
                     <td className="px-5 py-3.5 app-muted text-xs truncate max-w-[200px]">
