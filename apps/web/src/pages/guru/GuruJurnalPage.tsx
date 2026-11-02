@@ -384,6 +384,44 @@ export function GuruJurnalPage() {
     );
   }, [selectedClassId, selectedSubjectId, activeDaySchedules, schedulesList]);
 
+  // Jam mengajar yang valid untuk ditampilkan di dropdown:
+  // Jika kelas sudah dipilih, HANYA tampilkan jam yang sesuai dengan jadwal kelas tersebut (jam lain tidak tampil / tidak bisa dipilih)
+  const displayHoursList = useMemo(() => {
+    if (!selectedClassId) {
+      return hoursList;
+    }
+
+    const classSchedules = activeDaySchedules.filter((s) => s.classId === selectedClassId);
+    const schedulesToUse = classSchedules.length > 0 ? classSchedules : (currentClassSchedule ? [currentClassSchedule] : []);
+
+    const hourIds = new Set<string>();
+    for (const sched of schedulesToUse) {
+      if (!sched.startHourId || !sched.endHourId) continue;
+      const startIdx = hoursList.findIndex((h) => h.id === sched.startHourId);
+      const endIdx = hoursList.findIndex((h) => h.id === sched.endHourId);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const minIdx = Math.min(startIdx, endIdx);
+        const maxIdx = Math.max(startIdx, endIdx);
+        for (let i = minIdx; i <= maxIdx; i++) {
+          hourIds.add(hoursList[i].id);
+        }
+      } else if (sched.startHourId) {
+        hourIds.add(sched.startHourId);
+      }
+    }
+
+    if (groupId) {
+      if (startHourId) hourIds.add(startHourId);
+      if (endHourId) hourIds.add(endHourId);
+    }
+
+    if (hourIds.size > 0) {
+      return hoursList.filter((h) => hourIds.has(h.id));
+    }
+
+    return hoursList;
+  }, [selectedClassId, currentClassSchedule, activeDaySchedules, hoursList, groupId, startHourId, endHourId]);
+
   // Find names from lists
   const selectedClassName = useMemo(() => {
     const fromActive = activeClasses.find((c) => c.id === selectedClassId)?.name;
@@ -958,7 +996,7 @@ export function GuruJurnalPage() {
                 ) : currentClassSchedule?.startHourLabel && currentClassSchedule?.endHourLabel ? (
                   <div className="flex items-center gap-2">
                     <span className="text-xs px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 font-medium border border-blue-500/20">
-                      ⭐ Sesuai Jadwal: <strong>{currentClassSchedule.startHourLabel} s/d {currentClassSchedule.endHourLabel}</strong>
+                      Jadwal: <strong>{currentClassSchedule.startHourLabel} s/d {currentClassSchedule.endHourLabel}</strong>
                       {currentClassSchedule.jp ? ` (${currentClassSchedule.jp} JP)` : ""}
                     </span>
                     {(startHourId !== currentClassSchedule.startHourId || endHourId !== currentClassSchedule.endHourId) && (
@@ -984,12 +1022,7 @@ export function GuruJurnalPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Jam Mengajar Awal */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Awal</label>
-                    {!isNoTeacherSelected && !isNoTeachingDay && currentClassSchedule?.startHourId && startHourId === currentClassSchedule.startHourId && (
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">✓ Sesuai Jadwal</span>
-                    )}
-                  </div>
+                  <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Awal</label>
                   <select
                     value={startHourId}
                     disabled={isNoTeacherSelected || isNoTeachingDay}
@@ -1005,17 +1038,16 @@ export function GuruJurnalPage() {
                         ? `-- Tidak ada jam mengajar (${currentDayName}) --`
                         : "-- Pilih Jam Awal --"}
                     </option>
-                    {hoursList.map((h) => {
+                    {displayHoursList.map((h) => {
                       const isTaken = submittedHourIdsForSelectedDate.has(h.id);
-                      const isScheduled = currentClassSchedule?.startHourId === h.id;
                       return (
                         <option
                           key={h.id}
                           value={h.id}
                           disabled={isTaken}
-                          className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : isScheduled ? "font-bold text-emerald-600" : ""}
+                          className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : ""}
                         >
-                          {h.label}{h.startTime && h.endTime ? ` (${h.startTime} - ${h.endTime})` : ""}{isScheduled ? " — ⭐ [Sesuai Jadwal]" : ""}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
+                          {h.label}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
                         </option>
                       );
                     })}
@@ -1024,12 +1056,7 @@ export function GuruJurnalPage() {
 
                 {/* Jam Mengajar Akhir */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Akhir</label>
-                    {!isNoTeacherSelected && !isNoTeachingDay && currentClassSchedule?.endHourId && endHourId === currentClassSchedule.endHourId && (
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">✓ Sesuai Jadwal</span>
-                    )}
-                  </div>
+                  <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Akhir</label>
                   <select
                     value={endHourId}
                     disabled={isNoTeacherSelected || isNoTeachingDay}
@@ -1045,17 +1072,16 @@ export function GuruJurnalPage() {
                         ? `-- Tidak ada jam mengajar (${currentDayName}) --`
                         : "-- Pilih Jam Akhir --"}
                     </option>
-                    {hoursList.map((h) => {
+                    {displayHoursList.map((h) => {
                       const isTaken = submittedHourIdsForSelectedDate.has(h.id);
-                      const isScheduled = currentClassSchedule?.endHourId === h.id;
                       return (
                         <option
                           key={h.id}
                           value={h.id}
                           disabled={isTaken}
-                          className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : isScheduled ? "font-bold text-emerald-600" : ""}
+                          className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : ""}
                         >
-                          {h.label}{h.startTime && h.endTime ? ` (${h.startTime} - ${h.endTime})` : ""}{isScheduled ? " — ⭐ [Sesuai Jadwal]" : ""}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
+                          {h.label}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
                         </option>
                       );
                     })}
