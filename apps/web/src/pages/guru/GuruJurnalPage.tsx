@@ -245,6 +245,8 @@ export function GuruJurnalPage() {
     setSelectedClassId(clsId);
     if (!clsId) {
       setSelectedSubjectId("");
+      setStartHourId("");
+      setEndHourId("");
       return;
     }
 
@@ -265,6 +267,47 @@ export function GuruJurnalPage() {
       if (matchAll.endHourId) setEndHourId(matchAll.endHourId);
     }
   };
+
+  // Handler saat guru memilih mapel: sinkronkan jam awal/akhir jika ada jadwal spesifik
+  const handleSelectSubject = (subjId: string) => {
+    setSelectedSubjectId(subjId);
+    if (!subjId) return;
+
+    if (selectedClassId) {
+      const matchDay = activeDaySchedules.find(
+        (s) => s.classId === selectedClassId && s.subjectId === subjId
+      );
+      if (matchDay) {
+        if (matchDay.startHourId) setStartHourId(matchDay.startHourId);
+        if (matchDay.endHourId) setEndHourId(matchDay.endHourId);
+        return;
+      }
+
+      const matchAll = schedulesList.find(
+        (s) => s.classId === selectedClassId && s.subjectId === subjId
+      );
+      if (matchAll) {
+        if (matchAll.startHourId) setStartHourId(matchAll.startHourId);
+        if (matchAll.endHourId) setEndHourId(matchAll.endHourId);
+      }
+    }
+  };
+
+  // Jadwal aktif untuk kelas dan mapel terpilih pada hari ini
+  const currentClassSchedule = useMemo(() => {
+    if (!selectedClassId) return null;
+    const matchDay = activeDaySchedules.find(
+      (s) => s.classId === selectedClassId && (!selectedSubjectId || s.subjectId === selectedSubjectId)
+    );
+    if (matchDay) return matchDay;
+    const matchAnyDay = activeDaySchedules.find((s) => s.classId === selectedClassId);
+    if (matchAnyDay) return matchAnyDay;
+    return (
+      schedulesList.find((s) => s.classId === selectedClassId && (!selectedSubjectId || s.subjectId === selectedSubjectId)) ||
+      schedulesList.find((s) => s.classId === selectedClassId) ||
+      null
+    );
+  }, [selectedClassId, selectedSubjectId, activeDaySchedules, schedulesList]);
 
   // Find names from lists
   const selectedClassName = useMemo(() => {
@@ -617,8 +660,8 @@ export function GuruJurnalPage() {
           </div>
         ) : (
           <div className="p-5 space-y-5">
-            {/* Kotak Biru: Tanggal & Jam Mengajar (Berdampingan) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl border border-blue-200/50 bg-blue-50/10 dark:bg-blue-900/5">
+            {/* Kotak 1: Tanggal, Kelas & Mata Pelajaran (Berdampingan 3 Kolom) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl border border-emerald-200/50 bg-emerald-50/10 dark:bg-emerald-900/5">
               {/* Tanggal & Indikator Hari */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -646,66 +689,12 @@ export function GuruJurnalPage() {
                 )}
               </div>
 
-              {/* Jam Mengajar Awal */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Awal</label>
-                <select
-                  value={startHourId}
-                  onChange={(e) => setStartHourId(e.target.value)}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
-                >
-                  <option value="">-- Pilih Jam Awal --</option>
-                  {hoursList.map((h) => {
-                    const isTaken = submittedHourIdsForSelectedDate.has(h.id);
-                    return (
-                      <option
-                        key={h.id}
-                        value={h.id}
-                        disabled={isTaken}
-                        className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : ""}
-                      >
-                        {h.label}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              {/* Jam Mengajar Akhir */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Akhir</label>
-                <select
-                  value={endHourId}
-                  onChange={(e) => setEndHourId(e.target.value)}
-                  className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
-                >
-                  <option value="">-- Pilih Jam Akhir --</option>
-                  {hoursList.map((h) => {
-                    const isTaken = submittedHourIdsForSelectedDate.has(h.id);
-                    return (
-                      <option
-                        key={h.id}
-                        value={h.id}
-                        disabled={isTaken}
-                        className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : ""}
-                      >
-                        {h.label}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-            </div>
-
-            {/* Kotak Hijau: Kelas & Mapel (Berdampingan) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-2xl border border-emerald-200/50 bg-emerald-50/10 dark:bg-emerald-900/5">
               {/* Kelas */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold uppercase tracking-wider app-muted">Kelas</label>
                   {activeDaySchedules.length > 0 && (
-                    <span className="text-[10px] text-muted">Sinkron Jadwal Admin</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Sinkron Jadwal Admin</span>
                   )}
                 </div>
                 <select
@@ -724,6 +713,15 @@ export function GuruJurnalPage() {
                     </option>
                   ))}
                 </select>
+                {selectedClassId && currentClassSchedule ? (
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium truncate">
+                    ✓ Terjadwal di kelas {selectedClassName}
+                  </p>
+                ) : selectedClassId ? (
+                  <p className="text-[11px] text-muted truncate">Kelas terpilih: {selectedClassName}</p>
+                ) : (
+                  <p className="text-[11px] text-muted">Pilih kelas yang diajar</p>
+                )}
               </div>
 
               {/* Mata Pelajaran */}
@@ -736,7 +734,7 @@ export function GuruJurnalPage() {
                 </div>
                 <select
                   value={selectedSubjectId}
-                  onChange={(e) => setSelectedSubjectId(e.target.value)}
+                  onChange={(e) => handleSelectSubject(e.target.value)}
                   className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
                 >
                   <option value="">
@@ -750,6 +748,111 @@ export function GuruJurnalPage() {
                     </option>
                   ))}
                 </select>
+                {selectedSubjectName && (
+                  <p className="text-[11px] text-muted truncate">
+                    Mapel: {selectedSubjectName}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Kotak 2: Jam Mengajar (Digeser ke Bawah & Disesuaikan Otomatis Berdasarkan Kelas) */}
+            <div className="space-y-3 p-4 rounded-2xl border border-blue-200/50 bg-blue-50/10 dark:bg-blue-900/5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-blue-200/40 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[20px] text-blue-600 dark:text-blue-400">schedule</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-blue-900 dark:text-blue-300">
+                    Waktu / Jam Mengajar
+                  </span>
+                </div>
+                {currentClassSchedule?.startHourLabel && currentClassSchedule?.endHourLabel ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 font-medium border border-blue-500/20">
+                      ⭐ Sesuai Jadwal: <strong>{currentClassSchedule.startHourLabel} s/d {currentClassSchedule.endHourLabel}</strong>
+                      {currentClassSchedule.jp ? ` (${currentClassSchedule.jp} JP)` : ""}
+                    </span>
+                    {(startHourId !== currentClassSchedule.startHourId || endHourId !== currentClassSchedule.endHourId) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (currentClassSchedule.startHourId) setStartHourId(currentClassSchedule.startHourId);
+                          if (currentClassSchedule.endHourId) setEndHourId(currentClassSchedule.endHourId);
+                        }}
+                        className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 underline inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">restart_alt</span> Reset ke Jadwal
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-xs text-muted">
+                    {selectedClassId ? "Jadwal jam fleksibel / silakan tentukan jam mengajar" : "Pilih kelas untuk penyesuaian otomatis jam mengajar"}
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Jam Mengajar Awal */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Awal</label>
+                    {currentClassSchedule?.startHourId && startHourId === currentClassSchedule.startHourId && (
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">✓ Sesuai Jadwal</span>
+                    )}
+                  </div>
+                  <select
+                    value={startHourId}
+                    onChange={(e) => setStartHourId(e.target.value)}
+                    className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
+                  >
+                    <option value="">-- Pilih Jam Awal --</option>
+                    {hoursList.map((h) => {
+                      const isTaken = submittedHourIdsForSelectedDate.has(h.id);
+                      const isScheduled = currentClassSchedule?.startHourId === h.id;
+                      return (
+                        <option
+                          key={h.id}
+                          value={h.id}
+                          disabled={isTaken}
+                          className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : isScheduled ? "font-bold text-emerald-600" : ""}
+                        >
+                          {h.label}{h.startTime && h.endTime ? ` (${h.startTime} - ${h.endTime})` : ""}{isScheduled ? " — ⭐ [Sesuai Jadwal]" : ""}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {/* Jam Mengajar Akhir */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold uppercase tracking-wider app-muted">Jam Mengajar Akhir</label>
+                    {currentClassSchedule?.endHourId && endHourId === currentClassSchedule.endHourId && (
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">✓ Sesuai Jadwal</span>
+                    )}
+                  </div>
+                  <select
+                    value={endHourId}
+                    onChange={(e) => setEndHourId(e.target.value)}
+                    className="w-full rounded-xl border border-outline-variant/40 bg-[var(--bg)] px-3.5 py-2.5 text-sm outline-none focus:border-primary"
+                  >
+                    <option value="">-- Pilih Jam Akhir --</option>
+                    {hoursList.map((h) => {
+                      const isTaken = submittedHourIdsForSelectedDate.has(h.id);
+                      const isScheduled = currentClassSchedule?.endHourId === h.id;
+                      return (
+                        <option
+                          key={h.id}
+                          value={h.id}
+                          disabled={isTaken}
+                          className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : isScheduled ? "font-bold text-emerald-600" : ""}
+                        >
+                          {h.label}{h.startTime && h.endTime ? ` (${h.startTime} - ${h.endTime})` : ""}{isScheduled ? " — ⭐ [Sesuai Jadwal]" : ""}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
               </div>
             </div>
 
