@@ -226,36 +226,35 @@ export function GuruJurnalPage() {
     return schedulesList.filter((s) => s.hari === currentDayName);
   }, [schedulesList, currentDayName]);
 
-  // Hari libur / tidak ada jam mengajar (misal: Sabtu & Minggu atau hari tanpa penugasan KBM)
+  // Hari libur KBM (Sabtu & Minggu): form dinonaktifkan
   const isWeekend = currentDayName === "Sabtu" || currentDayName === "Minggu";
   const isNoTeachingDay = useMemo(() => {
     if (groupId) return false;
-    return isWeekend || activeDaySchedules.length === 0;
-  }, [groupId, isWeekend, activeDaySchedules]);
+    return isWeekend;
+  }, [groupId, isWeekend]);
 
   // Kelas yang valid pada hari terpilih:
-  // Jika admin memetakan jadwal hari ini, HANYA tampilkan kelas di jadwal hari ini!
-  // Jika hari libur/tidak ada jadwal, tampilkan daftar lengkap namun disable
+  // Prioritaskan kelas yang terjadwal hari ini di urutan teratas, diikuti kelas lainnya milik guru
   const activeClasses = useMemo(() => {
     if (isNoTeacherSelected) return [];
-    if (!isNoTeachingDay && activeDaySchedules.length > 0) {
-      const map = new Map<string, ClassItem>();
-      for (const s of activeDaySchedules) {
-        if (!map.has(s.classId)) {
-          map.set(s.classId, { id: s.classId, name: s.className });
-        }
+    if (classesList.length > 0) {
+      if (activeDaySchedules.length > 0) {
+        const scheduledIds = new Set(activeDaySchedules.map((s) => s.classId));
+        const scheduled = classesList.filter((c) => scheduledIds.has(c.id));
+        const others = classesList.filter((c) => !scheduledIds.has(c.id));
+        return [...scheduled, ...others];
       }
-      return sortClasses(Array.from(map.values()));
+      return classesList;
     }
-    // Jika tidak ada jam mengajar, gunakan seluruh kelas yang ada (tampil lengkap tapi disable)
-    return classesList;
-  }, [isNoTeacherSelected, isNoTeachingDay, activeDaySchedules, classesList]);
+    return [];
+  }, [isNoTeacherSelected, activeDaySchedules, classesList]);
 
   // Mapel yang valid pada kelas terpilih
   const activeSubjects = useMemo(() => {
     if (isNoTeacherSelected) return [];
-    if (isNoTeachingDay || !selectedClassId) {
-      if (!isNoTeachingDay && activeDaySchedules.length > 0) {
+    if (isWeekend) return subjectsList;
+    if (!selectedClassId) {
+      if (activeDaySchedules.length > 0) {
         const map = new Map<string, SubjectItem>();
         for (const s of activeDaySchedules) {
           if (!map.has(s.subjectId)) {
@@ -307,7 +306,7 @@ export function GuruJurnalPage() {
         if (match.startHourId) setStartHourId(match.startHourId);
         if (match.endHourId) setEndHourId(match.endHourId);
       }
-    } else {
+    } else if (isNoTeachingDay) {
       setSelectedClassId("");
       setSelectedSubjectId("");
       setStartHourId("");
@@ -840,13 +839,13 @@ export function GuruJurnalPage() {
               </div>
             )}
 
-            {!isNoTeacherSelected && isNoTeachingDay && (
+            {!isNoTeacherSelected && isWeekend && (
               <div className="flex items-center gap-3 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-xs font-medium">
                 <span className="material-symbols-outlined text-[20px] text-amber-600 dark:text-amber-400 shrink-0">
                   event_busy
                 </span>
                 <div>
-                  <strong>Tidak ada jam mengajar pada hari {currentDayName}.</strong> Semua pilihan dropdown ditampilkan lengkap namun dinonaktifkan (disabled). Silakan pilih tanggal pada hari saat Anda memiliki jadwal KBM.
+                  <strong>Tidak ada jam mengajar pada hari libur ({currentDayName}).</strong> Semua pilihan dropdown ditampilkan lengkap namun dinonaktifkan (disabled). Silakan pilih tanggal pada hari saat Anda memiliki jadwal KBM (Senin - Jumat).
                 </div>
               </div>
             )}
@@ -876,17 +875,17 @@ export function GuruJurnalPage() {
                   <p className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
                     Pilih guru terlebih dahulu
                   </p>
-                ) : isNoTeachingDay ? (
+                ) : isWeekend ? (
                   <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
-                    Tidak ada jadwal KBM pada hari {currentDayName}
+                    Hari libur KBM ({currentDayName})
                   </p>
                 ) : activeDaySchedules.length > 0 ? (
                   <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
                     ✓ {activeDaySchedules.length} jadwal KBM sinkron pada hari {currentDayName}
                   </p>
                 ) : (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                    Tidak ada jadwal khusus pada hari {currentDayName}
+                  <p className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">
+                    Jadwal mandiri / fleksibel pada hari {currentDayName}
                   </p>
                 )}
               </div>
@@ -911,9 +910,9 @@ export function GuruJurnalPage() {
                     {isNoTeacherSelected
                       ? "-- Pilih Guru Terlebih Dahulu --"
                       : isNoTeachingDay
-                      ? `-- Tidak ada jam mengajar (${currentDayName}) --`
+                      ? `-- Hari libur (${currentDayName}) --`
                       : activeClasses.length === 0
-                      ? `-- Tidak ada jadwal kelas pada hari ${currentDayName} --`
+                      ? `-- Tidak ada kelas --`
                       : "-- Pilih Kelas --"}
                   </option>
                   {activeClasses.map((c) => (
@@ -957,7 +956,7 @@ export function GuruJurnalPage() {
                     {isNoTeacherSelected
                       ? "-- Pilih Guru Terlebih Dahulu --"
                       : isNoTeachingDay
-                      ? `-- Tidak ada jam mengajar (${currentDayName}) --`
+                      ? `-- Hari libur (${currentDayName}) --`
                       : activeSubjects.length === 0
                       ? "-- Tidak ada mapel terkait --"
                       : "-- Pilih Mapel --"}
@@ -991,7 +990,7 @@ export function GuruJurnalPage() {
                   </span>
                 ) : isNoTeachingDay ? (
                   <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                    Tidak ada jam mengajar pada hari {currentDayName} (Dropdown Lengkap Dinonaktifkan)
+                    Hari libur KBM pada hari {currentDayName} (Dropdown Lengkap Dinonaktifkan)
                   </span>
                 ) : currentClassSchedule?.startHourLabel && currentClassSchedule?.endHourLabel ? (
                   <div className="flex items-center gap-2">
@@ -1035,11 +1034,12 @@ export function GuruJurnalPage() {
                       {isNoTeacherSelected
                         ? "-- Pilih Guru Terlebih Dahulu --"
                         : isNoTeachingDay
-                        ? `-- Tidak ada jam mengajar (${currentDayName}) --`
+                        ? `-- Hari libur (${currentDayName}) --`
                         : "-- Pilih Jam Awal --"}
                     </option>
                     {displayHoursList.map((h) => {
                       const isTaken = submittedHourIdsForSelectedDate.has(h.id);
+                      const cleanLabel = h.label.replace(/\s*\(\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\)/g, "");
                       return (
                         <option
                           key={h.id}
@@ -1047,7 +1047,7 @@ export function GuruJurnalPage() {
                           disabled={isTaken}
                           className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : ""}
                         >
-                          {h.label}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
+                          {cleanLabel}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
                         </option>
                       );
                     })}
@@ -1069,11 +1069,12 @@ export function GuruJurnalPage() {
                       {isNoTeacherSelected
                         ? "-- Pilih Guru Terlebih Dahulu --"
                         : isNoTeachingDay
-                        ? `-- Tidak ada jam mengajar (${currentDayName}) --`
+                        ? `-- Hari libur (${currentDayName}) --`
                         : "-- Pilih Jam Akhir --"}
                     </option>
                     {displayHoursList.map((h) => {
                       const isTaken = submittedHourIdsForSelectedDate.has(h.id);
+                      const cleanLabel = h.label.replace(/\s*\(\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\)/g, "");
                       return (
                         <option
                           key={h.id}
@@ -1081,7 +1082,7 @@ export function GuruJurnalPage() {
                           disabled={isTaken}
                           className={isTaken ? "text-gray-400 bg-gray-100 dark:bg-gray-800" : ""}
                         >
-                          {h.label}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
+                          {cleanLabel}{isTaken ? " — [Sudah Terisi & Terkirim]" : ""}
                         </option>
                       );
                     })}
@@ -1103,7 +1104,7 @@ export function GuruJurnalPage() {
                     isNoTeacherSelected
                       ? "Pilih guru terlebih dahulu..."
                       : isNoTeachingDay
-                      ? `Tidak ada jam mengajar pada hari ${currentDayName}`
+                      ? `Hari libur KBM pada hari ${currentDayName}`
                       : "Tuliskan pokok bahasan atau materi pembelajaran secara lengkap..."
                   }
                   rows={4}
@@ -1124,7 +1125,7 @@ export function GuruJurnalPage() {
                     isNoTeacherSelected
                       ? "Pilih guru terlebih dahulu..."
                       : isNoTeachingDay
-                      ? `Tidak ada jam mengajar pada hari ${currentDayName}`
+                      ? `Hari libur KBM pada hari ${currentDayName}`
                       : "Contoh: Siswa hadir lengkap, atau A sakit, B izin..."
                   }
                   rows={4}
